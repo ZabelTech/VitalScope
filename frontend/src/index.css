@@ -52,13 +52,22 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   margin-bottom: 16px;
 }
 
-/* Nav bar — stacks on mobile, row at tablet+ */
+/* Nav bar — brand + cog on the top row, nav links wrap below on mobile */
 .top-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "brand cog"
+    "nav   nav";
+  align-items: center;
+  column-gap: 12px;
+  row-gap: 12px;
   margin-bottom: 20px;
 }
+
+.navbar-brand { grid-area: brand; }
+.nav-links    { grid-area: nav; }
+.nav-cog      { grid-area: cog; }
 
 .top-bar h1 {
   font-size: clamp(1.25rem, 1rem + 2vw, 1.5rem);
@@ -69,6 +78,7 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   display: flex;
   align-items: baseline;
   gap: 10px;
+  min-width: 0;
 }
 
 .navbar-brand h1 {
@@ -97,19 +107,30 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 }
 .nav-links::-webkit-scrollbar { display: none; }
 
-.nav-utility {
-  margin-left: auto;
+.nav-cog {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+  color: #94a3b8;
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
 }
+.nav-cog:hover { background: #1e293b; color: #e2e8f0; }
+.nav-cog.active { background: #1e293b; color: #e2e8f0; }
 
 @media (min-width: 640px) {
   .top-bar {
-    flex-direction: row;
-    justify-content: space-between;
-    align-items: center;
+    grid-template-columns: auto 1fr auto;
+    grid-template-areas: "brand nav cog";
+    column-gap: 24px;
+    row-gap: 0;
     margin-bottom: 32px;
   }
   .navbar-tagline { display: inline; }
-  .nav-links { flex: 1; overflow-x: visible; scroll-snap-type: none; }
+  .nav-links { overflow-x: visible; scroll-snap-type: none; }
 }
 
 .ooda-page { padding: 0; }
