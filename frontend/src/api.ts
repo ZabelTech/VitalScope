@@ -26,8 +26,22 @@ export interface RuntimeInfo {
   ai_available: boolean;
 }
 
+// Wrapper around fetch that always sends the auth cookie and reloads on 401
+// so the login form appears when the session expires. `same-origin` is the
+// browser default, but making it explicit avoids variance in older iOS Safari
+// and service-worker-mediated contexts where the cookie was being omitted.
+const PUBLIC_AUTH_PATHS = new Set(["/api/login", "/api/logout", "/api/auth/status"]);
+
+export async function apiFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(input, { credentials: "same-origin", ...init });
+  if (res.status === 401 && !PUBLIC_AUTH_PATHS.has(input.split("?")[0])) {
+    window.location.reload();
+  }
+  return res;
+}
+
 export async function fetchRuntime(): Promise<RuntimeInfo> {
-  const res = await fetch("/api/runtime");
+  const res = await apiFetch("/api/runtime");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -38,26 +52,26 @@ export async function fetchMetric<T>(
   end: string
 ): Promise<T> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/${endpoint}?${params}`);
+  const res = await apiFetch(`/api/${endpoint}?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function fetchDateRange() {
-  const res = await fetch("/api/date-range");
+  const res = await apiFetch("/api/date-range");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function fetchJournalEntry(date: string): Promise<JournalEntry | null> {
-  const res = await fetch(`/api/journal/${date}`);
+  const res = await apiFetch(`/api/journal/${date}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function submitJournalEntry(entry: JournalEntry): Promise<void> {
-  const res = await fetch("/api/journal", {
+  const res = await apiFetch("/api/journal", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(entry),
@@ -73,13 +87,13 @@ export interface SupplementInput {
 }
 
 export async function listSupplements(): Promise<Supplement[]> {
-  const res = await fetch("/api/supplements");
+  const res = await apiFetch("/api/supplements");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function createSupplement(body: SupplementInput): Promise<Supplement> {
-  const res = await fetch("/api/supplements", {
+  const res = await apiFetch("/api/supplements", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sort_order: 0, ...body }),
@@ -89,7 +103,7 @@ export async function createSupplement(body: SupplementInput): Promise<Supplemen
 }
 
 export async function updateSupplement(id: number, body: SupplementInput): Promise<Supplement> {
-  const res = await fetch(`/api/supplements/${id}`, {
+  const res = await apiFetch(`/api/supplements/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sort_order: 0, ...body }),
@@ -99,12 +113,12 @@ export async function updateSupplement(id: number, body: SupplementInput): Promi
 }
 
 export async function deleteSupplement(id: number): Promise<void> {
-  const res = await fetch(`/api/supplements/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/supplements/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
 export async function fetchJournalSupplements(date: string): Promise<SupplementIntake[]> {
-  const res = await fetch(`/api/journal/${date}/supplements`);
+  const res = await apiFetch(`/api/journal/${date}/supplements`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -113,7 +127,7 @@ export async function submitJournalSupplements(
   date: string,
   items: { supplement_id: number; taken: boolean }[]
 ): Promise<void> {
-  const res = await fetch(`/api/journal/${date}/supplements`, {
+  const res = await apiFetch(`/api/journal/${date}/supplements`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items }),
@@ -122,7 +136,7 @@ export async function submitJournalSupplements(
 }
 
 export async function listNutrientDefs(): Promise<NutrientDef[]> {
-  const res = await fetch("/api/nutrients/definitions");
+  const res = await apiFetch("/api/nutrients/definitions");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -134,7 +148,7 @@ export async function createNutrientDef(body: {
   category: NutrientCategory;
   sort_order?: number;
 }): Promise<NutrientDef> {
-  const res = await fetch("/api/nutrients/definitions", {
+  const res = await apiFetch("/api/nutrients/definitions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ sort_order: 0, ...body }),
@@ -144,7 +158,7 @@ export async function createNutrientDef(body: {
 }
 
 export async function deleteNutrientDef(key: string): Promise<void> {
-  const res = await fetch(`/api/nutrients/definitions/${key}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/nutrients/definitions/${key}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
@@ -159,13 +173,13 @@ export interface MealInput {
 
 export async function listMeals(start: string, end: string): Promise<Meal[]> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/meals?${params}`);
+  const res = await apiFetch(`/api/meals?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function createMeal(body: MealInput): Promise<Meal> {
-  const res = await fetch("/api/meals", {
+  const res = await apiFetch("/api/meals", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -175,7 +189,7 @@ export async function createMeal(body: MealInput): Promise<Meal> {
 }
 
 export async function updateMeal(id: number, body: MealInput): Promise<Meal> {
-  const res = await fetch(`/api/meals/${id}`, {
+  const res = await apiFetch(`/api/meals/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -185,7 +199,7 @@ export async function updateMeal(id: number, body: MealInput): Promise<Meal> {
 }
 
 export async function deleteMeal(id: number): Promise<void> {
-  const res = await fetch(`/api/meals/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/meals/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
@@ -194,14 +208,14 @@ export async function fetchNutritionDaily(
   end: string
 ): Promise<NutritionDailyTotals[]> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/nutrition/daily?${params}`);
+  const res = await apiFetch(`/api/nutrition/daily?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function listWater(start: string, end: string): Promise<WaterEntry[]> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/water?${params}`);
+  const res = await apiFetch(`/api/water?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -211,7 +225,7 @@ export async function createWater(body: {
   time: string | null;
   amount_ml: number;
 }): Promise<WaterEntry> {
-  const res = await fetch("/api/water", {
+  const res = await apiFetch("/api/water", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -221,13 +235,13 @@ export async function createWater(body: {
 }
 
 export async function deleteWater(id: number): Promise<void> {
-  const res = await fetch(`/api/water/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/water/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
 export async function fetchWaterDaily(start: string, end: string): Promise<WaterDaily[]> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/water/daily?${params}`);
+  const res = await apiFetch(`/api/water/daily?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -235,13 +249,13 @@ export async function fetchWaterDaily(start: string, end: string): Promise<Water
 // --- Nutrition goals ---
 
 export async function fetchNutritionGoals(): Promise<NutrientGoals> {
-  const res = await fetch("/api/nutrition/goals");
+  const res = await apiFetch("/api/nutrition/goals");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function updateNutritionGoals(goals: NutrientGoals): Promise<void> {
-  const res = await fetch("/api/nutrition/goals", {
+  const res = await apiFetch("/api/nutrition/goals", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goals }),
@@ -253,7 +267,7 @@ export async function updateNutritionGoals(goals: NutrientGoals): Promise<void> 
 
 export async function fetchPlanned(start: string, end: string): Promise<PlannedActivity[]> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/planned?${params}`);
+  const res = await apiFetch(`/api/planned?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -264,7 +278,7 @@ export async function fetchUploads(kind?: UploadKind, date?: string): Promise<Up
   const params = new URLSearchParams();
   if (kind) params.set("kind", kind);
   if (date) params.set("date", date);
-  const res = await fetch(`/api/uploads?${params}`);
+  const res = await apiFetch(`/api/uploads?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -274,13 +288,13 @@ export async function uploadImage(kind: UploadKind, date: string, file: File): P
   fd.append("kind", kind);
   fd.append("date", date);
   fd.append("file", file);
-  const res = await fetch("/api/uploads", { method: "POST", body: fd });
+  const res = await apiFetch("/api/uploads", { method: "POST", body: fd });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function deleteUpload(id: number): Promise<void> {
-  const res = await fetch(`/api/uploads/${id}`, { method: "DELETE" });
+  const res = await apiFetch(`/api/uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
@@ -312,7 +326,7 @@ async function postAnalyze<T>(
   const body: { upload_id: number; user_notes?: string } = { upload_id };
   const trimmed = user_notes?.trim();
   if (trimmed) body.user_notes = trimmed;
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -329,7 +343,7 @@ async function postAnalyze<T>(
 export async function createBodyCompositionEstimate(
   body: BodyCompositionEstimateInput,
 ): Promise<BodyCompositionEstimate> {
-  const res = await fetch("/api/body-composition-estimates", {
+  const res = await apiFetch("/api/body-composition-estimates", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -343,13 +357,13 @@ export async function listBodyCompositionEstimates(
   end: string,
 ): Promise<BodyCompositionEstimate[]> {
   const params = new URLSearchParams({ start, end });
-  const res = await fetch(`/api/body-composition-estimates?${params}`);
+  const res = await apiFetch(`/api/body-composition-estimates?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
 export async function deleteBodyCompositionEstimate(id: number): Promise<void> {
-  const res = await fetch(`/api/body-composition-estimates/${id}`, {
+  const res = await apiFetch(`/api/body-composition-estimates/${id}`, {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -392,7 +406,7 @@ export interface PluginRun {
 }
 
 export async function listPlugins(): Promise<PluginConfig[]> {
-  const res = await fetch("/api/plugins");
+  const res = await apiFetch("/api/plugins");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
@@ -401,7 +415,7 @@ export async function updatePlugin(
   name: string,
   body: { enabled: boolean; interval_minutes: number; params: Record<string, unknown> }
 ): Promise<PluginConfig> {
-  const res = await fetch(`/api/plugins/${name}`, {
+  const res = await apiFetch(`/api/plugins/${name}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -411,12 +425,12 @@ export async function updatePlugin(
 }
 
 export async function runPluginNow(name: string): Promise<void> {
-  const res = await fetch(`/api/plugins/${name}/run`, { method: "POST" });
+  const res = await apiFetch(`/api/plugins/${name}/run`, { method: "POST" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {
-  const res = await fetch(`/api/plugins/${name}/runs?limit=${limit}`);
+  const res = await apiFetch(`/api/plugins/${name}/runs?limit=${limit}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
