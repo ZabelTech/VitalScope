@@ -848,7 +848,7 @@ def get_journal_supplements(entry_date: str):
     conn = get_db()
     rows = conn.execute(
         """
-        SELECT s.*, COALESCE(i.taken, 1) AS taken
+        SELECT s.*, COALESCE(i.taken, 0) AS taken
         FROM supplements s
         LEFT JOIN journal_supplement_intake i
             ON i.supplement_id = s.id AND i.date = ?

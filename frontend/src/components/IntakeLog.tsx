@@ -92,11 +92,7 @@ export function IntakeLog() {
     };
   }
 
-  async function toggleSupplement(id: number) {
-    const next = supplements.map((s) =>
-      s.id === id ? { ...s, taken: !s.taken } : s
-    );
-    setSupplements(next);
+  async function persistSupplements(next: SupplementIntake[]) {
     setSuppStatus("saving");
     try {
       await submitJournalSupplements(
@@ -109,6 +105,21 @@ export function IntakeLog() {
     } catch {
       setSuppStatus("error");
     }
+  }
+
+  async function toggleSupplement(id: number) {
+    const next = supplements.map((s) =>
+      s.id === id ? { ...s, taken: !s.taken } : s
+    );
+    setSupplements(next);
+    await persistSupplements(next);
+  }
+
+  async function markAllTaken() {
+    if (supplements.length === 0 || supplements.every((s) => s.taken)) return;
+    const next = supplements.map((s) => ({ ...s, taken: true }));
+    setSupplements(next);
+    await persistSupplements(next);
   }
 
   async function handleSaveAlcohol(e: React.FormEvent) {
@@ -144,6 +155,20 @@ export function IntakeLog() {
             {suppStatus === "saved" && <span className="journal-ok"> · saved ✓</span>}
             {suppStatus === "error" && <span className="journal-err"> · save failed</span>}
           </legend>
+          {supplements.length > 0 && (
+            <div className="supplement-actions">
+              <button
+                type="button"
+                className="chip"
+                onClick={markAllTaken}
+                disabled={
+                  suppStatus === "saving" || supplements.every((s) => s.taken)
+                }
+              >
+                Mark all taken
+              </button>
+            </div>
+          )}
           {supplements.length === 0 && (
             <p className="journal-hint">
               No supplements defined yet. Add them under Decide → Plan → Supplements.
