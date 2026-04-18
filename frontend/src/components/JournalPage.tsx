@@ -18,9 +18,10 @@ export function JournalPage({ initialDate }: Props = {}) {
   const [date, setDate] = useState<string>(initialDate ?? yesterdayISO());
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [notes, setNotes] = useState("");
+  // Preserved-through fields owned elsewhere — loaded from the server so
+  // saving here doesn't clobber them. Supplements + alcohol live on Act →
+  // Intake; is_work_day lives on the landing's WorkDayToggle (today only).
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
-  // Preserved-through fields owned by the Intake section in Act — loaded from
-  // the server so saving here doesn't clobber them.
   const [followedSupplements, setFollowedSupplements] = useState(true);
   const [drankAlcohol, setDrankAlcohol] = useState(false);
   const [alcoholAmount, setAlcoholAmount] = useState<string | null>(null);
@@ -107,37 +108,6 @@ export function JournalPage({ initialDate }: Props = {}) {
               {f}
             </label>
           ))}
-        </fieldset>
-
-        <fieldset className="journal-field">
-          <legend className="stat-label">Work day?</legend>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="work-day"
-              checked={isWorkDay === true}
-              onChange={() => setIsWorkDay(true)}
-            />
-            Work
-          </label>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="work-day"
-              checked={isWorkDay === false}
-              onChange={() => setIsWorkDay(false)}
-            />
-            Off
-          </label>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="work-day"
-              checked={isWorkDay === null}
-              onChange={() => setIsWorkDay(null)}
-            />
-            Unset
-          </label>
         </fieldset>
 
         <label className="journal-field">
