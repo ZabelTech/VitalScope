@@ -36,7 +36,8 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
   const [items, setItems] = useState<Upload[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const cameraInputRef = useRef<HTMLInputElement | null>(null);
+  const libraryInputRef = useRef<HTMLInputElement | null>(null);
 
   const [analysingId, setAnalysingId] = useState<number | null>(null);
   const [analyseError, setAnalyseError] = useState<string | null>(null);
@@ -98,7 +99,8 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       setError(String(e));
     } finally {
       setUploading(false);
-      if (inputRef.current) inputRef.current.value = "";
+      if (cameraInputRef.current) cameraInputRef.current.value = "";
+      if (libraryInputRef.current) libraryInputRef.current.value = "";
     }
   }
 
@@ -151,18 +153,31 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       <div className="image-upload-header">
         <span className="stat-label">{label}</span>
       </div>
-      <label className="image-upload-button">
-        Take photo
-        <input
-          ref={inputRef}
-          type="file"
-          accept="image/*"
-          multiple
-          capture="environment"
-          onChange={(e) => onFiles(e.target.files)}
-          className="visually-hidden"
-        />
-      </label>
+      <div className="image-upload-actions">
+        <label className="image-upload-button">
+          Take photo
+          <input
+            ref={cameraInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            capture="environment"
+            onChange={(e) => onFiles(e.target.files)}
+            className="visually-hidden"
+          />
+        </label>
+        <label className="image-upload-button image-upload-button--secondary">
+          From library
+          <input
+            ref={libraryInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            onChange={(e) => onFiles(e.target.files)}
+            className="visually-hidden"
+          />
+        </label>
+      </div>
       {hint && <p className="journal-hint">{hint}</p>}
       {uploading && <p className="journal-hint">Uploading…</p>}
       {error && <p className="journal-err">{error}</p>}

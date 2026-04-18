@@ -1332,6 +1332,17 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 .image-upload-button:hover { background: #2563eb; }
 .image-upload-button:focus-within { outline: 2px solid #60a5fa; outline-offset: 2px; }
 
+.image-upload-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-upload-button--secondary {
+  background: #334155;
+}
+.image-upload-button--secondary:hover { background: #475569; }
+
 .visually-hidden {
   position: absolute;
   width: 1px;
