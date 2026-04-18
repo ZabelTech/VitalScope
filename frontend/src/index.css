@@ -565,7 +565,7 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 @media (min-width: 640px) {
   .metric-card-row {
-    grid-template-columns: repeat(5, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
 }
 
