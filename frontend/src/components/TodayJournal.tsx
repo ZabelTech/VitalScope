@@ -64,7 +64,7 @@ export function TodayJournal({ date }: Props) {
   }
 
   return (
-    <div className="today-journal">
+    <>
       <fieldset className="journal-field">
         <legend className="stat-label">Today</legend>
         <div className="workday-buttons">
@@ -102,6 +102,6 @@ export function TodayJournal({ date }: Props) {
           </label>
         ))}
       </fieldset>
-    </div>
+    </>
   );
 }

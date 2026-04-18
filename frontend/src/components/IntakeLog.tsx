@@ -24,7 +24,13 @@ function todayISO(): string {
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-export function IntakeLog() {
+interface Props {
+  // When false, renders the form content without its own .overview-card so a
+  // parent can host it inside a shared card. Default true for standalone use.
+  wrapped?: boolean;
+}
+
+export function IntakeLog({ wrapped = true }: Props = {}) {
   const [date, setDate] = useState<string>(todayISO());
   const [supplements, setSupplements] = useState<SupplementIntake[]>([]);
   // Preserved-through fields owned by other sections of the daily landing.
@@ -117,17 +123,16 @@ export function IntakeLog() {
     await persistSupplements(next);
   }
 
-  return (
-    <div className="journal-page">
-      <div className="journal-form overview-card">
-        <label className="journal-field">
-          <span className="stat-label">Date</span>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </label>
+  const body = (
+    <>
+      <label className="journal-field">
+        <span className="stat-label">Date</span>
+        <input
+          type="date"
+          value={date}
+          onChange={(e) => setDate(e.target.value)}
+        />
+      </label>
 
         <fieldset className="journal-field">
           <legend className="stat-label">
@@ -177,8 +182,14 @@ export function IntakeLog() {
               </div>
             );
           })}
-        </fieldset>
-      </div>
+      </fieldset>
+    </>
+  );
+
+  if (!wrapped) return body;
+  return (
+    <div className="journal-page">
+      <div className="journal-form overview-card">{body}</div>
     </div>
   );
 }

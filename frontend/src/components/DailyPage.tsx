@@ -19,10 +19,12 @@ export function DailyPage() {
           id: "today",
           label: "Today",
           content: (
-            <>
-              <TodayJournal date={today} />
-              <IntakeLog />
-            </>
+            <div className="journal-page">
+              <div className="journal-form overview-card">
+                <TodayJournal date={today} />
+                <IntakeLog wrapped={false} />
+              </div>
+            </div>
           ),
         },
         { id: "journal", label: "Yesterday's journal", content: <JournalPage initialDate={yesterday} /> },
