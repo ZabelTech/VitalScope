@@ -234,6 +234,7 @@ export interface Upload {
   bytes: number;
   created_at: string;
   meal_id: number | null;
+  body_composition_estimate_id: number | null;
 }
 
 export interface MealAnalysisResult {
@@ -243,6 +244,67 @@ export interface MealAnalysisResult {
   confidence: "low" | "medium" | "high";
   nutrients: { nutrient_key: string; amount: number }[];
   unknown_keys: string[];
+}
+
+export type MuscleMassCategory = "low" | "average" | "moderate" | "high" | "very_high";
+export type WaterRetentionLevel = "none" | "mild" | "moderate" | "pronounced";
+export type VisibleDefinitionLevel = "low" | "moderate" | "high" | "very_high";
+export type FatigueSigns = "none" | "mild" | "moderate" | "notable";
+export type HydrationSigns =
+  | "well_hydrated"
+  | "neutral"
+  | "mild_dehydration"
+  | "notable_dehydration";
+
+export interface FormCheckAnalysisResult {
+  model: string;
+  confidence: "low" | "medium" | "high";
+  body_fat_pct: number | null;
+  muscle_mass_category: MuscleMassCategory | null;
+  water_retention: WaterRetentionLevel | null;
+  visible_definition: VisibleDefinitionLevel | null;
+  fatigue_signs: FatigueSigns | null;
+  hydration_signs: HydrationSigns | null;
+  posture_note: string | null;
+  symmetry_note: string | null;
+  general_vigor_note: string | null;
+  notes: string;
+  unknown_keys: string[];
+}
+
+export interface BodyCompositionEstimate {
+  id: number;
+  date: string;
+  source: "form-check-ai";
+  source_upload_id: number | null;
+  body_fat_pct: number | null;
+  muscle_mass_category: MuscleMassCategory | null;
+  water_retention: WaterRetentionLevel | null;
+  visible_definition: VisibleDefinitionLevel | null;
+  posture_note: string | null;
+  symmetry_note: string | null;
+  fatigue_signs: FatigueSigns | null;
+  hydration_signs: HydrationSigns | null;
+  general_vigor_note: string | null;
+  notes: string | null;
+  confidence: "low" | "medium" | "high" | null;
+  created_at: string;
+}
+
+export interface BodyCompositionEstimateInput {
+  date: string;
+  source_upload_id?: number | null;
+  body_fat_pct?: number | null;
+  muscle_mass_category?: MuscleMassCategory | null;
+  water_retention?: WaterRetentionLevel | null;
+  visible_definition?: VisibleDefinitionLevel | null;
+  posture_note?: string | null;
+  symmetry_note?: string | null;
+  fatigue_signs?: FatigueSigns | null;
+  hydration_signs?: HydrationSigns | null;
+  general_vigor_note?: string | null;
+  notes?: string | null;
+  confidence?: "low" | "medium" | "high" | null;
 }
 
 export interface PlannedActivity {

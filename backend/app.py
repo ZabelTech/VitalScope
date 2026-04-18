@@ -268,11 +268,38 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
-    # Idempotent ALTER for DBs that predate meal_id — links an uploaded meal
-    # photo to the Meal row it was analysed into.
+    # Idempotent ALTERs for DBs that predate these columns.
     existing = {r[1] for r in conn.execute("PRAGMA table_info(uploads)")}
     if "meal_id" not in existing:
         conn.execute("ALTER TABLE uploads ADD COLUMN meal_id INTEGER")
+    if "body_composition_estimate_id" not in existing:
+        conn.execute("ALTER TABLE uploads ADD COLUMN body_composition_estimate_id INTEGER")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS body_composition_estimates (
+            id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+            date                      TEXT NOT NULL,
+            source                    TEXT NOT NULL CHECK (source IN ('form-check-ai')),
+            source_upload_id          INTEGER,
+            body_fat_pct              REAL,
+            muscle_mass_category      TEXT,
+            water_retention           TEXT,
+            visible_definition        TEXT,
+            posture_note              TEXT,
+            symmetry_note             TEXT,
+            fatigue_signs             TEXT,
+            hydration_signs           TEXT,
+            general_vigor_note        TEXT,
+            notes                     TEXT,
+            confidence                TEXT,
+            created_at                TEXT NOT NULL,
+            FOREIGN KEY (source_upload_id) REFERENCES uploads(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_body_comp_est_date ON body_composition_estimates(date)"
+    )
     conn.commit()
     conn.close()
 
@@ -1480,7 +1507,7 @@ async def upload_file(
     upload_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"id": upload_id, "kind": kind, "date": date, "filename": rel, "mime": file.content_type, "bytes": len(data), "created_at": now, "meal_id": None}
+    return {"id": upload_id, "kind": kind, "date": date, "filename": rel, "mime": file.content_type, "bytes": len(data), "created_at": now, "meal_id": None, "body_composition_estimate_id": None}
 
 
 @app.get("/api/uploads")
@@ -1495,7 +1522,7 @@ def list_uploads(kind: Optional[Literal["meal", "form"]] = None, date: Optional[
         params.append(date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id FROM uploads{where} ORDER BY id DESC",
+        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id FROM uploads{where} ORDER BY id DESC",
         params,
     ).fetchall()
     conn.close()
@@ -1602,66 +1629,55 @@ def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
     }
 
 
-@app.post("/api/meals/analyze-image")
-async def analyze_meal_image(body: AnalyzeImageBody):
-    if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
-
-    conn = get_db()
+def _load_upload_image(
+    conn: sqlite3.Connection, upload_id: int, expected_kind: str
+) -> tuple[str, str]:
+    """Look up an upload row, verify kind + existence on disk, return
+    (base64 bytes, mime). Raises HTTPException for 404/400 cases.
+    Caller owns conn lifecycle."""
     row = conn.execute(
         "SELECT kind, filename, mime FROM uploads WHERE id = ?",
-        (body.upload_id,),
+        (upload_id,),
     ).fetchone()
     if not row:
-        conn.close()
         raise HTTPException(status_code=404, detail="upload not found")
-    if row["kind"] != "meal":
-        conn.close()
-        raise HTTPException(status_code=400, detail="upload is not a meal photo")
-
+    if row["kind"] != expected_kind:
+        raise HTTPException(status_code=400, detail=f"upload is not a {expected_kind} photo")
     path = (UPLOADS_DIR / row["filename"]).resolve()
     if not str(path).startswith(str(UPLOADS_DIR.resolve())) or not path.is_file():
-        conn.close()
         raise HTTPException(status_code=404, detail="file missing on disk")
+    img_b64 = base64.standard_b64encode(path.read_bytes()).decode("ascii")
+    return img_b64, row["mime"] or "image/jpeg"
 
-    img_bytes = path.read_bytes()
-    img_b64 = base64.standard_b64encode(img_bytes).decode("ascii")
-    mime = row["mime"] or "image/jpeg"
 
-    tool = _build_analyze_tool_schema(conn)
-    conn.close()
-
+async def _call_claude_tool(
+    *,
+    system: str,
+    user_text: str,
+    image_b64: str,
+    mime: str,
+    tool: dict,
+    tool_name: str,
+) -> dict:
+    """Run a vision tool-use call with our standard timeout + error mapping.
+    Returns the tool_use.input dict, or raises HTTPException on any failure."""
     client = _get_ai_client()
-    system_prompt = (
-        "You are a registered-dietitian-grade nutrient estimator. Given a meal photo, "
-        "call record_meal_estimate with your best numeric estimate for each listed nutrient. "
-        "Estimate a single serving as depicted. Never invent numbers — prefer null when uncertain. "
-        "If the user provided context (ingredients, portion sizes, preparation), take it as ground "
-        "truth over what you'd infer from the photo alone."
-    )
-
-    user_note = (body.user_notes or "").strip()
-    prompt_text = "Estimate the nutrient content of this meal."
-    if user_note:
-        # Keep user context clearly separated from our instructions.
-        prompt_text += f"\n\nUser context (trust this over the image where they conflict):\n{user_note}"
-
     try:
         response = await asyncio.wait_for(
             client.messages.create(
                 model=AI_MODEL,
                 max_tokens=4096,
-                system=system_prompt,
+                system=system,
                 tools=[tool],
-                tool_choice={"type": "tool", "name": "record_meal_estimate"},
+                tool_choice={"type": "tool", "name": tool_name},
                 messages=[{
                     "role": "user",
                     "content": [
                         {
                             "type": "image",
-                            "source": {"type": "base64", "media_type": mime, "data": img_b64},
+                            "source": {"type": "base64", "media_type": mime, "data": image_b64},
                         },
-                        {"type": "text", "text": prompt_text},
+                        {"type": "text", "text": user_text},
                     ],
                 }],
             ),
@@ -1677,14 +1693,54 @@ async def analyze_meal_image(body: AnalyzeImageBody):
         raise HTTPException(status_code=502, detail="Claude connection error")
 
     tool_block = next(
-        (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == "record_meal_estimate"),
+        (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == tool_name),
         None,
     )
     if tool_block is None:
         _ai_logger.warning("No tool_use block in Claude response: %s", response.content)
         raise HTTPException(status_code=502, detail="Claude did not return a tool_use block")
+    return tool_block.input or {}
 
-    payload = tool_block.input or {}
+
+def _append_user_context(prompt_text: str, user_notes: Optional[str]) -> str:
+    note = (user_notes or "").strip()
+    if not note:
+        return prompt_text
+    return prompt_text + f"\n\nUser context (trust this over the image where they conflict):\n{note}"
+
+
+@app.post("/api/meals/analyze-image")
+async def analyze_meal_image(body: AnalyzeImageBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
+
+    conn = get_db()
+    try:
+        img_b64, mime = _load_upload_image(conn, body.upload_id, "meal")
+        tool = _build_analyze_tool_schema(conn)
+    finally:
+        conn.close()
+
+    system_prompt = (
+        "You are a registered-dietitian-grade nutrient estimator. Given a meal photo, "
+        "call record_meal_estimate with your best numeric estimate for each listed nutrient. "
+        "Estimate a single serving as depicted. Never invent numbers — prefer null when uncertain. "
+        "If the user provided context (ingredients, portion sizes, preparation), take it as ground "
+        "truth over what you'd infer from the photo alone."
+    )
+    user_text = _append_user_context(
+        "Estimate the nutrient content of this meal.", body.user_notes
+    )
+
+    payload = await _call_claude_tool(
+        system=system_prompt,
+        user_text=user_text,
+        image_b64=img_b64,
+        mime=mime,
+        tool=tool,
+        tool_name="record_meal_estimate",
+    )
+
     raw_nutrients = payload.get("nutrients", {}) or {}
     nutrients: list[dict] = []
     unknown_keys: list[str] = []
@@ -1705,6 +1761,263 @@ async def analyze_meal_image(body: AnalyzeImageBody):
         "nutrients": nutrients,
         "unknown_keys": sorted(unknown_keys),
     }
+
+
+# --- Form-check body-composition analysis ---
+
+_FORM_CHECK_TOOL = {
+    "name": "record_form_check",
+    "description": (
+        "Record visible body-composition cues from a single photo. Prefer null over guessing; "
+        "describe what you see, do not diagnose."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "confidence": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "Overall confidence. 'high' only when lighting + pose are favourable.",
+            },
+            "body_fat_pct": {
+                "type": ["number", "null"],
+                "description": "Estimated body-fat percentage (wide ±5% error band). Null if lighting/pose make it unreadable.",
+            },
+            "muscle_mass_category": {
+                "type": ["string", "null"],
+                "enum": ["low", "average", "moderate", "high", "very_high", None],
+                "description": "Relative visible muscle mass.",
+            },
+            "water_retention": {
+                "type": ["string", "null"],
+                "enum": ["none", "mild", "moderate", "pronounced", None],
+                "description": "Visible puffiness / smoothness from water retention.",
+            },
+            "visible_definition": {
+                "type": ["string", "null"],
+                "enum": ["low", "moderate", "high", "very_high", None],
+                "description": "Muscle separation / vascularity visibility.",
+            },
+            "fatigue_signs": {
+                "type": ["string", "null"],
+                "enum": ["none", "mild", "moderate", "notable", None],
+                "description": "Visible fatigue cues — eye droop, shoulder slump, complexion dullness.",
+            },
+            "hydration_signs": {
+                "type": ["string", "null"],
+                "enum": ["well_hydrated", "neutral", "mild_dehydration", "notable_dehydration", None],
+                "description": "Visible hydration state — skin elasticity, eye clarity, lip fullness.",
+            },
+            "posture_note": {
+                "type": ["string", "null"],
+                "description": "One-sentence posture observation (e.g. rounded shoulders, anterior pelvic tilt).",
+            },
+            "symmetry_note": {
+                "type": ["string", "null"],
+                "description": "One-sentence symmetry / imbalance observation.",
+            },
+            "general_vigor_note": {
+                "type": ["string", "null"],
+                "description": "Cautious free-text read on general vigor. Observational only.",
+            },
+            "notes": {
+                "type": "string",
+                "description": "Overall summary paragraph for the user.",
+            },
+        },
+        "required": ["confidence", "notes"],
+        "additionalProperties": False,
+    },
+}
+
+_FORM_CHECK_FIELDS = [
+    "body_fat_pct",
+    "muscle_mass_category",
+    "water_retention",
+    "visible_definition",
+    "fatigue_signs",
+    "hydration_signs",
+    "posture_note",
+    "symmetry_note",
+    "general_vigor_note",
+]
+
+
+@app.post("/api/form-checks/analyze-image")
+async def analyze_form_check_image(body: AnalyzeImageBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
+
+    conn = get_db()
+    try:
+        img_b64, mime = _load_upload_image(conn, body.upload_id, "form")
+    finally:
+        conn.close()
+
+    system_prompt = (
+        "You are estimating visible body-composition cues from a single photo. This is a "
+        "cosmetic/lifestyle tool, not a medical assessment. Prefer null over guessing. "
+        "Lighting, pose, pump, hydration, time of day, and camera angle dramatically affect "
+        "visible definition — factor this into confidence. Body-fat % has a ±5% error band at "
+        "best from a photo; return a midpoint only when you're reasonably sure. Describe what "
+        "you see; do not diagnose. If the user provided context (training state, time since "
+        "last meal, cut/bulk phase, lighting), trust it over what you infer from the photo."
+    )
+    user_text = _append_user_context(
+        "Estimate visible body composition from this photo.", body.user_notes
+    )
+
+    payload = await _call_claude_tool(
+        system=system_prompt,
+        user_text=user_text,
+        image_b64=img_b64,
+        mime=mime,
+        tool=_FORM_CHECK_TOOL,
+        tool_name="record_form_check",
+    )
+
+    unknown_keys: list[str] = []
+    result: dict[str, Any] = {
+        "model": AI_MODEL,
+        "confidence": payload.get("confidence") or "medium",
+        "notes": payload.get("notes") or "",
+    }
+    for key in _FORM_CHECK_FIELDS:
+        value = payload.get(key)
+        if value is None or value == "":
+            result[key] = None
+            unknown_keys.append(key)
+        else:
+            result[key] = value
+    result["unknown_keys"] = sorted(unknown_keys)
+    return result
+
+
+# --- Body composition estimates (CRUD) ---
+
+class BodyCompositionEstimateIn(BaseModel):
+    date: str
+    source_upload_id: Optional[int] = None
+    body_fat_pct: Optional[float] = None
+    muscle_mass_category: Optional[str] = None
+    water_retention: Optional[str] = None
+    visible_definition: Optional[str] = None
+    posture_note: Optional[str] = None
+    symmetry_note: Optional[str] = None
+    fatigue_signs: Optional[str] = None
+    hydration_signs: Optional[str] = None
+    general_vigor_note: Optional[str] = None
+    notes: Optional[str] = None
+    confidence: Optional[str] = None
+
+
+def _row_to_estimate(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "date": row["date"],
+        "source": row["source"],
+        "source_upload_id": row["source_upload_id"],
+        "body_fat_pct": row["body_fat_pct"],
+        "muscle_mass_category": row["muscle_mass_category"],
+        "water_retention": row["water_retention"],
+        "visible_definition": row["visible_definition"],
+        "posture_note": row["posture_note"],
+        "symmetry_note": row["symmetry_note"],
+        "fatigue_signs": row["fatigue_signs"],
+        "hydration_signs": row["hydration_signs"],
+        "general_vigor_note": row["general_vigor_note"],
+        "notes": row["notes"],
+        "confidence": row["confidence"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.post("/api/body-composition-estimates")
+def create_body_composition_estimate(body: BodyCompositionEstimateIn):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """
+        INSERT INTO body_composition_estimates (
+            date, source, source_upload_id,
+            body_fat_pct, muscle_mass_category, water_retention, visible_definition,
+            posture_note, symmetry_note, fatigue_signs, hydration_signs,
+            general_vigor_note, notes, confidence, created_at
+        )
+        VALUES (?, 'form-check-ai', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            body.date,
+            body.source_upload_id,
+            body.body_fat_pct,
+            body.muscle_mass_category,
+            body.water_retention,
+            body.visible_definition,
+            body.posture_note,
+            body.symmetry_note,
+            body.fatigue_signs,
+            body.hydration_signs,
+            body.general_vigor_note,
+            body.notes,
+            body.confidence,
+            now,
+        ),
+    )
+    new_id = cur.lastrowid
+    if body.source_upload_id is not None:
+        conn.execute(
+            "UPDATE uploads SET body_composition_estimate_id = ? WHERE id = ? AND kind = 'form'",
+            (new_id, body.source_upload_id),
+        )
+    conn.commit()
+    row = conn.execute(
+        "SELECT * FROM body_composition_estimates WHERE id = ?", (new_id,)
+    ).fetchone()
+    conn.close()
+    return _row_to_estimate(row)
+
+
+@app.get("/api/body-composition-estimates")
+def list_body_composition_estimates(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM body_composition_estimates WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [_row_to_estimate(r) for r in rows]
+
+
+@app.get("/api/body-composition-estimates/{estimate_id}")
+def get_body_composition_estimate(estimate_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM body_composition_estimates WHERE id = ?", (estimate_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="estimate not found")
+    return _row_to_estimate(row)
+
+
+@app.delete("/api/body-composition-estimates/{estimate_id}")
+def delete_body_composition_estimate(estimate_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT id FROM body_composition_estimates WHERE id = ?", (estimate_id,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="estimate not found")
+    conn.execute("DELETE FROM body_composition_estimates WHERE id = ?", (estimate_id,))
+    conn.execute(
+        "UPDATE uploads SET body_composition_estimate_id = NULL WHERE body_composition_estimate_id = ?",
+        (estimate_id,),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
 
 
 # --- Plugins ---

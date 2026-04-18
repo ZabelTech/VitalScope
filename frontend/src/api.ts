@@ -1,4 +1,7 @@
 import type {
+  BodyCompositionEstimate,
+  BodyCompositionEstimateInput,
+  FormCheckAnalysisResult,
   JournalEntry,
   Meal,
   MealAnalysisResult,
@@ -291,10 +294,25 @@ export async function analyzeMealImage(
   upload_id: number,
   user_notes?: string,
 ): Promise<MealAnalysisResult> {
+  return postAnalyze("/api/meals/analyze-image", upload_id, user_notes);
+}
+
+export async function analyzeFormCheckImage(
+  upload_id: number,
+  user_notes?: string,
+): Promise<FormCheckAnalysisResult> {
+  return postAnalyze("/api/form-checks/analyze-image", upload_id, user_notes);
+}
+
+async function postAnalyze<T>(
+  path: string,
+  upload_id: number,
+  user_notes?: string,
+): Promise<T> {
   const body: { upload_id: number; user_notes?: string } = { upload_id };
   const trimmed = user_notes?.trim();
   if (trimmed) body.user_notes = trimmed;
-  const res = await fetch("/api/meals/analyze-image", {
+  const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -304,6 +322,37 @@ export async function analyzeMealImage(
     throw new Error(detail.detail || `API error: ${res.status}`);
   }
   return res.json();
+}
+
+// --- Body composition estimates ---
+
+export async function createBodyCompositionEstimate(
+  body: BodyCompositionEstimateInput,
+): Promise<BodyCompositionEstimate> {
+  const res = await fetch("/api/body-composition-estimates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function listBodyCompositionEstimates(
+  start: string,
+  end: string,
+): Promise<BodyCompositionEstimate[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await fetch(`/api/body-composition-estimates?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteBodyCompositionEstimate(id: number): Promise<void> {
+  const res = await fetch(`/api/body-composition-estimates/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
 // --- Plugins ---

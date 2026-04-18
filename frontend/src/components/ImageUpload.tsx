@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  analyzeFormCheckImage,
   analyzeMealImage,
   deleteUpload,
   fetchUploads,
@@ -8,6 +9,7 @@ import {
   uploadImageUrl,
 } from "../api";
 import type {
+  FormCheckAnalysisResult,
   MealAnalysisResult,
   NutrientCategory,
   NutrientDef,
@@ -15,6 +17,7 @@ import type {
   UploadKind,
 } from "../types";
 import { useRuntime } from "../hooks/useRuntime";
+import { FormCheckAnalysisDraft } from "./FormCheckAnalysisDraft";
 import { MealAnalysisDraft } from "./MealAnalysisDraft";
 
 interface Props {
@@ -23,6 +26,10 @@ interface Props {
   label: string;
   hint?: string;
 }
+
+type Draft =
+  | { kind: "meal"; result: MealAnalysisResult; uploadId: number }
+  | { kind: "form"; result: FormCheckAnalysisResult; uploadId: number };
 
 export function ImageUpload({ kind, date, label, hint }: Props) {
   const runtime = useRuntime();
@@ -33,7 +40,7 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
 
   const [analysingId, setAnalysingId] = useState<number | null>(null);
   const [analyseError, setAnalyseError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<{ result: MealAnalysisResult; uploadId: number } | null>(null);
+  const [draft, setDraft] = useState<Draft | null>(null);
   /** Preflight state — user clicked Analyse on a thumbnail and is about to
    *  add optional context before firing the Claude call. */
   const [pending, setPending] = useState<{ uploadId: number; note: string } | null>(null);
@@ -56,7 +63,7 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
     return groups;
   }, [nutrientDefs]);
 
-  const canAnalyse = kind === "meal" && runtime?.ai_available === true;
+  const canAnalyse = runtime?.ai_available === true;
 
   const reload = useCallback(async () => {
     try {
@@ -114,8 +121,13 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
     setAnalyseError(null);
     setAnalysingId(uploadId);
     try {
-      const result = await analyzeMealImage(uploadId, note);
-      setDraft({ result, uploadId });
+      if (kind === "meal") {
+        const result = await analyzeMealImage(uploadId, note);
+        setDraft({ kind: "meal", result, uploadId });
+      } else {
+        const result = await analyzeFormCheckImage(uploadId, note);
+        setDraft({ kind: "form", result, uploadId });
+      }
       setPending(null);
     } catch (e) {
       setAnalyseError(String(e instanceof Error ? e.message : e));
@@ -128,6 +140,11 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
     setDraft(null);
     await reload();
   }
+
+  const preflightPlaceholder =
+    kind === "meal"
+      ? "e.g. ~200g salmon, 150g jasmine rice, olive oil, no sauce"
+      : "e.g. morning, fasted, post-12-week cut, harsh overhead light";
 
   return (
     <div className="image-upload">
@@ -155,7 +172,8 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       ) : (
         <ul className="image-upload-list">
           {items.map((u) => {
-            const linked = u.meal_id != null;
+            const linked =
+              (kind === "meal" ? u.meal_id : u.body_composition_estimate_id) != null;
             const showAnalyse = canAnalyse && !linked;
             const busy = analysingId === u.id;
             return (
@@ -185,7 +203,7 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
           })}
         </ul>
       )}
-      {pending && kind === "meal" && (
+      {pending && (
         <div className="meal-analysis-preflight">
           <img
             className="meal-analysis-preflight-img"
@@ -200,7 +218,7 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
               onChange={(e) =>
                 setPending({ ...pending, note: e.target.value })
               }
-              placeholder="e.g. ~200g salmon, 150g jasmine rice, olive oil, no sauce"
+              placeholder={preflightPlaceholder}
               disabled={analysingId !== null}
             />
           </label>
@@ -223,12 +241,21 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
           </div>
         </div>
       )}
-      {draft && kind === "meal" && (
+      {draft?.kind === "meal" && (
         <MealAnalysisDraft
           result={draft.result}
           uploadId={draft.uploadId}
           date={date}
           defsByCategory={defsByCategory}
+          onSaved={onDraftSaved}
+          onCancel={() => setDraft(null)}
+        />
+      )}
+      {draft?.kind === "form" && (
+        <FormCheckAnalysisDraft
+          result={draft.result}
+          uploadId={draft.uploadId}
+          date={date}
           onSaved={onDraftSaved}
           onCancel={() => setDraft(null)}
         />
