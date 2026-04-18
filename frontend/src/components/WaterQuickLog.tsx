@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { createWater, deleteWater, listWater } from "../api";
+import { createWater, listWater } from "../api";
 import type { WaterEntry } from "../types";
 
 interface Props {
@@ -7,6 +7,28 @@ interface Props {
   goalMl?: number;
   quickAdds?: number[];
   title?: string;
+}
+
+// Rough "drink now" suggestion — assumes a 06:00–22:00 hydration window,
+// compares the pro-rata expected intake by this hour to the actual.
+// Only surfaced for today; back-filling older days doesn't need advice.
+function recommendation(total: number, goalMl: number, isToday: boolean): string {
+  if (!isToday) return "";
+  const now = new Date();
+  const hour = now.getHours() + now.getMinutes() / 60;
+  const startH = 6;
+  const endH = 22;
+  if (hour < startH) return "Aim for 200 ml after waking.";
+  if (hour >= endH) {
+    const gap = goalMl - total;
+    if (gap > 100) return `Close to bedtime — ${gap} ml short of today's goal.`;
+    return "Ease off before bed.";
+  }
+  const expected = goalMl * Math.min(1, (hour - startH) / (endH - startH));
+  const deficit = Math.round((expected - total) / 50) * 50;
+  if (deficit <= 0) return "On track — sip as thirsty.";
+  const amount = Math.min(750, Math.max(100, deficit));
+  return `Drink ~${amount} ml now to catch up.`;
 }
 
 export function WaterQuickLog({
@@ -27,7 +49,13 @@ export function WaterQuickLog({
   }, [reload]);
 
   const total = water.reduce((sum, w) => sum + w.amount_ml, 0);
-  const pct = Math.min(100, Math.round((total / goalMl) * 100));
+  // Gauge runs from 0 to 2× goal so the goal sits dead centre: red on the
+  // left (dehydrated), green around the middle (hydrated), blue at the
+  // right (overhydrated).
+  const gaugeMax = goalMl * 2;
+  const markerPct = Math.max(0, Math.min(100, (total / gaugeMax) * 100));
+  const todayISO = new Date().toISOString().slice(0, 10);
+  const reco = recommendation(total, goalMl, date === todayISO);
 
   async function addMl(ml: number) {
     if (saving) return;
@@ -40,19 +68,22 @@ export function WaterQuickLog({
     }
   }
 
-  async function onDelete(id: number) {
-    await deleteWater(id);
-    await reload();
-  }
-
   return (
     <div className="overview-card water-quick-log">
       <h3 className="stat-label">
         {title} — {total} / {goalMl} ml
       </h3>
-      <div className="progress-bar">
-        <div className="progress-bar-fill" style={{ width: `${pct}%` }} />
+      <div className="water-gauge" role="img" aria-label={`${total} ml of ${goalMl} ml goal`}>
+        <div className="water-gauge-track">
+          <div className="water-gauge-marker" style={{ left: `${markerPct}%` }} />
+        </div>
+        <div className="water-gauge-labels">
+          <span>dehydrated</span>
+          <span>hydrated</span>
+          <span>overhydrated</span>
+        </div>
       </div>
+      {reco && <p className="water-reco">{reco}</p>}
       <div className="water-quick-adds">
         {quickAdds.map((ml) => (
           <button
@@ -66,24 +97,6 @@ export function WaterQuickLog({
           </button>
         ))}
       </div>
-      {water.length > 0 && (
-        <ul className="water-list">
-          {water.map((w) => (
-            <li key={w.id}>
-              <span>{w.time ?? "—"}</span>
-              <span>{w.amount_ml} ml</span>
-              <button
-                type="button"
-                className="supplement-delete"
-                aria-label="Delete water entry"
-                onClick={() => onDelete(w.id)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
     </div>
   );
 }
