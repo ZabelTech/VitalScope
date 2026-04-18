@@ -1,18 +1,18 @@
 # Production config. Deployed automatically by .github/workflows/prod-deploy.yml
 # on every push to main. One-time setup before the first deploy:
 #
-#   flyctl apps create vitalscope-prod
-#   flyctl volumes create vitalscope_data --region fra --size 1 --app vitalscope-prod
+#   flyctl apps create vitalscope
+#   flyctl volumes create vitalscope_data --region fra --size 1 --app vitalscope
 #   flyctl secrets set GARMIN_EMAIL=... GARMIN_PASSWORD=... \
 #                      STRONG_EMAIL=...  STRONG_PASSWORD=...  \
 #                      EUFY_EMAIL=...    EUFY_PASSWORD=...    \
-#                      --app vitalscope-prod
+#                      --app vitalscope
 #
 # Unlike preview deploys, prod keeps one machine always running so the
 # APScheduler-based plugins can fire on their intervals. Volume is mounted
 # at /data so the SQLite DB and uploads survive redeploys.
 
-app = "vitalscope-prod"
+app = "vitalscope"
 primary_region = "fra"
 
 [build]

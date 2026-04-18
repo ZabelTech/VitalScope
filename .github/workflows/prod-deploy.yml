@@ -24,7 +24,7 @@ jobs:
       - name: Deploy
         run: |
           flyctl deploy \
-            --app vitalscope-prod \
+            --app vitalscope \
             --config fly.prod.toml \
             --remote-only \
             --yes \
