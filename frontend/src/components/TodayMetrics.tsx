@@ -1,5 +1,6 @@
 import { format, subDays } from "date-fns";
 import { useEffect, useState } from "react";
+import { apiFetch } from "../api";
 import { useMetricData } from "../hooks/useMetricData";
 import type {
   BodyBatteryDaily,
@@ -145,7 +146,7 @@ export function TodayMetrics() {
     updated_at: string | null;
   } | null>(null);
   useEffect(() => {
-    fetch("/api/body-battery/current")
+    apiFetch("/api/body-battery/current")
       .then((r) => r.json())
       .then((d) => setBbCurrent(d && d.date ? d : null))
       .catch(() => {});

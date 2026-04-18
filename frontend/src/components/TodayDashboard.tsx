@@ -1,7 +1,7 @@
 import { format, subDays } from "date-fns";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { fetchNutritionDaily, fetchWaterDaily } from "../api";
+import { apiFetch, fetchNutritionDaily, fetchWaterDaily } from "../api";
 import { useMetricData } from "../hooks/useMetricData";
 import type {
   GarminActivity,
@@ -42,7 +42,7 @@ export function TodayDashboard() {
 
   const [todayWorkouts, setTodayWorkouts] = useState<Workout[]>([]);
   useEffect(() => {
-    fetch("/api/workouts/recent?limit=20")
+    apiFetch("/api/workouts/recent?limit=20")
       .then((r) => r.json())
       .then((rows: Workout[]) => setTodayWorkouts(rows.filter((w) => w.date === today)))
       .catch(() => {});
@@ -50,7 +50,7 @@ export function TodayDashboard() {
 
   const [todayActivities, setTodayActivities] = useState<GarminActivity[]>([]);
   useEffect(() => {
-    fetch(`/api/activities?start=${today}&end=${today}`)
+    apiFetch(`/api/activities?start=${today}&end=${today}`)
       .then((r) => r.json())
       .then(setTodayActivities)
       .catch(() => {});

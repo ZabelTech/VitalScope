@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { GarminActivity, Workout, WorkoutDetail } from "../types";
+import { apiFetch } from "../api";
 
 interface Props {
   activities: GarminActivity[];
@@ -73,7 +74,7 @@ function StrongDetail({ workoutId }: { workoutId: string }) {
 
   useEffect(() => {
     setLoading(true);
-    fetch(`/api/workouts/${workoutId}`)
+    apiFetch(`/api/workouts/${workoutId}`)
       .then((r) => r.json())
       .then((d) => setDetail(d))
       .catch(() => {})
