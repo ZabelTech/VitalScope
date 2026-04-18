@@ -1109,6 +1109,13 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   flex-wrap: wrap;
 }
 
+.supplement-actions {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 8px;
+  flex-wrap: wrap;
+}
+
 .chip {
   background: #1e293b;
   border: 1px solid #334155;
