@@ -35,7 +35,10 @@ UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 AI_MODEL = os.environ.get("VITALSCOPE_AI_MODEL", "claude-sonnet-4-6")
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
-AI_AVAILABLE = bool(ANTHROPIC_API_KEY) and not DEMO_MODE
+# AI is available whenever a key is set, regardless of demo mode. Demo-mode
+# preview apps that want to exercise the analyser can opt in by setting
+# ANTHROPIC_API_KEY as a Fly secret on the per-PR app.
+AI_AVAILABLE = bool(ANTHROPIC_API_KEY)
 
 app = FastAPI(title="VitalScope API")
 app.add_middleware(
@@ -1602,8 +1605,6 @@ def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
 @app.post("/api/meals/analyze-image")
 async def analyze_meal_image(body: AnalyzeImageBody):
     if not AI_AVAILABLE:
-        if DEMO_MODE:
-            raise HTTPException(status_code=503, detail="AI analysis disabled in demo mode")
         raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
 
     conn = get_db()
