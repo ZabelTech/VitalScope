@@ -125,14 +125,16 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
 
   const body = (
     <>
-      <label className="journal-field">
-        <span className="stat-label">Date</span>
-        <input
-          type="date"
-          value={date}
-          onChange={(e) => setDate(e.target.value)}
-        />
-      </label>
+      {wrapped && (
+        <label className="journal-field">
+          <span className="stat-label">Date</span>
+          <input
+            type="date"
+            value={date}
+            onChange={(e) => setDate(e.target.value)}
+          />
+        </label>
+      )}
 
         <fieldset className="journal-field">
           <legend className="stat-label">
