@@ -8,8 +8,10 @@ import {
   type PluginParamSpec,
   type PluginRun,
 } from "../api";
+import { useRuntime } from "../hooks/useRuntime";
 
 export function SettingsPage() {
+  const runtime = useRuntime();
   const [plugins, setPlugins] = useState<PluginConfig[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("loading");
 
@@ -25,6 +27,29 @@ export function SettingsPage() {
   useEffect(() => {
     reload();
   }, []);
+
+  if (runtime?.demo) {
+    return (
+      <div className="journal-page">
+        <div className="trends-header">
+          <h2>Settings — Sync Plugins</h2>
+        </div>
+        <section className="overview-card" style={{ margin: "1rem 0" }}>
+          <h3>Demo preview</h3>
+          <div className="overview-card-body">
+            <p>
+              Sync plugin configuration is disabled in demo mode — this environment
+              runs against a synthetic database and cannot reach Garmin Connect,
+              Strong, or EufyLife.
+            </p>
+            <p style={{ opacity: 0.7, fontSize: "0.9em", marginTop: "0.75rem" }}>
+              Run locally to configure real sync credentials.
+            </p>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="journal-page">

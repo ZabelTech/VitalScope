@@ -11,6 +11,18 @@ import type {
   WaterEntry,
 } from "./types";
 
+export interface RuntimeInfo {
+  demo: boolean;
+  env: string;
+  commit: string;
+}
+
+export async function fetchRuntime(): Promise<RuntimeInfo> {
+  const res = await fetch("/api/runtime");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 export async function fetchMetric<T>(
   endpoint: string,
   start: string,

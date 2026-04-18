@@ -5,11 +5,24 @@ import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
 import { DecidePage } from "./components/DecidePage";
 import { SettingsPage } from "./components/SettingsPage";
+import { useRuntime } from "./hooks/useRuntime";
+
+function DemoBanner() {
+  const runtime = useRuntime();
+  if (!runtime?.demo) return null;
+  return (
+    <div className="demo-banner">
+      Demo preview — data is synthetic, edits are wiped on restart
+      {runtime.commit ? ` · ${runtime.commit.slice(0, 7)}` : ""}
+    </div>
+  );
+}
 
 function App() {
   return (
     <BrowserRouter>
       <div className="app">
+        <DemoBanner />
         <NavBar />
         <main>
           <Routes>

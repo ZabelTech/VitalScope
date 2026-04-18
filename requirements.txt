@@ -1,6 +1,6 @@
-garminconnect
-requests>=2.31
-fastapi
-uvicorn
-pydantic
-apscheduler
+garminconnect==0.3.2
+requests==2.33.1
+fastapi==0.135.3
+uvicorn==0.44.0
+pydantic==2.12.5
+apscheduler==3.11.2

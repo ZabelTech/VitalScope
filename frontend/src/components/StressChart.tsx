@@ -1,5 +1,5 @@
 import {
-  AreaChart, Area, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
 import { MetricCards } from "./MetricCards";

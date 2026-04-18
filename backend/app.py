@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 import sqlite3
 import statistics
 from datetime import date, datetime, timedelta, timezone
@@ -19,7 +20,10 @@ from pydantic import BaseModel
 from backend.plugins import REGISTRY as PLUGIN_REGISTRY, discover as discover_plugins
 from backend.plugins.base import Plugin
 
-DB_PATH = Path(__file__).parent.parent / "vitalscope.db"
+DB_PATH = Path(os.environ.get("VITALSCOPE_DB", Path(__file__).parent.parent / "vitalscope.db"))
+DEMO_MODE = os.environ.get("VITALSCOPE_DEMO") == "1"
+ENV_NAME = os.environ.get("VITALSCOPE_ENV", "dev")
+BUILD_SHA = os.environ.get("VITALSCOPE_SHA", "")
 
 app = FastAPI(title="VitalScope API")
 app.add_middleware(
@@ -28,6 +32,11 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
+
+
+@app.get("/api/runtime")
+def runtime_info():
+    return {"demo": DEMO_MODE, "env": ENV_NAME, "commit": BUILD_SHA}
 
 
 def get_db() -> sqlite3.Connection:
@@ -1483,6 +1492,9 @@ def _reload_job(name: str) -> None:
 @app.on_event("startup")
 async def _start_scheduler() -> None:
     global _scheduler
+    if DEMO_MODE:
+        _plugin_logger.info("demo mode: plugin scheduler disabled")
+        return
     _scheduler = AsyncIOScheduler(timezone="UTC")
     _scheduler.start()
     for name in PLUGIN_REGISTRY:
@@ -1518,6 +1530,8 @@ def get_plugin(name: str):
 
 @app.put("/api/plugins/{name}")
 def update_plugin(name: str, body: PluginUpdateBody):
+    if DEMO_MODE:
+        raise HTTPException(status_code=503, detail="demo mode: plugin configuration disabled")
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
@@ -1544,6 +1558,8 @@ def update_plugin(name: str, body: PluginUpdateBody):
 
 @app.post("/api/plugins/{name}/run")
 async def run_plugin_now(name: str):
+    if DEMO_MODE:
+        raise HTTPException(status_code=503, detail="demo mode: plugin runs disabled")
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
@@ -1563,3 +1579,22 @@ def get_plugin_runs(name: str, limit: int = Query(20, ge=1, le=200)):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# Serve the built frontend (SPA) when running as a single container in prod.
+# Dev keeps Vite on :5173 proxying /api → :8000, so this block is a no-op there.
+_FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
+if ENV_NAME == "prod" and _FRONTEND_DIST.is_dir():
+    from fastapi.responses import FileResponse
+    from fastapi.staticfiles import StaticFiles
+
+    app.mount("/assets", StaticFiles(directory=_FRONTEND_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def _spa_fallback(full_path: str):
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
+        candidate = _FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(_FRONTEND_DIST / "index.html")
