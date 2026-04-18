@@ -1296,6 +1296,13 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   font-variant-numeric: tabular-nums;
 }
 
+/* Generic stack for multiple cards inside one OodaPage section. */
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 /* Daily landing — image upload */
 .image-upload {
   display: flex;

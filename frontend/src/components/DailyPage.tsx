@@ -34,7 +34,7 @@ export function DailyPage() {
           id: "nutrition",
           label: "Nutrients",
           content: (
-            <>
+            <div className="card-stack">
               <NutritionTodayCard date={today} />
               <ImageUpload
                 kind="meal"
@@ -42,7 +42,7 @@ export function DailyPage() {
                 label="Meal photo"
                 hint="Snap today's meals so you can cross-reference them with the totals."
               />
-            </>
+            </div>
           ),
         },
         {
