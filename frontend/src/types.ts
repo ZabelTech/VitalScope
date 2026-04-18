@@ -233,6 +233,16 @@ export interface Upload {
   mime: string;
   bytes: number;
   created_at: string;
+  meal_id: number | null;
+}
+
+export interface MealAnalysisResult {
+  model: string;
+  suggested_name: string;
+  suggested_notes: string;
+  confidence: "low" | "medium" | "high";
+  nutrients: { nutrient_key: string; amount: number }[];
+  unknown_keys: string[];
 }
 
 export interface PlannedActivity {

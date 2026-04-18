@@ -1381,6 +1381,109 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   background: rgba(15, 23, 42, 0.8);
 }
 
+/* AI analyse pill overlay on meal thumbnails */
+.image-analyse-pill {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 4px;
+  background: rgba(15, 23, 42, 0.85);
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+.image-analyse-pill:hover:not(:disabled) {
+  background: #1e293b;
+  color: #fff;
+}
+.image-analyse-pill:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.image-linked-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  background: rgba(34, 197, 94, 0.85);
+  color: #0f172a;
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  pointer-events: none;
+}
+
+/* AI meal analysis — preflight (add context before firing Claude) */
+.meal-analysis-preflight {
+  margin-top: 12px;
+  padding: 16px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.meal-analysis-preflight-img {
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: 8px;
+  object-fit: cover;
+  align-self: flex-start;
+}
+
+.meal-analysis-preflight textarea {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: #e2e8f0;
+  font-family: inherit;
+  font-size: 16px;
+  resize: vertical;
+}
+
+/* AI meal analysis draft panel */
+.meal-analysis-draft {
+  margin-top: 12px;
+  padding: 16px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.meal-analysis-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.confidence-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  color: #0f172a;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Greyed nutrient row — "AI wasn't sure" */
+.nutrient-row-greyed {
+  opacity: 0.55;
+}
+.nutrient-row-greyed input[type="number"]::placeholder {
+  color: #64748b;
+}
+
 /* Recharts overrides */
 .recharts-text {
   fill: #94a3b8 !important;

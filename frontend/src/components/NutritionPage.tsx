@@ -7,15 +7,8 @@ import {
   listNutrientDefs,
 } from "../api";
 import type { Meal, NutrientCategory, NutrientDef } from "../types";
+import { MealFormFields, type MealFormOutput } from "./MealFormFields";
 import { WaterQuickLog } from "./WaterQuickLog";
-
-const CATEGORY_ORDER: NutrientCategory[] = ["macro", "mineral", "vitamin", "bioactive"];
-const CATEGORY_LABELS: Record<NutrientCategory, string> = {
-  macro: "Macros",
-  mineral: "Minerals",
-  vitamin: "Vitamins",
-  bioactive: "Bioactives",
-};
 
 function todayISO(): string {
   return format(new Date(), "yyyy-MM-dd");
@@ -140,37 +133,20 @@ function AddMealForm({
   defsByCategory: Record<NutrientCategory, NutrientDef[]>;
   onAdded: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [time, setTime] = useState("");
-  const [notes, setNotes] = useState("");
-  const [amounts, setAmounts] = useState<Record<string, string>>({});
-  const [expanded, setExpanded] = useState<Record<NutrientCategory, boolean>>({
-    macro: true,
-    mineral: false,
-    vitamin: false,
-    bioactive: false,
-  });
   const [saving, setSaving] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!name.trim()) return;
-    const nutrients = Object.entries(amounts)
-      .map(([key, value]) => ({ nutrient_key: key, amount: parseFloat(value) }))
-      .filter((n) => !Number.isNaN(n.amount));
+  async function handleSubmit(out: MealFormOutput) {
     setSaving(true);
     try {
       await createMeal({
         date,
-        time: time || null,
-        name: name.trim(),
-        notes: notes.trim() || null,
-        nutrients,
+        time: out.time,
+        name: out.name,
+        notes: out.notes,
+        nutrients: out.nutrients,
       });
-      setName("");
-      setTime("");
-      setNotes("");
-      setAmounts({});
+      setResetKey((k) => k + 1); // remount form → clears inputs
       onAdded();
     } finally {
       setSaving(false);
@@ -178,65 +154,14 @@ function AddMealForm({
   }
 
   return (
-    <form className="journal-form" onSubmit={handleSubmit}>
-      <h4 className="stat-label">Add meal</h4>
-      <div className="meal-header-inputs">
-        <input
-          type="text"
-          placeholder="Name (e.g. Breakfast)"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-        <input
-          type="time"
-          value={time}
-          onChange={(e) => setTime(e.target.value)}
-        />
-      </div>
-      <input
-        type="text"
-        placeholder="Notes (optional)"
-        value={notes}
-        onChange={(e) => setNotes(e.target.value)}
-      />
-      {CATEGORY_ORDER.map((cat) => (
-        <div key={cat} className="nutrient-group">
-          <button
-            type="button"
-            className="nutrient-group-header"
-            onClick={() => setExpanded({ ...expanded, [cat]: !expanded[cat] })}
-          >
-            {expanded[cat] ? "▾" : "▸"} {CATEGORY_LABELS[cat]} (
-            {defsByCategory[cat].length})
-          </button>
-          {expanded[cat] && (
-            <div className="nutrient-grid">
-              {defsByCategory[cat].map((d) => (
-                <label key={d.key} className="nutrient-row">
-                  <span className="nutrient-label">{d.label}</span>
-                  <input
-                    type="number"
-                    step="any"
-                    min="0"
-                    value={amounts[d.key] ?? ""}
-                    onChange={(e) =>
-                      setAmounts({ ...amounts, [d.key]: e.target.value })
-                    }
-                    placeholder="—"
-                  />
-                  <span className="nutrient-unit">{d.unit}</span>
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      ))}
-      <div className="journal-actions">
-        <button type="submit" disabled={saving || !name.trim()}>
-          {saving ? "Saving…" : "Add meal"}
-        </button>
-      </div>
-    </form>
+    <MealFormFields
+      key={resetKey}
+      defsByCategory={defsByCategory}
+      submitLabel="Add meal"
+      onSubmit={handleSubmit}
+      saving={saving}
+      header={<h4 className="stat-label">Add meal</h4>}
+    />
   );
 }
 

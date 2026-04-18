@@ -6,7 +6,12 @@
 #   flyctl secrets set GARMIN_EMAIL=... GARMIN_PASSWORD=... \
 #                      STRONG_EMAIL=...  STRONG_PASSWORD=...  \
 #                      EUFY_EMAIL=...    EUFY_PASSWORD=...    \
+#                      ANTHROPIC_API_KEY=sk-ant-...            \
 #                      --app vitalscope
+#
+# ANTHROPIC_API_KEY enables the meal-photo AI analyser. Optional overrides:
+#   VITALSCOPE_AI_MODEL       default "claude-sonnet-4-6"
+#   VITALSCOPE_AI_TIMEOUT_SEC default 20
 #
 # Unlike preview deploys, prod keeps one machine always running so the
 # APScheduler-based plugins can fire on their intervals. Volume is mounted
