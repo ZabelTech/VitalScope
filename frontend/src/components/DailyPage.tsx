@@ -5,8 +5,8 @@ import { IntakeLog } from "./IntakeLog";
 import { JournalPage } from "./JournalPage";
 import { NutritionTodayCard } from "./NutritionTodayCard";
 import { OodaPage } from "./OodaPage";
+import { TodayJournal } from "./TodayJournal";
 import { WaterQuickLog } from "./WaterQuickLog";
-import { WorkDayToggle } from "./WorkDayToggle";
 
 const today = format(new Date(), "yyyy-MM-dd");
 const yesterday = format(subDays(new Date(), 1), "yyyy-MM-dd");
@@ -15,16 +15,26 @@ export function DailyPage() {
   return (
     <OodaPage
       sections={[
-        { id: "today", label: "Today", content: <WorkDayToggle date={today} /> },
-        { id: "intake", label: "Supplements & alcohol", content: <IntakeLog /> },
-        { id: "journal", label: "Yesterday's journal", content: <JournalPage initialDate={yesterday} /> },
+        {
+          id: "today",
+          label: "Today",
+          content: (
+            <div className="journal-page">
+              <div className="journal-form overview-card">
+                <TodayJournal date={today} />
+                <IntakeLog wrapped={false} />
+              </div>
+            </div>
+          ),
+        },
+        { id: "journal", label: "Yesterday's journal", content: <JournalPage initialDate={yesterday} showDate={false} /> },
         { id: "water", label: "Water", content: <WaterQuickLog date={today} /> },
         { id: "activity", label: "Activities & steps", content: <AutoTickedToday date={today} /> },
         {
           id: "nutrition",
           label: "Nutrients",
           content: (
-            <>
+            <div className="card-stack">
               <NutritionTodayCard date={today} />
               <ImageUpload
                 kind="meal"
@@ -32,7 +42,7 @@ export function DailyPage() {
                 label="Meal photo"
                 hint="Snap today's meals so you can cross-reference them with the totals."
               />
-            </>
+            </div>
           ),
         },
         {

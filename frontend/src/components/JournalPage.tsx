@@ -8,22 +8,25 @@ function yesterdayISO(): string {
   return d.toISOString().slice(0, 10);
 }
 
-const FEELINGS: MorningFeeling[] = ["sleepy", "energetic", "normal", "sick"];
-
 interface Props {
   initialDate?: string;
+  // Whether to render the Date input. Default true; the landing's
+  // "Yesterday's journal" section passes false since it's always pinned
+  // to yesterday.
+  showDate?: boolean;
 }
 
-export function JournalPage({ initialDate }: Props = {}) {
+export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [date, setDate] = useState<string>(initialDate ?? yesterdayISO());
-  const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
+  // Primary fields owned here — yesterday's reflections.
+  const [alcoholAmount, setAlcoholAmount] = useState("");
   const [notes, setNotes] = useState("");
+  // Preserved-through fields owned by other sections of the daily landing:
+  //   morning_feeling, is_work_day → TodayJournal (today only)
+  //   followed_supplements         → IntakeLog (derived from tick state)
+  const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
-  // Preserved-through fields owned by the Intake section in Act — loaded from
-  // the server so saving here doesn't clobber them.
   const [followedSupplements, setFollowedSupplements] = useState(true);
-  const [drankAlcohol, setDrankAlcohol] = useState(false);
-  const [alcoholAmount, setAlcoholAmount] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [loadedExisting, setLoadedExisting] = useState(false);
 
@@ -35,20 +38,18 @@ export function JournalPage({ initialDate }: Props = {}) {
       .then((entry) => {
         if (cancelled) return;
         if (entry) {
-          setMorningFeeling(entry.morning_feeling);
+          setAlcoholAmount(entry.alcohol_amount ?? "");
           setNotes(entry.notes ?? "");
-          setFollowedSupplements(entry.followed_supplements);
-          setDrankAlcohol(entry.drank_alcohol);
-          setAlcoholAmount(entry.alcohol_amount);
+          setMorningFeeling(entry.morning_feeling);
           setIsWorkDay(entry.is_work_day);
+          setFollowedSupplements(entry.followed_supplements);
           setLoadedExisting(true);
         } else {
-          setMorningFeeling("normal");
+          setAlcoholAmount("");
           setNotes("");
-          setFollowedSupplements(true);
-          setDrankAlcohol(false);
-          setAlcoholAmount(null);
+          setMorningFeeling("normal");
           setIsWorkDay(null);
+          setFollowedSupplements(true);
         }
       })
       .catch(() => {});
@@ -60,11 +61,12 @@ export function JournalPage({ initialDate }: Props = {}) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setStatus("saving");
+    const alcoholTrimmed = alcoholAmount.trim();
     const entry: JournalEntry = {
       date,
       followed_supplements: followedSupplements,
-      drank_alcohol: drankAlcohol,
-      alcohol_amount: alcoholAmount,
+      drank_alcohol: alcoholTrimmed.length > 0,
+      alcohol_amount: alcoholTrimmed || null,
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
       is_work_day: isWorkDay,
@@ -81,64 +83,30 @@ export function JournalPage({ initialDate }: Props = {}) {
   return (
     <div className="journal-page">
       <form className="journal-form overview-card" onSubmit={handleSubmit}>
-        <label className="journal-field">
-          <span className="stat-label">Date</span>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </label>
+        {showDate && (
+          <label className="journal-field">
+            <span className="stat-label">Date</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </label>
+        )}
 
         {loadedExisting && (
           <p className="journal-hint">An entry for {date} already exists — editing it.</p>
         )}
 
-        <fieldset className="journal-field">
-          <legend className="stat-label">How did you feel after waking up?</legend>
-          {FEELINGS.map((f) => (
-            <label key={f} className="journal-radio">
-              <input
-                type="radio"
-                name="feeling"
-                checked={morningFeeling === f}
-                onChange={() => setMorningFeeling(f)}
-              />
-              {f}
-            </label>
-          ))}
-        </fieldset>
-
-        <fieldset className="journal-field">
-          <legend className="stat-label">Work day?</legend>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="work-day"
-              checked={isWorkDay === true}
-              onChange={() => setIsWorkDay(true)}
-            />
-            Work
-          </label>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="work-day"
-              checked={isWorkDay === false}
-              onChange={() => setIsWorkDay(false)}
-            />
-            Off
-          </label>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="work-day"
-              checked={isWorkDay === null}
-              onChange={() => setIsWorkDay(null)}
-            />
-            Unset
-          </label>
-        </fieldset>
+        <label className="journal-field">
+          <span className="stat-label">Alcohol</span>
+          <input
+            type="text"
+            placeholder="e.g. 2 beers, 1 glass of wine — leave empty for none"
+            value={alcoholAmount}
+            onChange={(e) => setAlcoholAmount(e.target.value)}
+          />
+        </label>
 
         <label className="journal-field">
           <span className="stat-label">Anything special</span>

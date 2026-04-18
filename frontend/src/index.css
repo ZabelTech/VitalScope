@@ -1109,11 +1109,19 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   flex-wrap: wrap;
 }
 
-.supplement-actions {
-  display: flex;
-  gap: 8px;
-  margin: 4px 0 8px;
-  flex-wrap: wrap;
+.supplement-section-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.supplement-section-head input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
 }
 
 .chip {
@@ -1281,6 +1289,13 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   font-variant-numeric: tabular-nums;
 }
 
+/* Generic stack for multiple cards inside one OodaPage section. */
+.card-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 /* Daily landing — image upload */
 .image-upload {
   display: flex;
@@ -1292,19 +1307,41 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   min-width: 0;
 }
 
-.image-upload-label {
+.image-upload-header {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.image-upload input[type="file"] {
-  background: #0f172a;
-  border: 1px dashed #334155;
+.image-upload-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  background: #3b82f6;
+  color: #fff;
   border-radius: 8px;
-  padding: 14px;
-  color: #94a3b8;
+  padding: 12px 20px;
+  min-height: 44px;
   font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.image-upload-button:hover { background: #2563eb; }
+.image-upload-button:focus-within { outline: 2px solid #60a5fa; outline-offset: 2px; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .image-upload-list {

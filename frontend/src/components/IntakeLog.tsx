@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   fetchJournalEntry,
   fetchJournalSupplements,
@@ -24,39 +24,46 @@ function todayISO(): string {
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
-export function IntakeLog() {
+interface Props {
+  // When false, renders the form content without its own .overview-card so a
+  // parent can host it inside a shared card. Default true for standalone use.
+  wrapped?: boolean;
+}
+
+export function IntakeLog({ wrapped = true }: Props = {}) {
   const [date, setDate] = useState<string>(todayISO());
   const [supplements, setSupplements] = useState<SupplementIntake[]>([]);
-  const [alcoholAmount, setAlcoholAmount] = useState("");
-  // Preserved-through fields owned by the Journal section in Observe.
+  // Preserved-through fields owned by other sections of the daily landing.
+  // Loaded from the server and written back unchanged so auto-saving
+  // supplements here doesn't clobber them:
+  //   morning_feeling, is_work_day → TodayJournal (today only)
+  //   drank_alcohol, alcohol_amount, notes → JournalPage (yesterday)
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [notes, setNotes] = useState("");
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
+  const [drankAlcohol, setDrankAlcohol] = useState(false);
+  const [alcoholAmount, setAlcoholAmount] = useState<string | null>(null);
   const [suppStatus, setSuppStatus] = useState<SaveStatus>("idle");
-  const [alcoholStatus, setAlcoholStatus] = useState<SaveStatus>("idle");
-
-  const savedAlcoholRef = useRef<string>("");
 
   useEffect(() => {
     let cancelled = false;
     setSuppStatus("idle");
-    setAlcoholStatus("idle");
     Promise.all([fetchJournalEntry(date), fetchJournalSupplements(date)])
       .then(([entry, supps]) => {
         if (cancelled) return;
         setSupplements(supps);
         if (entry) {
-          setAlcoholAmount(entry.alcohol_amount ?? "");
-          savedAlcoholRef.current = entry.alcohol_amount ?? "";
           setMorningFeeling(entry.morning_feeling);
           setNotes(entry.notes ?? "");
           setIsWorkDay(entry.is_work_day);
+          setDrankAlcohol(entry.drank_alcohol);
+          setAlcoholAmount(entry.alcohol_amount);
         } else {
-          setAlcoholAmount("");
-          savedAlcoholRef.current = "";
           setMorningFeeling("normal");
           setNotes("");
           setIsWorkDay(null);
+          setDrankAlcohol(false);
+          setAlcoholAmount(null);
         }
       })
       .catch(() => {});
@@ -71,21 +78,15 @@ export function IntakeLog() {
     const t = setTimeout(() => setSuppStatus("idle"), 1500);
     return () => clearTimeout(t);
   }, [suppStatus]);
-  useEffect(() => {
-    if (alcoholStatus !== "saved") return;
-    const t = setTimeout(() => setAlcoholStatus("idle"), 1500);
-    return () => clearTimeout(t);
-  }, [alcoholStatus]);
 
-  function journalEntryFor(nextSupplements: SupplementIntake[], alcoholText: string): JournalEntry {
+  function journalEntryFor(nextSupplements: SupplementIntake[]): JournalEntry {
     const followedSupplements =
       nextSupplements.length === 0 ? true : nextSupplements.every((s) => s.taken);
-    const trimmed = alcoholText.trim();
     return {
       date,
       followed_supplements: followedSupplements,
-      drank_alcohol: trimmed.length > 0,
-      alcohol_amount: trimmed || null,
+      drank_alcohol: drankAlcohol,
+      alcohol_amount: alcoholAmount,
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
       is_work_day: isWorkDay,
@@ -100,7 +101,7 @@ export function IntakeLog() {
         next.map((s) => ({ supplement_id: s.id, taken: s.taken }))
       );
       // Keep the journal's derived followed_supplements in sync.
-      await submitJournalEntry(journalEntryFor(next, savedAlcoholRef.current));
+      await submitJournalEntry(journalEntryFor(next));
       setSuppStatus("saved");
     } catch {
       setSuppStatus("error");
@@ -115,30 +116,20 @@ export function IntakeLog() {
     await persistSupplements(next);
   }
 
-  async function markAllTaken() {
-    if (supplements.length === 0 || supplements.every((s) => s.taken)) return;
-    const next = supplements.map((s) => ({ ...s, taken: true }));
+  async function toggleSection(key: TimeOfDay) {
+    const sectionItems = supplements.filter((s) => s.time_of_day === key);
+    if (sectionItems.length === 0) return;
+    const allTaken = sectionItems.every((s) => s.taken);
+    const next = supplements.map((s) =>
+      s.time_of_day === key ? { ...s, taken: !allTaken } : s
+    );
     setSupplements(next);
     await persistSupplements(next);
   }
 
-  async function handleSaveAlcohol(e: React.FormEvent) {
-    e.preventDefault();
-    setAlcoholStatus("saving");
-    try {
-      await submitJournalEntry(journalEntryFor(supplements, alcoholAmount));
-      savedAlcoholRef.current = alcoholAmount.trim();
-      setAlcoholStatus("saved");
-    } catch {
-      setAlcoholStatus("error");
-    }
-  }
-
-  const alcoholDirty = alcoholAmount.trim() !== savedAlcoholRef.current;
-
-  return (
-    <div className="journal-page">
-      <div className="journal-form overview-card">
+  const body = (
+    <>
+      {wrapped && (
         <label className="journal-field">
           <span className="stat-label">Date</span>
           <input
@@ -147,6 +138,7 @@ export function IntakeLog() {
             onChange={(e) => setDate(e.target.value)}
           />
         </label>
+      )}
 
         <fieldset className="journal-field">
           <legend className="stat-label">
@@ -155,20 +147,6 @@ export function IntakeLog() {
             {suppStatus === "saved" && <span className="journal-ok"> · saved ✓</span>}
             {suppStatus === "error" && <span className="journal-err"> · save failed</span>}
           </legend>
-          {supplements.length > 0 && (
-            <div className="supplement-actions">
-              <button
-                type="button"
-                className="chip"
-                onClick={markAllTaken}
-                disabled={
-                  suppStatus === "saving" || supplements.every((s) => s.taken)
-                }
-              >
-                Mark all taken
-              </button>
-            </div>
-          )}
           {supplements.length === 0 && (
             <p className="journal-hint">
               No supplements defined yet. Add them under Decide → Plan → Supplements.
@@ -179,9 +157,19 @@ export function IntakeLog() {
               (s) => s.time_of_day === section.key
             );
             if (sectionItems.length === 0) return null;
+            const allTaken = sectionItems.every((s) => s.taken);
             return (
               <div key={section.key} className="journal-supplement-group">
-                <div className="stat-label">{section.label}</div>
+                <label className="supplement-section-head">
+                  <input
+                    type="checkbox"
+                    checked={allTaken}
+                    onChange={() => toggleSection(section.key)}
+                    disabled={suppStatus === "saving"}
+                    aria-label={`Mark all ${section.label.toLowerCase()} supplements taken`}
+                  />
+                  <span className="stat-label">{section.label}</span>
+                </label>
                 {sectionItems.map((s) => (
                   <label key={s.id} className="journal-radio">
                     <input
@@ -196,28 +184,14 @@ export function IntakeLog() {
               </div>
             );
           })}
-        </fieldset>
+      </fieldset>
+    </>
+  );
 
-        <form className="journal-field" onSubmit={handleSaveAlcohol}>
-          <span className="stat-label">Alcohol</span>
-          <input
-            type="text"
-            placeholder="e.g. 2 beers, 1 glass of wine — leave empty for none"
-            value={alcoholAmount}
-            onChange={(e) => setAlcoholAmount(e.target.value)}
-          />
-          <div className="journal-actions">
-            <button
-              type="submit"
-              disabled={!alcoholDirty || alcoholStatus === "saving"}
-            >
-              {alcoholStatus === "saving" ? "Saving…" : "Save alcohol"}
-            </button>
-            {alcoholStatus === "saved" && <span className="journal-ok">Saved ✓</span>}
-            {alcoholStatus === "error" && <span className="journal-err">Failed to save</span>}
-          </div>
-        </form>
-      </div>
+  if (!wrapped) return body;
+  return (
+    <div className="journal-page">
+      <div className="journal-form overview-card">{body}</div>
     </div>
   );
 }
