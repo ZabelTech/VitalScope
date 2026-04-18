@@ -25,11 +25,11 @@ function todayISO(): string {
 export function IntakeLog() {
   const [date, setDate] = useState<string>(todayISO());
   const [supplements, setSupplements] = useState<SupplementIntake[]>([]);
-  const [drankAlcohol, setDrankAlcohol] = useState(false);
   const [alcoholAmount, setAlcoholAmount] = useState("");
   // Preserved-through fields owned by the Journal section in Observe.
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [notes, setNotes] = useState("");
+  const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   useEffect(() => {
@@ -40,15 +40,15 @@ export function IntakeLog() {
         if (cancelled) return;
         setSupplements(supps);
         if (entry) {
-          setDrankAlcohol(entry.drank_alcohol);
           setAlcoholAmount(entry.alcohol_amount ?? "");
           setMorningFeeling(entry.morning_feeling);
           setNotes(entry.notes ?? "");
+          setIsWorkDay(entry.is_work_day);
         } else {
-          setDrankAlcohol(false);
           setAlcoholAmount("");
           setMorningFeeling("normal");
           setNotes("");
+          setIsWorkDay(null);
         }
       })
       .catch(() => {});
@@ -68,13 +68,15 @@ export function IntakeLog() {
     setStatus("saving");
     const followedSupplements =
       supplements.length === 0 ? true : supplements.every((s) => s.taken);
+    const alcoholTrimmed = alcoholAmount.trim();
     const entry: JournalEntry = {
       date,
       followed_supplements: followedSupplements,
-      drank_alcohol: drankAlcohol,
-      alcohol_amount: drankAlcohol ? alcoholAmount.trim() || null : null,
+      drank_alcohol: alcoholTrimmed.length > 0,
+      alcohol_amount: alcoholTrimmed || null,
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
+      is_work_day: isWorkDay,
     };
     try {
       await submitJournalSupplements(
@@ -130,35 +132,15 @@ export function IntakeLog() {
           })}
         </fieldset>
 
-        <fieldset className="journal-field">
-          <legend className="stat-label">Did you drink alcohol?</legend>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="alcohol"
-              checked={drankAlcohol}
-              onChange={() => setDrankAlcohol(true)}
-            />
-            Yes
-          </label>
-          <label className="journal-radio">
-            <input
-              type="radio"
-              name="alcohol"
-              checked={!drankAlcohol}
-              onChange={() => setDrankAlcohol(false)}
-            />
-            No
-          </label>
-          {drankAlcohol && (
-            <input
-              type="text"
-              placeholder="How much? (e.g. 2 beers)"
-              value={alcoholAmount}
-              onChange={(e) => setAlcoholAmount(e.target.value)}
-            />
-          )}
-        </fieldset>
+        <label className="journal-field">
+          <span className="stat-label">Alcohol</span>
+          <input
+            type="text"
+            placeholder="e.g. 2 beers, 1 glass of wine — leave empty for none"
+            value={alcoholAmount}
+            onChange={(e) => setAlcoholAmount(e.target.value)}
+          />
+        </label>
 
         <div className="journal-actions">
           <button type="submit" disabled={status === "saving"}>

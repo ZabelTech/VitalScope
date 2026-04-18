@@ -3,10 +3,14 @@ import type {
   Meal,
   NutrientDef,
   NutrientCategory,
+  NutrientGoals,
   NutritionDailyTotals,
+  PlannedActivity,
   Supplement,
   SupplementIntake,
   TimeOfDay,
+  Upload,
+  UploadKind,
   WaterDaily,
   WaterEntry,
 } from "./types";
@@ -220,6 +224,62 @@ export async function fetchWaterDaily(start: string, end: string): Promise<Water
   const res = await fetch(`/api/water/daily?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
+}
+
+// --- Nutrition goals ---
+
+export async function fetchNutritionGoals(): Promise<NutrientGoals> {
+  const res = await fetch("/api/nutrition/goals");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateNutritionGoals(goals: NutrientGoals): Promise<void> {
+  const res = await fetch("/api/nutrition/goals", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ goals }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Planned activities ---
+
+export async function fetchPlanned(start: string, end: string): Promise<PlannedActivity[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await fetch(`/api/planned?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Uploads ---
+
+export async function fetchUploads(kind?: UploadKind, date?: string): Promise<Upload[]> {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  if (date) params.set("date", date);
+  const res = await fetch(`/api/uploads?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function uploadImage(kind: UploadKind, date: string, file: File): Promise<Upload> {
+  const fd = new FormData();
+  fd.append("kind", kind);
+  fd.append("date", date);
+  fd.append("file", file);
+  const res = await fetch("/api/uploads", { method: "POST", body: fd });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteUpload(id: number): Promise<void> {
+  const res = await fetch(`/api/uploads/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export function uploadImageUrl(id: number): string {
+  return `/api/uploads/${id}`;
 }
 
 // --- Plugins ---

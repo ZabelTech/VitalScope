@@ -73,7 +73,7 @@ export function TodayDashboard() {
     <div className="overview">
       <div className="quick-actions">
         <Link to="/observe#journal" className="quick-action">Journal</Link>
-        <Link to="/#intake" className="quick-action">Log intake</Link>
+        <Link to="/act#intake" className="quick-action">Log intake</Link>
         <Link to="/observe#metrics" className="quick-action">See metrics</Link>
       </div>
 

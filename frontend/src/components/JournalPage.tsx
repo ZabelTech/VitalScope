@@ -10,10 +10,15 @@ function yesterdayISO(): string {
 
 const FEELINGS: MorningFeeling[] = ["sleepy", "energetic", "normal", "sick"];
 
-export function JournalPage() {
-  const [date, setDate] = useState<string>(yesterdayISO());
+interface Props {
+  initialDate?: string;
+}
+
+export function JournalPage({ initialDate }: Props = {}) {
+  const [date, setDate] = useState<string>(initialDate ?? yesterdayISO());
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [notes, setNotes] = useState("");
+  const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   // Preserved-through fields owned by the Intake section in Act — loaded from
   // the server so saving here doesn't clobber them.
   const [followedSupplements, setFollowedSupplements] = useState(true);
@@ -35,6 +40,7 @@ export function JournalPage() {
           setFollowedSupplements(entry.followed_supplements);
           setDrankAlcohol(entry.drank_alcohol);
           setAlcoholAmount(entry.alcohol_amount);
+          setIsWorkDay(entry.is_work_day);
           setLoadedExisting(true);
         } else {
           setMorningFeeling("normal");
@@ -42,6 +48,7 @@ export function JournalPage() {
           setFollowedSupplements(true);
           setDrankAlcohol(false);
           setAlcoholAmount(null);
+          setIsWorkDay(null);
         }
       })
       .catch(() => {});
@@ -60,6 +67,7 @@ export function JournalPage() {
       alcohol_amount: alcoholAmount,
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
+      is_work_day: isWorkDay,
     };
     try {
       await submitJournalEntry(entry);
@@ -99,6 +107,37 @@ export function JournalPage() {
               {f}
             </label>
           ))}
+        </fieldset>
+
+        <fieldset className="journal-field">
+          <legend className="stat-label">Work day?</legend>
+          <label className="journal-radio">
+            <input
+              type="radio"
+              name="work-day"
+              checked={isWorkDay === true}
+              onChange={() => setIsWorkDay(true)}
+            />
+            Work
+          </label>
+          <label className="journal-radio">
+            <input
+              type="radio"
+              name="work-day"
+              checked={isWorkDay === false}
+              onChange={() => setIsWorkDay(false)}
+            />
+            Off
+          </label>
+          <label className="journal-radio">
+            <input
+              type="radio"
+              name="work-day"
+              checked={isWorkDay === null}
+              onChange={() => setIsWorkDay(null)}
+            />
+            Unset
+          </label>
         </fieldset>
 
         <label className="journal-field">

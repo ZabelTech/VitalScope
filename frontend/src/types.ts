@@ -124,6 +124,7 @@ export interface JournalEntry {
   alcohol_amount: string | null;
   morning_feeling: MorningFeeling;
   notes: string | null;
+  is_work_day: boolean | null;
 }
 
 export type NutrientCategory = "macro" | "mineral" | "vitamin" | "bioactive";
@@ -221,3 +222,26 @@ export interface DateRange {
   earliest: string;
   latest: string;
 }
+
+export type UploadKind = "meal" | "form";
+
+export interface Upload {
+  id: number;
+  kind: UploadKind;
+  date: string;
+  filename: string;
+  mime: string;
+  bytes: number;
+  created_at: string;
+}
+
+export interface PlannedActivity {
+  id: number;
+  date: string;
+  sport_type: string;
+  target_distance_m: number | null;
+  target_duration_sec: number | null;
+  notes: string | null;
+}
+
+export type NutrientGoals = Record<string, number>;
