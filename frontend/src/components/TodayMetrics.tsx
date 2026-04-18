@@ -20,6 +20,12 @@ function fmtDuration(seconds: number | null): string {
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
+// Round to at most 2 decimals; trailing zeros stripped (e.g. 96.0 -> "96", 85.353 -> "85.35").
+function fmt2(n: number | null | undefined): string {
+  if (n == null) return "--";
+  return String(Math.round(n * 100) / 100);
+}
+
 function fmtAge(isoOrDate: string | null | undefined): string {
   if (!isoOrDate) return "";
   if (isoOrDate.length === 10) {
@@ -181,18 +187,18 @@ export function TodayMetrics() {
             <div className="sleep-extras">
               <div className="sleep-extra">
                 <span className="extra-label">SpO2</span>
-                <span className="extra-value">{sleep?.avg_spo2 != null ? `${sleep.avg_spo2}%` : "--"}</span>
+                <span className="extra-value">{sleep?.avg_spo2 != null ? `${fmt2(sleep.avg_spo2)}%` : "--"}</span>
               </div>
               <div className="sleep-extra">
                 <span className="extra-label">Respiration</span>
                 <span className="extra-value">
-                  {sleep?.avg_respiration != null ? `${sleep.avg_respiration} br/m` : "--"}
+                  {sleep?.avg_respiration != null ? `${fmt2(sleep.avg_respiration)} br/m` : "--"}
                 </span>
               </div>
               <div className="sleep-extra">
                 <span className="extra-label">Stress</span>
                 <span className="extra-value">
-                  {sleep?.avg_sleep_stress != null ? `${sleep.avg_sleep_stress}` : "--"}
+                  {fmt2(sleep?.avg_sleep_stress)}
                 </span>
               </div>
             </div>
@@ -291,24 +297,24 @@ export function TodayMetrics() {
             <div className="overview-stat">
               <span className="stat-label">Weight</span>
               <span className="big-number">
-                {weight?.weight_kg ?? "--"}
+                {fmt2(weight?.weight_kg)}
                 <span className="stat-unit">kg</span>
               </span>
             </div>
             <div className="overview-stat">
               <span className="stat-label">BMI</span>
-              <span className="stat-value">{weight?.bmi ?? "--"}</span>
+              <span className="stat-value">{fmt2(weight?.bmi)}</span>
             </div>
             <div className="overview-stat">
               <span className="stat-label">Body Fat</span>
               <span className="stat-value">
-                {weight?.body_fat_pct != null ? `${weight.body_fat_pct}%` : "--"}
+                {weight?.body_fat_pct != null ? `${fmt2(weight.body_fat_pct)}%` : "--"}
               </span>
             </div>
             <div className="overview-stat">
               <span className="stat-label">Water</span>
               <span className="stat-value">
-                {weight?.water_pct != null ? `${weight.water_pct}%` : "--"}
+                {weight?.water_pct != null ? `${fmt2(weight.water_pct)}%` : "--"}
               </span>
             </div>
           </div>
