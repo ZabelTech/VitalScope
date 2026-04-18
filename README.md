@@ -227,6 +227,10 @@ python3 sync_strong.py
 python3 sync_eufy.py
 ```
 
+## Per-PR preview deploys
+
+Every pull request gets an ephemeral Fly.io app at `https://vitalscope-pr-<N>.fly.dev`, provisioned by `.github/workflows/preview-deploy.yml` and torn down when the PR closes. Previews run with `VITALSCOPE_DEMO=1` — the scheduler is off, plugin credentials are inaccessible, and the SQLite file is reseeded from `seed_demo.py` on every boot so no real health data ever leaves this machine.
+
 ## Known quirks
 
 - **Strong pagination**: Strong's REST API returns `_links.next` with empty `_embedded.log` arrays after the last real page — the sync script stops when it sees an empty logs array (not when `next` is missing).
