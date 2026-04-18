@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   fetchJournalEntry,
   fetchJournalSupplements,
@@ -27,36 +27,37 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 export function IntakeLog() {
   const [date, setDate] = useState<string>(todayISO());
   const [supplements, setSupplements] = useState<SupplementIntake[]>([]);
-  const [alcoholAmount, setAlcoholAmount] = useState("");
-  // Preserved-through fields owned by the Journal section in Observe.
+  // Preserved-through fields owned by other sections of the daily landing.
+  // Loaded from the server and written back unchanged so auto-saving
+  // supplements here doesn't clobber them:
+  //   morning_feeling, is_work_day → TodayJournal (today only)
+  //   drank_alcohol, alcohol_amount, notes → JournalPage (yesterday)
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [notes, setNotes] = useState("");
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
+  const [drankAlcohol, setDrankAlcohol] = useState(false);
+  const [alcoholAmount, setAlcoholAmount] = useState<string | null>(null);
   const [suppStatus, setSuppStatus] = useState<SaveStatus>("idle");
-  const [alcoholStatus, setAlcoholStatus] = useState<SaveStatus>("idle");
-
-  const savedAlcoholRef = useRef<string>("");
 
   useEffect(() => {
     let cancelled = false;
     setSuppStatus("idle");
-    setAlcoholStatus("idle");
     Promise.all([fetchJournalEntry(date), fetchJournalSupplements(date)])
       .then(([entry, supps]) => {
         if (cancelled) return;
         setSupplements(supps);
         if (entry) {
-          setAlcoholAmount(entry.alcohol_amount ?? "");
-          savedAlcoholRef.current = entry.alcohol_amount ?? "";
           setMorningFeeling(entry.morning_feeling);
           setNotes(entry.notes ?? "");
           setIsWorkDay(entry.is_work_day);
+          setDrankAlcohol(entry.drank_alcohol);
+          setAlcoholAmount(entry.alcohol_amount);
         } else {
-          setAlcoholAmount("");
-          savedAlcoholRef.current = "";
           setMorningFeeling("normal");
           setNotes("");
           setIsWorkDay(null);
+          setDrankAlcohol(false);
+          setAlcoholAmount(null);
         }
       })
       .catch(() => {});
@@ -71,21 +72,15 @@ export function IntakeLog() {
     const t = setTimeout(() => setSuppStatus("idle"), 1500);
     return () => clearTimeout(t);
   }, [suppStatus]);
-  useEffect(() => {
-    if (alcoholStatus !== "saved") return;
-    const t = setTimeout(() => setAlcoholStatus("idle"), 1500);
-    return () => clearTimeout(t);
-  }, [alcoholStatus]);
 
-  function journalEntryFor(nextSupplements: SupplementIntake[], alcoholText: string): JournalEntry {
+  function journalEntryFor(nextSupplements: SupplementIntake[]): JournalEntry {
     const followedSupplements =
       nextSupplements.length === 0 ? true : nextSupplements.every((s) => s.taken);
-    const trimmed = alcoholText.trim();
     return {
       date,
       followed_supplements: followedSupplements,
-      drank_alcohol: trimmed.length > 0,
-      alcohol_amount: trimmed || null,
+      drank_alcohol: drankAlcohol,
+      alcohol_amount: alcoholAmount,
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
       is_work_day: isWorkDay,
@@ -100,7 +95,7 @@ export function IntakeLog() {
         next.map((s) => ({ supplement_id: s.id, taken: s.taken }))
       );
       // Keep the journal's derived followed_supplements in sync.
-      await submitJournalEntry(journalEntryFor(next, savedAlcoholRef.current));
+      await submitJournalEntry(journalEntryFor(next));
       setSuppStatus("saved");
     } catch {
       setSuppStatus("error");
@@ -121,20 +116,6 @@ export function IntakeLog() {
     setSupplements(next);
     await persistSupplements(next);
   }
-
-  async function handleSaveAlcohol(e: React.FormEvent) {
-    e.preventDefault();
-    setAlcoholStatus("saving");
-    try {
-      await submitJournalEntry(journalEntryFor(supplements, alcoholAmount));
-      savedAlcoholRef.current = alcoholAmount.trim();
-      setAlcoholStatus("saved");
-    } catch {
-      setAlcoholStatus("error");
-    }
-  }
-
-  const alcoholDirty = alcoholAmount.trim() !== savedAlcoholRef.current;
 
   return (
     <div className="journal-page">
@@ -197,26 +178,6 @@ export function IntakeLog() {
             );
           })}
         </fieldset>
-
-        <form className="journal-field" onSubmit={handleSaveAlcohol}>
-          <span className="stat-label">Alcohol</span>
-          <input
-            type="text"
-            placeholder="e.g. 2 beers, 1 glass of wine — leave empty for none"
-            value={alcoholAmount}
-            onChange={(e) => setAlcoholAmount(e.target.value)}
-          />
-          <div className="journal-actions">
-            <button
-              type="submit"
-              disabled={!alcoholDirty || alcoholStatus === "saving"}
-            >
-              {alcoholStatus === "saving" ? "Saving…" : "Save alcohol"}
-            </button>
-            {alcoholStatus === "saved" && <span className="journal-ok">Saved ✓</span>}
-            {alcoholStatus === "error" && <span className="journal-err">Failed to save</span>}
-          </div>
-        </form>
       </div>
     </div>
   );
