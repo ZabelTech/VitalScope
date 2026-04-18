@@ -1,6 +1,7 @@
 """FastAPI backend serving VitalScope health data from SQLite."""
 
 import asyncio
+import base64
 import json
 import logging
 import math
@@ -13,6 +14,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
+import anthropic
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
@@ -30,6 +32,11 @@ BUILD_SHA = os.environ.get("VITALSCOPE_SHA", "")
 UPLOADS_DIR = Path(os.environ.get("VITALSCOPE_UPLOADS", DB_PATH.parent / "uploads"))
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+AI_MODEL = os.environ.get("VITALSCOPE_AI_MODEL", "claude-sonnet-4-6")
+AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
+AI_AVAILABLE = bool(ANTHROPIC_API_KEY) and not DEMO_MODE
+
 app = FastAPI(title="VitalScope API")
 app.add_middleware(
     CORSMiddleware,
@@ -41,7 +48,12 @@ app.add_middleware(
 
 @app.get("/api/runtime")
 def runtime_info():
-    return {"demo": DEMO_MODE, "env": ENV_NAME, "commit": BUILD_SHA}
+    return {
+        "demo": DEMO_MODE,
+        "env": ENV_NAME,
+        "commit": BUILD_SHA,
+        "ai_available": AI_AVAILABLE,
+    }
 
 
 def get_db() -> sqlite3.Connection:
@@ -253,6 +265,11 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
+    # Idempotent ALTER for DBs that predate meal_id — links an uploaded meal
+    # photo to the Meal row it was analysed into.
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(uploads)")}
+    if "meal_id" not in existing:
+        conn.execute("ALTER TABLE uploads ADD COLUMN meal_id INTEGER")
     conn.commit()
     conn.close()
 
@@ -910,6 +927,7 @@ class MealIn(BaseModel):
     name: str
     notes: Optional[str] = None
     nutrients: list[MealNutrientIn] = []
+    source_upload_id: Optional[int] = None
 
 
 class WaterIn(BaseModel):
@@ -1039,6 +1057,11 @@ def create_meal(body: MealIn):
             VALUES (?, ?, ?)
             """,
             (new_id, n.nutrient_key, n.amount),
+        )
+    if body.source_upload_id is not None:
+        conn.execute(
+            "UPDATE uploads SET meal_id = ? WHERE id = ? AND kind = 'meal'",
+            (new_id, body.source_upload_id),
         )
     conn.commit()
     result = _fetch_meals(conn, "WHERE id = ?", (new_id,))
@@ -1454,7 +1477,7 @@ async def upload_file(
     upload_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"id": upload_id, "kind": kind, "date": date, "filename": rel, "mime": file.content_type, "bytes": len(data), "created_at": now}
+    return {"id": upload_id, "kind": kind, "date": date, "filename": rel, "mime": file.content_type, "bytes": len(data), "created_at": now, "meal_id": None}
 
 
 @app.get("/api/uploads")
@@ -1469,7 +1492,7 @@ def list_uploads(kind: Optional[Literal["meal", "form"]] = None, date: Optional[
         params.append(date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT id, kind, date, filename, mime, bytes, created_at FROM uploads{where} ORDER BY id DESC",
+        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id FROM uploads{where} ORDER BY id DESC",
         params,
     ).fetchall()
     conn.close()
@@ -1508,6 +1531,170 @@ def delete_upload(upload_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# --- AI meal analysis ---
+
+_ai_logger = logging.getLogger("vitalscope.ai")
+_ai_client: Optional[anthropic.AsyncAnthropic] = None
+
+
+def _get_ai_client() -> anthropic.AsyncAnthropic:
+    global _ai_client
+    if _ai_client is None:
+        _ai_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
+    return _ai_client
+
+
+class AnalyzeImageBody(BaseModel):
+    upload_id: int
+
+
+def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
+    """Build a strict tool-use schema from the live nutrient_defs table so a
+    newly-added custom nutrient is picked up without a code change."""
+    rows = conn.execute(
+        "SELECT key, label, unit, category FROM nutrient_defs ORDER BY category, sort_order, key"
+    ).fetchall()
+    nutrient_props: dict = {}
+    nutrient_keys: list[str] = []
+    for r in rows:
+        key = r["key"]
+        nutrient_keys.append(key)
+        nutrient_props[key] = {
+            "type": ["number", "null"],
+            "description": f"{r['label']} in {r['unit']} (category: {r['category']}). Use null if you can't tell from the image.",
+        }
+    return {
+        "name": "record_meal_estimate",
+        "description": "Record the estimated nutrient content of the depicted meal. Estimate a single serving as depicted. Prefer null over guessing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "suggested_name": {
+                    "type": "string",
+                    "description": "A short human-readable meal name, e.g. 'Grilled salmon with rice and greens'.",
+                },
+                "suggested_notes": {
+                    "type": "string",
+                    "description": "Optional short free-text notes about what you observed (portion sizes, ingredients).",
+                },
+                "confidence": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "Overall confidence in this estimate.",
+                },
+                "nutrients": {
+                    "type": "object",
+                    "description": "Per-nutrient estimates. Null means you can't tell.",
+                    "properties": nutrient_props,
+                    "required": nutrient_keys,
+                    "additionalProperties": False,
+                },
+            },
+            "required": ["suggested_name", "confidence", "nutrients"],
+            "additionalProperties": False,
+        },
+    }
+
+
+@app.post("/api/meals/analyze-image")
+async def analyze_meal_image(body: AnalyzeImageBody):
+    if not AI_AVAILABLE:
+        if DEMO_MODE:
+            raise HTTPException(status_code=503, detail="AI analysis disabled in demo mode")
+        raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
+
+    conn = get_db()
+    row = conn.execute(
+        "SELECT kind, filename, mime FROM uploads WHERE id = ?",
+        (body.upload_id,),
+    ).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="upload not found")
+    if row["kind"] != "meal":
+        conn.close()
+        raise HTTPException(status_code=400, detail="upload is not a meal photo")
+
+    path = (UPLOADS_DIR / row["filename"]).resolve()
+    if not str(path).startswith(str(UPLOADS_DIR.resolve())) or not path.is_file():
+        conn.close()
+        raise HTTPException(status_code=404, detail="file missing on disk")
+
+    img_bytes = path.read_bytes()
+    img_b64 = base64.standard_b64encode(img_bytes).decode("ascii")
+    mime = row["mime"] or "image/jpeg"
+
+    tool = _build_analyze_tool_schema(conn)
+    conn.close()
+
+    client = _get_ai_client()
+    system_prompt = (
+        "You are a registered-dietitian-grade nutrient estimator. Given a meal photo, "
+        "call record_meal_estimate with your best numeric estimate for each listed nutrient. "
+        "Estimate a single serving as depicted. Never invent numbers — prefer null when uncertain."
+    )
+
+    try:
+        response = await asyncio.wait_for(
+            client.messages.create(
+                model=AI_MODEL,
+                max_tokens=4096,
+                system=system_prompt,
+                tools=[tool],
+                tool_choice={"type": "tool", "name": "record_meal_estimate"},
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": mime, "data": img_b64},
+                        },
+                        {"type": "text", "text": "Estimate the nutrient content of this meal."},
+                    ],
+                }],
+            ),
+            timeout=AI_TIMEOUT_SEC,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=408, detail=f"Claude timed out after {AI_TIMEOUT_SEC}s")
+    except anthropic.APIStatusError as e:
+        _ai_logger.warning("Claude API error %s: %s", e.status_code, e.message)
+        raise HTTPException(status_code=502, detail=f"Claude API error: {e.message}")
+    except anthropic.APIConnectionError as e:
+        _ai_logger.warning("Claude connection error: %s", e)
+        raise HTTPException(status_code=502, detail="Claude connection error")
+
+    tool_block = next(
+        (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == "record_meal_estimate"),
+        None,
+    )
+    if tool_block is None:
+        _ai_logger.warning("No tool_use block in Claude response: %s", response.content)
+        raise HTTPException(status_code=502, detail="Claude did not return a tool_use block")
+
+    payload = tool_block.input or {}
+    raw_nutrients = payload.get("nutrients", {}) or {}
+    nutrients: list[dict] = []
+    unknown_keys: list[str] = []
+    for key, value in raw_nutrients.items():
+        if value is None:
+            unknown_keys.append(key)
+        else:
+            try:
+                nutrients.append({"nutrient_key": key, "amount": float(value)})
+            except (TypeError, ValueError):
+                unknown_keys.append(key)
+
+    return {
+        "model": AI_MODEL,
+        "suggested_name": payload.get("suggested_name") or "Meal",
+        "suggested_notes": payload.get("suggested_notes") or "",
+        "confidence": payload.get("confidence") or "medium",
+        "nutrients": nutrients,
+        "unknown_keys": sorted(unknown_keys),
+    }
 
 
 # --- Plugins ---

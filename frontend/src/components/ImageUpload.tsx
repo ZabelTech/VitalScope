@@ -1,6 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { deleteUpload, fetchUploads, uploadImage, uploadImageUrl } from "../api";
-import type { Upload, UploadKind } from "../types";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  analyzeMealImage,
+  deleteUpload,
+  fetchUploads,
+  listNutrientDefs,
+  uploadImage,
+  uploadImageUrl,
+} from "../api";
+import type {
+  MealAnalysisResult,
+  NutrientCategory,
+  NutrientDef,
+  Upload,
+  UploadKind,
+} from "../types";
+import { useRuntime } from "../hooks/useRuntime";
+import { MealAnalysisDraft } from "./MealAnalysisDraft";
 
 interface Props {
   kind: UploadKind;
@@ -10,10 +25,35 @@ interface Props {
 }
 
 export function ImageUpload({ kind, date, label, hint }: Props) {
+  const runtime = useRuntime();
   const [items, setItems] = useState<Upload[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const [analysingId, setAnalysingId] = useState<number | null>(null);
+  const [analyseError, setAnalyseError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<{ result: MealAnalysisResult; uploadId: number } | null>(null);
+
+  const [nutrientDefs, setNutrientDefs] = useState<NutrientDef[]>([]);
+  useEffect(() => {
+    if (kind === "meal") {
+      listNutrientDefs().then(setNutrientDefs).catch(() => setNutrientDefs([]));
+    }
+  }, [kind]);
+
+  const defsByCategory = useMemo(() => {
+    const groups: Record<NutrientCategory, NutrientDef[]> = {
+      macro: [],
+      mineral: [],
+      vitamin: [],
+      bioactive: [],
+    };
+    for (const d of nutrientDefs) groups[d.category].push(d);
+    return groups;
+  }, [nutrientDefs]);
+
+  const canAnalyse = kind === "meal" && runtime?.ai_available === true;
 
   const reload = useCallback(async () => {
     try {
@@ -54,6 +94,25 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
 
   async function onDelete(id: number) {
     await deleteUpload(id);
+    if (draft?.uploadId === id) setDraft(null);
+    await reload();
+  }
+
+  async function onAnalyse(id: number) {
+    setAnalyseError(null);
+    setAnalysingId(id);
+    try {
+      const result = await analyzeMealImage(id);
+      setDraft({ result, uploadId: id });
+    } catch (e) {
+      setAnalyseError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setAnalysingId(null);
+    }
+  }
+
+  async function onDraftSaved() {
+    setDraft(null);
     await reload();
   }
 
@@ -77,24 +136,51 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       {hint && <p className="journal-hint">{hint}</p>}
       {uploading && <p className="journal-hint">Uploading…</p>}
       {error && <p className="journal-err">{error}</p>}
+      {analyseError && <p className="journal-err">{analyseError}</p>}
       {items.length === 0 ? (
         <p className="journal-hint">No {kind === "meal" ? "meal" : "form"} photos yet.</p>
       ) : (
         <ul className="image-upload-list">
-          {items.map((u) => (
-            <li key={u.id}>
-              <img src={uploadImageUrl(u.id)} alt="" loading="lazy" />
-              <button
-                type="button"
-                className="supplement-delete"
-                aria-label="Delete image"
-                onClick={() => onDelete(u.id)}
-              >
-                ×
-              </button>
-            </li>
-          ))}
+          {items.map((u) => {
+            const linked = u.meal_id != null;
+            const showAnalyse = canAnalyse && !linked;
+            const busy = analysingId === u.id;
+            return (
+              <li key={u.id}>
+                <img src={uploadImageUrl(u.id)} alt="" loading="lazy" />
+                <button
+                  type="button"
+                  className="supplement-delete"
+                  aria-label="Delete image"
+                  onClick={() => onDelete(u.id)}
+                >
+                  ×
+                </button>
+                {showAnalyse && (
+                  <button
+                    type="button"
+                    className="image-analyse-pill"
+                    onClick={() => onAnalyse(u.id)}
+                    disabled={busy || draft !== null}
+                  >
+                    {busy ? "Analysing…" : "Analyse"}
+                  </button>
+                )}
+                {linked && <span className="image-linked-badge">Logged</span>}
+              </li>
+            );
+          })}
         </ul>
+      )}
+      {draft && kind === "meal" && (
+        <MealAnalysisDraft
+          result={draft.result}
+          uploadId={draft.uploadId}
+          date={date}
+          defsByCategory={defsByCategory}
+          onSaved={onDraftSaved}
+          onCancel={() => setDraft(null)}
+        />
       )}
     </div>
   );

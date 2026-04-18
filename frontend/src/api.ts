@@ -1,6 +1,7 @@
 import type {
   JournalEntry,
   Meal,
+  MealAnalysisResult,
   NutrientDef,
   NutrientCategory,
   NutrientGoals,
@@ -19,6 +20,7 @@ export interface RuntimeInfo {
   demo: boolean;
   env: string;
   commit: string;
+  ai_available: boolean;
 }
 
 export async function fetchRuntime(): Promise<RuntimeInfo> {
@@ -149,6 +151,7 @@ export interface MealInput {
   name: string;
   notes: string | null;
   nutrients: { nutrient_key: string; amount: number }[];
+  source_upload_id?: number | null;
 }
 
 export async function listMeals(start: string, end: string): Promise<Meal[]> {
@@ -280,6 +283,21 @@ export async function deleteUpload(id: number): Promise<void> {
 
 export function uploadImageUrl(id: number): string {
   return `/api/uploads/${id}`;
+}
+
+// --- AI meal analysis ---
+
+export async function analyzeMealImage(upload_id: number): Promise<MealAnalysisResult> {
+  const res = await fetch("/api/meals/analyze-image", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
 }
 
 // --- Plugins ---
