@@ -97,6 +97,7 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   display: flex;
   gap: 4px;
   align-items: center;
+  justify-content: center;
   overflow-x: auto;
   min-width: 0;
   max-width: 100%;
