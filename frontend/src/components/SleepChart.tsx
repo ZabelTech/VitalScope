@@ -33,7 +33,7 @@ export function SleepChart({ start, end }: Props) {
         { label: "Sleep Score", stats: stats?.sleep_score ?? null },
         { label: "Sleep Duration", stats: stats?.sleep_hours ?? null, unit: " hrs", decimals: 1 },
       ]} />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -47,7 +47,7 @@ export function SleepChart({ start, end }: Props) {
           <Bar yAxisId="hours" dataKey="awake" name="Awake" stackId="sleep" fill="#fbbf24" />
           <Line yAxisId="score" type="monotone" dataKey="score" name="Score" stroke="#ef4444" dot={false} connectNulls />
         </ComposedChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }

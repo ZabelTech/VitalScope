@@ -109,7 +109,7 @@ export function NutritionChart({ start, end }: Props) {
           { label: "Water", stats: stats.water, unit: "ml" },
         ]}
       />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -136,7 +136,7 @@ export function NutritionChart({ start, end }: Props) {
             connectNulls
           />
         </ComposedChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }

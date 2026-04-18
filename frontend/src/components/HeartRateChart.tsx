@@ -17,7 +17,7 @@ export function HeartRateChart({ start, end }: Props) {
     <div className="chart-section">
       <h2>Heart Rate</h2>
       <MetricCards items={[{ label: "Resting HR", stats: stats?.resting_hr ?? null, unit: " bpm" }]} />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <LineChart data={data ?? []}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -28,7 +28,7 @@ export function HeartRateChart({ start, end }: Props) {
           <Line type="monotone" dataKey="min_hr" name="Min" stroke="#22c55e" dot={false} connectNulls />
           <Line type="monotone" dataKey="max_hr" name="Max" stroke="#ef4444" dot={false} connectNulls />
         </LineChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }

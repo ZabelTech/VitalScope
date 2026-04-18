@@ -31,7 +31,7 @@ export function WeightChart({ start, end }: Props) {
           { label: "Water", stats: stats?.water_pct ?? null, unit: "%", decimals: 1 },
         ]}
       />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <LineChart data={data ?? []}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -44,7 +44,7 @@ export function WeightChart({ start, end }: Props) {
           <Line yAxisId="pct" type="monotone" dataKey="body_fat_pct" name="Body Fat %"   stroke="#ef4444" dot={false} connectNulls />
           <Line yAxisId="pct" type="monotone" dataKey="water_pct"    name="Water %"      stroke="#22c55e" dot={false} connectNulls />
         </LineChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }
