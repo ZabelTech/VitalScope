@@ -116,13 +116,6 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
     await persistSupplements(next);
   }
 
-  async function markAllTaken() {
-    if (supplements.length === 0 || supplements.every((s) => s.taken)) return;
-    const next = supplements.map((s) => ({ ...s, taken: true }));
-    setSupplements(next);
-    await persistSupplements(next);
-  }
-
   async function toggleSection(key: TimeOfDay) {
     const sectionItems = supplements.filter((s) => s.time_of_day === key);
     if (sectionItems.length === 0) return;
@@ -154,20 +147,6 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
             {suppStatus === "saved" && <span className="journal-ok"> · saved ✓</span>}
             {suppStatus === "error" && <span className="journal-err"> · save failed</span>}
           </legend>
-          {supplements.length > 0 && (
-            <div className="supplement-actions">
-              <button
-                type="button"
-                className="chip"
-                onClick={markAllTaken}
-                disabled={
-                  suppStatus === "saving" || supplements.every((s) => s.taken)
-                }
-              >
-                Mark all taken
-              </button>
-            </div>
-          )}
           {supplements.length === 0 && (
             <p className="journal-hint">
               No supplements defined yet. Add them under Decide → Plan → Supplements.
