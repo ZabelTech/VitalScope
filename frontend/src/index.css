@@ -88,6 +88,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   gap: 4px;
   align-items: center;
   overflow-x: auto;
+  min-width: 0;
+  max-width: 100%;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   scroll-snap-type: x proximity;
@@ -127,6 +129,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   margin-bottom: 1.25rem;
   font-size: 0.9rem;
   overflow-x: auto;
+  min-width: 0;
+  max-width: 100%;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
   scroll-snap-type: x proximity;
@@ -226,7 +230,7 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   margin-bottom: 16px;
 }
 
-@media (min-width: 768px) {
+@media (min-width: 1024px) {
   .overview-grid-top {
     grid-template-columns: 1.5fr 1fr;
     gap: 20px;
@@ -243,6 +247,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   background: #1e293b;
   border-radius: 12px;
   padding: 16px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 @media (min-width: 640px) {
