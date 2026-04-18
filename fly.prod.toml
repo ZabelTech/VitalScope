@@ -7,7 +7,13 @@
 #                      STRONG_EMAIL=...  STRONG_PASSWORD=...  \
 #                      EUFY_EMAIL=...    EUFY_PASSWORD=...    \
 #                      ANTHROPIC_API_KEY=sk-ant-...            \
+#                      VITALSCOPE_SESSION_SECRET=$(openssl rand -base64 32) \
 #                      --app vitalscope
+#
+# VITALSCOPE_SESSION_SECRET signs the auth cookie. Set it once in prod so
+# the cookie stays valid across restarts/deploys; without it the backend
+# falls back to a per-process random value and users get logged out on
+# every deploy. Rotate it to force a global sign-out.
 #
 # ANTHROPIC_API_KEY enables the meal-photo AI analyser. Optional overrides:
 #   VITALSCOPE_AI_MODEL       default "claude-sonnet-4-6"

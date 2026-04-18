@@ -1,7 +1,9 @@
+import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { NavBar } from "./components/NavBar";
 import { ActPage } from "./components/ActPage";
 import { DailyPage } from "./components/DailyPage";
+import { LoginForm } from "./components/LoginForm";
 import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
 import { DecidePage } from "./components/DecidePage";
@@ -19,7 +21,25 @@ function DemoBanner() {
   );
 }
 
+type AuthState = "loading" | "authed" | "unauthed";
+
 function App() {
+  const [auth, setAuth] = useState<AuthState>("loading");
+
+  useEffect(() => {
+    fetch("/api/auth/status", { credentials: "same-origin" })
+      .then((r) => r.json())
+      .then((d) => setAuth(d.authenticated ? "authed" : "unauthed"))
+      .catch(() => setAuth("unauthed"));
+  }, []);
+
+  if (auth === "loading") {
+    return <div className="app" />;
+  }
+  if (auth === "unauthed") {
+    return <LoginForm onSuccess={() => setAuth("authed")} />;
+  }
+
   return (
     <BrowserRouter>
       <div className="app">
