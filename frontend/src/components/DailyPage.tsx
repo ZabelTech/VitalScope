@@ -15,8 +15,16 @@ export function DailyPage() {
   return (
     <OodaPage
       sections={[
-        { id: "today", label: "Today", content: <TodayJournal date={today} /> },
-        { id: "intake", label: "Supplements", content: <IntakeLog /> },
+        {
+          id: "today",
+          label: "Today",
+          content: (
+            <>
+              <TodayJournal date={today} />
+              <IntakeLog />
+            </>
+          ),
+        },
         { id: "journal", label: "Yesterday's journal", content: <JournalPage initialDate={yesterday} /> },
         { id: "water", label: "Water", content: <WaterQuickLog date={today} /> },
         { id: "activity", label: "Activities & steps", content: <AutoTickedToday date={today} /> },
