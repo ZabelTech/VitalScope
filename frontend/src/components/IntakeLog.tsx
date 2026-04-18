@@ -123,6 +123,17 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
     await persistSupplements(next);
   }
 
+  async function toggleSection(key: TimeOfDay) {
+    const sectionItems = supplements.filter((s) => s.time_of_day === key);
+    if (sectionItems.length === 0) return;
+    const allTaken = sectionItems.every((s) => s.taken);
+    const next = supplements.map((s) =>
+      s.time_of_day === key ? { ...s, taken: !allTaken } : s
+    );
+    setSupplements(next);
+    await persistSupplements(next);
+  }
+
   const body = (
     <>
       {wrapped && (
@@ -167,9 +178,19 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
               (s) => s.time_of_day === section.key
             );
             if (sectionItems.length === 0) return null;
+            const allTaken = sectionItems.every((s) => s.taken);
             return (
               <div key={section.key} className="journal-supplement-group">
-                <div className="stat-label">{section.label}</div>
+                <label className="supplement-section-head">
+                  <input
+                    type="checkbox"
+                    checked={allTaken}
+                    onChange={() => toggleSection(section.key)}
+                    disabled={suppStatus === "saving"}
+                    aria-label={`Mark all ${section.label.toLowerCase()} supplements taken`}
+                  />
+                  <span className="stat-label">{section.label}</span>
+                </label>
                 {sectionItems.map((s) => (
                   <label key={s.id} className="journal-radio">
                     <input

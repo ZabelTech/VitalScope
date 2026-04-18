@@ -1116,6 +1116,21 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   flex-wrap: wrap;
 }
 
+.supplement-section-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.supplement-section-head input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
 .chip {
   background: #1e293b;
   border: 1px solid #334155;
