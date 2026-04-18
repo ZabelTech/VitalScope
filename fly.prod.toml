@@ -15,8 +15,15 @@
 # falls back to a per-process random value and users get logged out on
 # every deploy. Rotate it to force a global sign-out.
 #
-# ANTHROPIC_API_KEY enables the meal-photo AI analyser. Optional overrides:
-#   VITALSCOPE_AI_MODEL       default "claude-sonnet-4-6"
+# AI analyser provider is selected by VITALSCOPE_AI_PROVIDER (default
+# "anthropic"). Set the matching API key for whichever provider you pick:
+#
+#   anthropic  → ANTHROPIC_API_KEY       (default model claude-sonnet-4-6)
+#   openai     → OPENAI_API_KEY          (default model gpt-4o)
+#   openrouter → OPENROUTER_API_KEY      (default model anthropic/claude-sonnet-4.6)
+#
+# Optional overrides (apply to whichever provider is active):
+#   VITALSCOPE_AI_MODEL       overrides the per-provider default
 #   VITALSCOPE_AI_TIMEOUT_SEC default 20
 #
 # Unlike preview deploys, prod keeps one machine always running so the

@@ -120,6 +120,18 @@ Every sync script must:
 
 Stored in the user's environment or the user will paste them when asked. **Never commit credentials.** Token cache files (`~/.garminconnect`, `~/.strongapp`, `~/.eufylife`) are already in the user's home directory and should not be moved into the repo.
 
+## AI analyser provider
+
+The image-analysis endpoints (`/api/meals/analyze-image`, `/api/form-checks/analyze-image`) go through a provider adapter selected at boot by `VITALSCOPE_AI_PROVIDER`. Defaults to `anthropic`.
+
+| Provider | Env var for key | Default model |
+|---|---|---|
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| `openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `openrouter` | `OPENROUTER_API_KEY` | `anthropic/claude-sonnet-4.6` |
+
+Override the model with `VITALSCOPE_AI_MODEL` (applies to whichever provider is active). `VITALSCOPE_AI_TIMEOUT_SEC` defaults to 20. `/api/runtime` reports `ai_provider` and `ai_model` when a key is set. OpenRouter and OpenAI share a single adapter class (`OpenAIProvider` in `backend/app.py`); OpenRouter is just the OpenAI SDK pointed at `https://openrouter.ai/api/v1`.
+
 ## Before reporting a task done
 
 - Frontend changes → `cd frontend && npx tsc --noEmit` must exit 0.
