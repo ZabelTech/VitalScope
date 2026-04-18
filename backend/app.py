@@ -34,13 +34,41 @@ BUILD_SHA = os.environ.get("VITALSCOPE_SHA", "")
 UPLOADS_DIR = Path(os.environ.get("VITALSCOPE_UPLOADS", DB_PATH.parent / "uploads"))
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
+# --- AI provider config ---
+# VITALSCOPE_AI_PROVIDER picks which SDK we talk to. OpenRouter reuses the
+# OpenAI SDK with a different base_url, so one adapter class serves both.
+_AI_PROVIDER_RAW = os.environ.get("VITALSCOPE_AI_PROVIDER", "anthropic").lower()
+if _AI_PROVIDER_RAW not in ("anthropic", "openai", "openrouter"):
+    print(
+        f"[vitalscope] unknown VITALSCOPE_AI_PROVIDER={_AI_PROVIDER_RAW!r}, falling back to 'anthropic'",
+        flush=True,
+    )
+    _AI_PROVIDER_RAW = "anthropic"
+AI_PROVIDER = _AI_PROVIDER_RAW
+
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-AI_MODEL = os.environ.get("VITALSCOPE_AI_MODEL", "claude-sonnet-4-6")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
+
+_DEFAULT_MODEL_BY_PROVIDER = {
+    "anthropic": "claude-sonnet-4-6",
+    "openai": "gpt-4o",
+    "openrouter": "anthropic/claude-sonnet-4.6",
+}
+AI_MODEL = os.environ.get(
+    "VITALSCOPE_AI_MODEL", _DEFAULT_MODEL_BY_PROVIDER[AI_PROVIDER]
+)
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
-# AI is available whenever a key is set, regardless of demo mode. Demo-mode
-# preview apps that want to exercise the analyser can opt in by setting
-# ANTHROPIC_API_KEY as a Fly secret on the per-PR app.
-AI_AVAILABLE = bool(ANTHROPIC_API_KEY)
+
+_AI_KEY_BY_PROVIDER = {
+    "anthropic": ANTHROPIC_API_KEY,
+    "openai": OPENAI_API_KEY,
+    "openrouter": OPENROUTER_API_KEY,
+}
+# AI is available whenever the selected provider's key is set, regardless of
+# demo mode. Demo-mode preview apps that want to exercise the analyser can opt
+# in by setting the matching key as a Fly secret on the per-PR app.
+AI_AVAILABLE = bool(_AI_KEY_BY_PROVIDER[AI_PROVIDER])
 
 # --- Auth (single shared password) ---
 AUTH_PASSWORD = "JohnBoyd"
@@ -136,6 +164,8 @@ def runtime_info():
         "env": ENV_NAME,
         "commit": BUILD_SHA,
         "ai_available": AI_AVAILABLE,
+        "ai_provider": AI_PROVIDER if AI_AVAILABLE else None,
+        "ai_model": AI_MODEL if AI_AVAILABLE else None,
     }
 
 
@@ -1646,14 +1676,186 @@ def delete_upload(upload_id: int):
 # --- AI meal analysis ---
 
 _ai_logger = logging.getLogger("vitalscope.ai")
-_ai_client: Optional[anthropic.AsyncAnthropic] = None
 
 
-def _get_ai_client() -> anthropic.AsyncAnthropic:
-    global _ai_client
-    if _ai_client is None:
-        _ai_client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_API_KEY)
-    return _ai_client
+class AIProvider:
+    """Common interface every provider adapter implements."""
+
+    name: str
+    model: str
+
+    async def analyze_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        image_b64: str,
+        mime: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        raise NotImplementedError
+
+
+class AnthropicProvider(AIProvider):
+    name = "anthropic"
+
+    def __init__(self, *, api_key: str, model: str) -> None:
+        self.model = model
+        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+
+    async def analyze_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        image_b64: str,
+        mime: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        tool_name = tool["name"]
+        try:
+            response = await asyncio.wait_for(
+                self._client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    system=system,
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": tool_name},
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": mime, "data": image_b64},
+                            },
+                            {"type": "text", "text": user_text},
+                        ],
+                    }],
+                ),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail=f"Claude timed out after {timeout_sec}s")
+        except anthropic.APIStatusError as e:
+            _ai_logger.warning("Claude API error %s: %s", e.status_code, e.message)
+            raise HTTPException(status_code=502, detail=f"Claude API error: {e.message}")
+        except anthropic.APIConnectionError as e:
+            _ai_logger.warning("Claude connection error: %s", e)
+            raise HTTPException(status_code=502, detail="Claude connection error")
+
+        tool_block = next(
+            (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == tool_name),
+            None,
+        )
+        if tool_block is None:
+            _ai_logger.warning("No tool_use block in Claude response: %s", response.content)
+            raise HTTPException(status_code=502, detail="Claude did not return a tool_use block")
+        return tool_block.input or {}
+
+
+class OpenAIProvider(AIProvider):
+    """Serves both OpenAI (base_url=None) and OpenRouter (base_url=openrouter)."""
+
+    def __init__(self, *, api_key: str, model: str, base_url: Optional[str], name: str) -> None:
+        import openai  # deferred — avoid import cost when not selected
+
+        self.name = name
+        self.model = model
+        self._openai = openai
+        client_kwargs: dict[str, Any] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self._client = openai.AsyncOpenAI(**client_kwargs)
+
+    async def analyze_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        image_b64: str,
+        mime: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        tool_name = tool["name"]
+        openai_tool = {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": tool.get("description", ""),
+                "parameters": tool["input_schema"],
+            },
+        }
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user_text},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+                    },
+                ],
+            },
+        ]
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=[openai_tool],
+                    tool_choice={"type": "function", "function": {"name": tool_name}},
+                    parallel_tool_calls=False,
+                    max_tokens=4096,
+                ),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail=f"{self.name} timed out after {timeout_sec}s")
+        except self._openai.APIStatusError as e:
+            _ai_logger.warning("%s API error %s: %s", self.name, e.status_code, e.message)
+            raise HTTPException(status_code=502, detail=f"{self.name} API error: {e.message}")
+        except self._openai.APIConnectionError as e:
+            _ai_logger.warning("%s connection error: %s", self.name, e)
+            raise HTTPException(status_code=502, detail=f"{self.name} connection error")
+
+        tool_calls = (response.choices[0].message.tool_calls or []) if response.choices else []
+        call = next((c for c in tool_calls if c.function and c.function.name == tool_name), None)
+        if call is None:
+            _ai_logger.warning("No matching tool_call in %s response: %s", self.name, response)
+            raise HTTPException(status_code=502, detail=f"{self.name} did not return a tool call")
+        try:
+            return json.loads(call.function.arguments or "{}")
+        except json.JSONDecodeError as e:
+            _ai_logger.warning("Bad JSON in %s tool_call: %s", self.name, e)
+            raise HTTPException(status_code=502, detail=f"{self.name} returned invalid tool-call JSON")
+
+
+_ai_provider: Optional[AIProvider] = None
+
+
+def _get_ai_provider() -> AIProvider:
+    global _ai_provider
+    if _ai_provider is None:
+        if AI_PROVIDER == "anthropic":
+            _ai_provider = AnthropicProvider(api_key=ANTHROPIC_API_KEY, model=AI_MODEL)
+        elif AI_PROVIDER == "openai":
+            _ai_provider = OpenAIProvider(
+                api_key=OPENAI_API_KEY, model=AI_MODEL, base_url=None, name="openai"
+            )
+        elif AI_PROVIDER == "openrouter":
+            _ai_provider = OpenAIProvider(
+                api_key=OPENROUTER_API_KEY,
+                model=AI_MODEL,
+                base_url="https://openrouter.ai/api/v1",
+                name="openrouter",
+            )
+        else:
+            raise HTTPException(status_code=503, detail=f"unknown AI provider: {AI_PROVIDER}")
+    return _ai_provider
 
 
 class AnalyzeImageBody(BaseModel):
@@ -1730,56 +1932,24 @@ def _load_upload_image(
     return img_b64, row["mime"] or "image/jpeg"
 
 
-async def _call_claude_tool(
+async def _call_ai_tool(
     *,
     system: str,
     user_text: str,
     image_b64: str,
     mime: str,
     tool: dict,
-    tool_name: str,
 ) -> dict:
-    """Run a vision tool-use call with our standard timeout + error mapping.
-    Returns the tool_use.input dict, or raises HTTPException on any failure."""
-    client = _get_ai_client()
-    try:
-        response = await asyncio.wait_for(
-            client.messages.create(
-                model=AI_MODEL,
-                max_tokens=4096,
-                system=system,
-                tools=[tool],
-                tool_choice={"type": "tool", "name": tool_name},
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {"type": "base64", "media_type": mime, "data": image_b64},
-                        },
-                        {"type": "text", "text": user_text},
-                    ],
-                }],
-            ),
-            timeout=AI_TIMEOUT_SEC,
-        )
-    except asyncio.TimeoutError:
-        raise HTTPException(status_code=408, detail=f"Claude timed out after {AI_TIMEOUT_SEC}s")
-    except anthropic.APIStatusError as e:
-        _ai_logger.warning("Claude API error %s: %s", e.status_code, e.message)
-        raise HTTPException(status_code=502, detail=f"Claude API error: {e.message}")
-    except anthropic.APIConnectionError as e:
-        _ai_logger.warning("Claude connection error: %s", e)
-        raise HTTPException(status_code=502, detail="Claude connection error")
-
-    tool_block = next(
-        (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == tool_name),
-        None,
+    """Run a vision tool-use call via the configured provider."""
+    provider = _get_ai_provider()
+    return await provider.analyze_with_tool(
+        system=system,
+        user_text=user_text,
+        image_b64=image_b64,
+        mime=mime,
+        tool=tool,
+        timeout_sec=AI_TIMEOUT_SEC,
     )
-    if tool_block is None:
-        _ai_logger.warning("No tool_use block in Claude response: %s", response.content)
-        raise HTTPException(status_code=502, detail="Claude did not return a tool_use block")
-    return tool_block.input or {}
 
 
 def _append_user_context(prompt_text: str, user_notes: Optional[str]) -> str:
@@ -1792,7 +1962,10 @@ def _append_user_context(prompt_text: str, user_notes: Optional[str]) -> str:
 @app.post("/api/meals/analyze-image")
 async def analyze_meal_image(body: AnalyzeImageBody):
     if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
 
     conn = get_db()
     try:
@@ -1812,13 +1985,12 @@ async def analyze_meal_image(body: AnalyzeImageBody):
         "Estimate the nutrient content of this meal.", body.user_notes
     )
 
-    payload = await _call_claude_tool(
+    payload = await _call_ai_tool(
         system=system_prompt,
         user_text=user_text,
         image_b64=img_b64,
         mime=mime,
         tool=tool,
-        tool_name="record_meal_estimate",
     )
 
     raw_nutrients = payload.get("nutrients", {}) or {}
@@ -1926,7 +2098,10 @@ _FORM_CHECK_FIELDS = [
 @app.post("/api/form-checks/analyze-image")
 async def analyze_form_check_image(body: AnalyzeImageBody):
     if not AI_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI analysis not configured (missing ANTHROPIC_API_KEY)")
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
 
     conn = get_db()
     try:
@@ -1947,13 +2122,12 @@ async def analyze_form_check_image(body: AnalyzeImageBody):
         "Estimate visible body composition from this photo.", body.user_notes
     )
 
-    payload = await _call_claude_tool(
+    payload = await _call_ai_tool(
         system=system_prompt,
         user_text=user_text,
         image_b64=img_b64,
         mime=mime,
         tool=_FORM_CHECK_TOOL,
-        tool_name="record_form_check",
     )
 
     unknown_keys: list[str] = []

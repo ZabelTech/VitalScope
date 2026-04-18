@@ -24,6 +24,8 @@ export interface RuntimeInfo {
   env: string;
   commit: string;
   ai_available: boolean;
+  ai_provider: "anthropic" | "openai" | "openrouter" | null;
+  ai_model: string | null;
 }
 
 // Wrapper around fetch that always sends the auth cookie and reloads on 401
