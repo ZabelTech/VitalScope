@@ -1,0 +1,35 @@
+# Personal health data — never commit
+vitalscope.db
+vitalscope.db-journal
+vitalscope.db-wal
+vitalscope.db-shm
+data/
+
+# Secrets & credentials
+.env
+.env.*
+*.secret
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Fly.io (will appear later)
+.fly/

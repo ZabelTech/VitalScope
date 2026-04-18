@@ -1,0 +1,6 @@
+garminconnect
+requests>=2.31
+fastapi
+uvicorn
+pydantic
+apscheduler
