@@ -59,8 +59,11 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
 
   return (
     <div className="image-upload">
-      <label className="image-upload-label">
+      <div className="image-upload-header">
         <span className="stat-label">{label}</span>
+      </div>
+      <label className="image-upload-button">
+        Take photo
         <input
           ref={inputRef}
           type="file"
@@ -68,6 +71,7 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
           multiple
           capture="environment"
           onChange={(e) => onFiles(e.target.files)}
+          className="visually-hidden"
         />
       </label>
       {hint && <p className="journal-hint">{hint}</p>}
