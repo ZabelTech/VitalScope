@@ -100,6 +100,7 @@ Every sync script must:
 - **Don't skip `set_type = 'working'` filter** when querying workouts — silently wrong results.
 - **Don't use `print()` without `flush=True`** in long-running sync loops.
 - **Don't commit without being asked.** The user will ask when it's time.
+- **Don't commit directly to `main`.** Every feature or fix goes on its own branch (`feat/…`, `fix/…`, `chore/…`) and lands through a pull request. The per-PR Fly preview deploy (`.github/workflows/preview-deploy.yml`) only fires on `pull_request` events — pushing straight to `main` skips both the preview and the implicit review step.
 - **Don't run destructive SQL** (`DROP`, `DELETE` without WHERE) without explicit permission.
 - **Don't add new routes when a section will do.** The OODA layout is the skeleton of the app; prefer adding a `{ id, label, content }` entry to an existing `OodaPage`'s `sections` array over creating another top-level page.
 
