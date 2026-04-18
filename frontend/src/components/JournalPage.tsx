@@ -10,9 +10,13 @@ function yesterdayISO(): string {
 
 interface Props {
   initialDate?: string;
+  // Whether to render the Date input. Default true; the landing's
+  // "Yesterday's journal" section passes false since it's always pinned
+  // to yesterday.
+  showDate?: boolean;
 }
 
-export function JournalPage({ initialDate }: Props = {}) {
+export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [date, setDate] = useState<string>(initialDate ?? yesterdayISO());
   // Primary fields owned here — yesterday's reflections.
   const [alcoholAmount, setAlcoholAmount] = useState("");
@@ -79,14 +83,16 @@ export function JournalPage({ initialDate }: Props = {}) {
   return (
     <div className="journal-page">
       <form className="journal-form overview-card" onSubmit={handleSubmit}>
-        <label className="journal-field">
-          <span className="stat-label">Date</span>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-          />
-        </label>
+        {showDate && (
+          <label className="journal-field">
+            <span className="stat-label">Date</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(e) => setDate(e.target.value)}
+            />
+          </label>
+        )}
 
         {loadedExisting && (
           <p className="journal-hint">An entry for {date} already exists — editing it.</p>

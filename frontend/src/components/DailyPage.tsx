@@ -27,7 +27,7 @@ export function DailyPage() {
             </div>
           ),
         },
-        { id: "journal", label: "Yesterday's journal", content: <JournalPage initialDate={yesterday} /> },
+        { id: "journal", label: "Yesterday's journal", content: <JournalPage initialDate={yesterday} showDate={false} /> },
         { id: "water", label: "Water", content: <WaterQuickLog date={today} /> },
         { id: "activity", label: "Activities & steps", content: <AutoTickedToday date={today} /> },
         {
