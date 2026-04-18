@@ -1548,6 +1548,7 @@ def _get_ai_client() -> anthropic.AsyncAnthropic:
 
 class AnalyzeImageBody(BaseModel):
     upload_id: int
+    user_notes: Optional[str] = None
 
 
 def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
@@ -1633,8 +1634,16 @@ async def analyze_meal_image(body: AnalyzeImageBody):
     system_prompt = (
         "You are a registered-dietitian-grade nutrient estimator. Given a meal photo, "
         "call record_meal_estimate with your best numeric estimate for each listed nutrient. "
-        "Estimate a single serving as depicted. Never invent numbers — prefer null when uncertain."
+        "Estimate a single serving as depicted. Never invent numbers — prefer null when uncertain. "
+        "If the user provided context (ingredients, portion sizes, preparation), take it as ground "
+        "truth over what you'd infer from the photo alone."
     )
+
+    user_note = (body.user_notes or "").strip()
+    prompt_text = "Estimate the nutrient content of this meal."
+    if user_note:
+        # Keep user context clearly separated from our instructions.
+        prompt_text += f"\n\nUser context (trust this over the image where they conflict):\n{user_note}"
 
     try:
         response = await asyncio.wait_for(
@@ -1651,7 +1660,7 @@ async def analyze_meal_image(body: AnalyzeImageBody):
                             "type": "image",
                             "source": {"type": "base64", "media_type": mime, "data": img_b64},
                         },
-                        {"type": "text", "text": "Estimate the nutrient content of this meal."},
+                        {"type": "text", "text": prompt_text},
                     ],
                 }],
             ),

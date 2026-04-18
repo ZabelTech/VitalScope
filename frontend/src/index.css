@@ -1417,6 +1417,37 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   pointer-events: none;
 }
 
+/* AI meal analysis — preflight (add context before firing Claude) */
+.meal-analysis-preflight {
+  margin-top: 12px;
+  padding: 16px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.meal-analysis-preflight-img {
+  max-width: 180px;
+  max-height: 180px;
+  border-radius: 8px;
+  object-fit: cover;
+  align-self: flex-start;
+}
+
+.meal-analysis-preflight textarea {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: #e2e8f0;
+  font-family: inherit;
+  font-size: 16px;
+  resize: vertical;
+}
+
 /* AI meal analysis draft panel */
 .meal-analysis-draft {
   margin-top: 12px;

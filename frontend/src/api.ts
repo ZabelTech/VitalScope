@@ -287,11 +287,17 @@ export function uploadImageUrl(id: number): string {
 
 // --- AI meal analysis ---
 
-export async function analyzeMealImage(upload_id: number): Promise<MealAnalysisResult> {
+export async function analyzeMealImage(
+  upload_id: number,
+  user_notes?: string,
+): Promise<MealAnalysisResult> {
+  const body: { upload_id: number; user_notes?: string } = { upload_id };
+  const trimmed = user_notes?.trim();
+  if (trimmed) body.user_notes = trimmed;
   const res = await fetch("/api/meals/analyze-image", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ upload_id }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
