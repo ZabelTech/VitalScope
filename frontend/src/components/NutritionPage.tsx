@@ -2,14 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import {
   createMeal,
-  createWater,
   deleteMeal,
-  deleteWater,
   listMeals,
   listNutrientDefs,
-  listWater,
 } from "../api";
-import type { Meal, NutrientCategory, NutrientDef, WaterEntry } from "../types";
+import type { Meal, NutrientCategory, NutrientDef } from "../types";
+import { WaterQuickLog } from "./WaterQuickLog";
 
 const CATEGORY_ORDER: NutrientCategory[] = ["macro", "mineral", "vitamin", "bioactive"];
 const CATEGORY_LABELS: Record<NutrientCategory, string> = {
@@ -27,7 +25,6 @@ export function NutritionPage() {
   const [date, setDate] = useState<string>(todayISO());
   const [defs, setDefs] = useState<NutrientDef[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
-  const [water, setWater] = useState<WaterEntry[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
 
   useEffect(() => {
@@ -37,9 +34,7 @@ export function NutritionPage() {
   async function reload() {
     setStatus("loading");
     try {
-      const [m, w] = await Promise.all([listMeals(date, date), listWater(date, date)]);
-      setMeals(m);
-      setWater(w);
+      setMeals(await listMeals(date, date));
       setStatus("idle");
     } catch {
       setStatus("error");
@@ -68,15 +63,8 @@ export function NutritionPage() {
     return map;
   }, [defs]);
 
-  const waterTotal = water.reduce((sum, w) => sum + w.amount_ml, 0);
-
   async function handleDeleteMeal(id: number) {
     await deleteMeal(id);
-    await reload();
-  }
-
-  async function handleDeleteWater(id: number) {
-    await deleteWater(id);
     await reload();
   }
 
@@ -138,25 +126,7 @@ export function NutritionPage() {
         />
       </div>
 
-      <div className="overview-card journal-form">
-        <h3 className="stat-label">Water — {waterTotal} ml total</h3>
-        {water.length === 0 && <p className="journal-hint">No water logged yet.</p>}
-        {water.map((w) => (
-          <div key={w.id} className="supplement-row">
-            <span className="supplement-name">{w.time ?? "—"}</span>
-            <span className="supplement-dosage">{w.amount_ml} ml</span>
-            <button
-              type="button"
-              className="supplement-delete"
-              onClick={() => handleDeleteWater(w.id)}
-              aria-label="Delete water entry"
-            >
-              ×
-            </button>
-          </div>
-        ))}
-        <AddWaterForm date={date} onAdded={reload} />
-      </div>
+      <WaterQuickLog date={date} />
     </div>
   );
 }
@@ -270,49 +240,3 @@ function AddMealForm({
   );
 }
 
-function AddWaterForm({
-  date,
-  onAdded,
-}: {
-  date: string;
-  onAdded: () => void;
-}) {
-  const [amount, setAmount] = useState("250");
-  const [time, setTime] = useState("");
-  const [saving, setSaving] = useState(false);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const ml = parseInt(amount, 10);
-    if (!Number.isFinite(ml) || ml <= 0) return;
-    setSaving(true);
-    try {
-      await createWater({ date, time: time || null, amount_ml: ml });
-      setAmount("250");
-      setTime("");
-      onAdded();
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <form className="supplement-add" onSubmit={handleSubmit}>
-      <input
-        type="number"
-        min="1"
-        placeholder="ml"
-        value={amount}
-        onChange={(e) => setAmount(e.target.value)}
-      />
-      <input
-        type="time"
-        value={time}
-        onChange={(e) => setTime(e.target.value)}
-      />
-      <button type="submit" disabled={saving}>
-        Add
-      </button>
-    </form>
-  );
-}

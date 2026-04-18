@@ -30,6 +30,7 @@ export function IntakeLog() {
   // Preserved-through fields owned by the Journal section in Observe.
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [notes, setNotes] = useState("");
+  const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   useEffect(() => {
@@ -44,11 +45,13 @@ export function IntakeLog() {
           setAlcoholAmount(entry.alcohol_amount ?? "");
           setMorningFeeling(entry.morning_feeling);
           setNotes(entry.notes ?? "");
+          setIsWorkDay(entry.is_work_day);
         } else {
           setDrankAlcohol(false);
           setAlcoholAmount("");
           setMorningFeeling("normal");
           setNotes("");
+          setIsWorkDay(null);
         }
       })
       .catch(() => {});
@@ -75,6 +78,7 @@ export function IntakeLog() {
       alcohol_amount: drankAlcohol ? alcoholAmount.trim() || null : null,
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
+      is_work_day: isWorkDay,
     };
     try {
       await submitJournalSupplements(

@@ -195,6 +195,51 @@ def seed_workouts(conn: sqlite3.Connection) -> None:
                 )
 
 
+def seed_nutrition_goals(conn: sqlite3.Connection) -> None:
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    goals = [
+        ("calories_kcal", 2400),
+        ("protein_g", 140),
+        ("carbs_g", 260),
+        ("fat_g", 85),
+        ("fiber_g", 30),
+        ("saturated_fat_g", 25),
+        ("iron_mg", 12),
+        ("magnesium_mg", 400),
+        ("sodium_mg", 2000),
+    ]
+    for key, amount in goals:
+        conn.execute(
+            "INSERT OR IGNORE INTO nutrient_goals (nutrient_key, amount, updated_at) VALUES (?, ?, ?)",
+            (key, amount, now),
+        )
+
+
+def seed_planned_activities(conn: sqlite3.Connection) -> None:
+    existing = conn.execute("SELECT COUNT(*) FROM planned_activities").fetchone()[0]
+    if existing > 0:
+        return
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    today = date.today()
+    plan = [
+        (0, "running", 5000, 30 * 60, "Easy 5k run"),
+        (1, "strength_training", None, 55 * 60, "Push day"),
+        (2, "cycling", 20_000, 60 * 60, "Commute ride"),
+        (3, "running", 8000, 45 * 60, "Tempo 8k"),
+        (4, "yoga", None, 30 * 60, "Mobility"),
+        (5, "strength_training", None, 55 * 60, "Pull day"),
+        (6, "cycling", 40_000, 120 * 60, "Long ride"),
+    ]
+    for offset, sport, dist, dur, note in plan:
+        d = today + timedelta(days=offset)
+        conn.execute(
+            "INSERT INTO planned_activities "
+            "(date, sport_type, target_distance_m, target_duration_sec, notes, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (d.isoformat(), sport, dist, dur, note, now),
+        )
+
+
 def seed_supplements(conn: sqlite3.Connection) -> None:
     rows = [
         ("Vitamin D3", "2000 IU", "morning", 1),
@@ -260,6 +305,8 @@ def main() -> None:
         seed_workouts(conn)
         seed_supplements(conn)
         seed_meals_and_water(conn)
+        seed_nutrition_goals(conn)
+        seed_planned_activities(conn)
         conn.commit()
         print("seed_demo: done", flush=True)
     finally:

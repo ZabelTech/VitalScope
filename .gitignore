@@ -4,6 +4,7 @@ vitalscope.db-journal
 vitalscope.db-wal
 vitalscope.db-shm
 data/
+uploads/
 
 # Secrets & credentials
 .env

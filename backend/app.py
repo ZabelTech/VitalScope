@@ -4,17 +4,20 @@ import asyncio
 import json
 import logging
 import math
+import mimetypes
 import os
 import sqlite3
 import statistics
+import uuid as _uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from backend.plugins import REGISTRY as PLUGIN_REGISTRY, discover as discover_plugins
@@ -24,6 +27,8 @@ DB_PATH = Path(os.environ.get("VITALSCOPE_DB", Path(__file__).parent.parent / "v
 DEMO_MODE = os.environ.get("VITALSCOPE_DEMO") == "1"
 ENV_NAME = os.environ.get("VITALSCOPE_ENV", "dev")
 BUILD_SHA = os.environ.get("VITALSCOPE_SHA", "")
+UPLOADS_DIR = Path(os.environ.get("VITALSCOPE_UPLOADS", DB_PATH.parent / "uploads"))
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="VitalScope API")
 app.add_middleware(
@@ -56,10 +61,15 @@ def ensure_journal_table() -> None:
             drank_alcohol INTEGER NOT NULL,
             alcohol_amount TEXT,
             morning_feeling TEXT NOT NULL,
-            notes TEXT
+            notes TEXT,
+            is_work_day INTEGER
         )
         """
     )
+    # Idempotent ALTER for DBs that predate is_work_day.
+    existing = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
+    if "is_work_day" not in existing:
+        conn.execute("ALTER TABLE journal_entries ADD COLUMN is_work_day INTEGER")
     conn.commit()
     conn.close()
 
@@ -202,6 +212,52 @@ def ensure_nutrition_tables() -> None:
 
 
 ensure_nutrition_tables()
+
+
+def ensure_daily_landing_tables() -> None:
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS nutrient_goals (
+            nutrient_key TEXT PRIMARY KEY,
+            amount       REAL NOT NULL,
+            updated_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS planned_activities (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            date                 TEXT NOT NULL,
+            sport_type           TEXT NOT NULL,
+            target_distance_m    REAL,
+            target_duration_sec  INTEGER,
+            notes                TEXT,
+            created_at           TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_date ON planned_activities(date)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS uploads (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            kind       TEXT NOT NULL CHECK (kind IN ('meal','form')),
+            date       TEXT NOT NULL,
+            filename   TEXT NOT NULL,
+            mime       TEXT NOT NULL,
+            bytes      INTEGER NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
+    conn.commit()
+    conn.close()
+
+
+ensure_daily_landing_tables()
 
 
 # --- Vendor data: tables (write targets for sync plugins) + views (read API) ---
@@ -610,6 +666,7 @@ class JournalEntry(BaseModel):
     alcohol_amount: Optional[str] = None
     morning_feeling: Literal["sleepy", "energetic", "normal", "sick"]
     notes: Optional[str] = None
+    is_work_day: Optional[bool] = None
 
 
 @app.post("/api/journal")
@@ -619,15 +676,16 @@ def upsert_journal(entry: JournalEntry):
         """
         INSERT INTO journal_entries
             (date, created_at, followed_supplements, drank_alcohol,
-             alcohol_amount, morning_feeling, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             alcohol_amount, morning_feeling, notes, is_work_day)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date) DO UPDATE SET
             created_at = excluded.created_at,
             followed_supplements = excluded.followed_supplements,
             drank_alcohol = excluded.drank_alcohol,
             alcohol_amount = excluded.alcohol_amount,
             morning_feeling = excluded.morning_feeling,
-            notes = excluded.notes
+            notes = excluded.notes,
+            is_work_day = excluded.is_work_day
         """,
         (
             entry.date,
@@ -637,6 +695,7 @@ def upsert_journal(entry: JournalEntry):
             entry.alcohol_amount if entry.drank_alcohol else None,
             entry.morning_feeling,
             entry.notes,
+            None if entry.is_work_day is None else int(entry.is_work_day),
         ),
     )
     conn.commit()
@@ -653,6 +712,7 @@ def _row_to_journal(row: sqlite3.Row) -> dict:
         "alcohol_amount": row["alcohol_amount"],
         "morning_feeling": row["morning_feeling"],
         "notes": row["notes"],
+        "is_work_day": None if row["is_work_day"] is None else bool(row["is_work_day"]),
     }
 
 
@@ -1317,6 +1377,137 @@ def date_range():
                 latest = row[1]
     conn.close()
     return {"earliest": earliest, "latest": latest}
+
+
+# --- Nutrition goals ---
+
+class NutritionGoalsBody(BaseModel):
+    goals: dict[str, float]
+
+
+@app.get("/api/nutrition/goals")
+def get_nutrition_goals():
+    conn = get_db()
+    rows = conn.execute("SELECT nutrient_key, amount FROM nutrient_goals").fetchall()
+    conn.close()
+    return {r["nutrient_key"]: r["amount"] for r in rows}
+
+
+@app.put("/api/nutrition/goals")
+def put_nutrition_goals(body: NutritionGoalsBody):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    conn.execute("DELETE FROM nutrient_goals")
+    conn.executemany(
+        "INSERT INTO nutrient_goals (nutrient_key, amount, updated_at) VALUES (?, ?, ?)",
+        [(k, float(v), now) for k, v in body.goals.items()],
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "count": len(body.goals)}
+
+
+# --- Planned activities (read-only in this version) ---
+
+@app.get("/api/planned")
+def list_planned(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, date, sport_type, target_distance_m, target_duration_sec, notes "
+        "FROM planned_activities WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# --- Uploads (meal + form-check images) ---
+
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+@app.post("/api/uploads")
+async def upload_file(
+    kind: Literal["meal", "form"] = Form(...),
+    date: str = Form(...),
+    file: UploadFile = File(...),
+):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="image/* required")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="file too large (max 5 MB)")
+    ext = mimetypes.guess_extension(file.content_type) or ".bin"
+    year, month = date[:4], date[5:7]
+    target_dir = UPLOADS_DIR / year / month
+    target_dir.mkdir(parents=True, exist_ok=True)
+    fname = f"{_uuid.uuid4().hex}{ext}"
+    (target_dir / fname).write_bytes(data)
+    rel = f"{year}/{month}/{fname}"
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO uploads (kind, date, filename, mime, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (kind, date, rel, file.content_type, len(data), now),
+    )
+    upload_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return {"id": upload_id, "kind": kind, "date": date, "filename": rel, "mime": file.content_type, "bytes": len(data), "created_at": now}
+
+
+@app.get("/api/uploads")
+def list_uploads(kind: Optional[Literal["meal", "form"]] = None, date: Optional[str] = None):
+    conn = get_db()
+    clauses, params = [], []
+    if kind:
+        clauses.append("kind = ?")
+        params.append(kind)
+    if date:
+        clauses.append("date = ?")
+        params.append(date)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    rows = conn.execute(
+        f"SELECT id, kind, date, filename, mime, bytes, created_at FROM uploads{where} ORDER BY id DESC",
+        params,
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/uploads/{upload_id}")
+def get_upload(upload_id: int):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT filename, mime FROM uploads WHERE id = ?", (upload_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="upload not found")
+    path = (UPLOADS_DIR / row["filename"]).resolve()
+    # Guard against path traversal by confirming the resolved path is under UPLOADS_DIR.
+    if not str(path).startswith(str(UPLOADS_DIR.resolve())):
+        raise HTTPException(status_code=400, detail="invalid path")
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="file missing on disk")
+    return FileResponse(path, media_type=row["mime"])
+
+
+@app.delete("/api/uploads/{upload_id}")
+def delete_upload(upload_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT filename FROM uploads WHERE id = ?", (upload_id,)).fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="upload not found")
+    path = (UPLOADS_DIR / row["filename"]).resolve()
+    if str(path).startswith(str(UPLOADS_DIR.resolve())) and path.is_file():
+        path.unlink()
+    conn.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
 
 
 # --- Plugins ---

@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { NavBar } from "./components/NavBar";
 import { ActPage } from "./components/ActPage";
+import { DailyPage } from "./components/DailyPage";
 import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
 import { DecidePage } from "./components/DecidePage";
@@ -26,7 +27,8 @@ function App() {
         <NavBar />
         <main>
           <Routes>
-            <Route path="/" element={<ActPage />} />
+            <Route path="/" element={<DailyPage />} />
+            <Route path="/act" element={<ActPage />} />
             <Route path="/observe" element={<ObservePage />} />
             <Route path="/orient" element={<OrientPage />} />
             <Route path="/decide" element={<DecidePage />} />

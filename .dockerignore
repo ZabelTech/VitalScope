@@ -10,6 +10,7 @@ vitalscope.db-journal
 vitalscope.db-wal
 vitalscope.db-shm
 data/
+uploads/
 frontend/node_modules
 frontend/dist
 frontend/.vite

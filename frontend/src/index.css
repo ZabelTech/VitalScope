@@ -79,6 +79,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   align-items: baseline;
   gap: 10px;
   min-width: 0;
+  text-decoration: none;
+  color: inherit;
 }
 
 .navbar-brand h1 {
@@ -1091,6 +1093,216 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   width: 24px;
   height: 24px;
   cursor: pointer;
+}
+
+/* Daily landing — work/off toggle */
+.workday-toggle {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+}
+
+.workday-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.chip {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  border-radius: 999px;
+  padding: 10px 16px;
+  min-height: 40px;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.chip:hover { background: #334155; color: #e2e8f0; }
+.chip-active {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  color: #fff;
+}
+
+/* Daily landing — progress bars (water, nutrition, steps) */
+.progress-bar {
+  width: 100%;
+  height: 6px;
+  background: #0f172a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%;
+  background: #3b82f6;
+  border-radius: 3px;
+  transition: width 0.3s ease-out;
+}
+
+/* Daily landing — water quick log */
+.water-quick-log .water-quick-adds {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0;
+}
+
+.water-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.water-list li {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-top: 1px solid #0f172a;
+  color: #94a3b8;
+  font-size: 0.9rem;
+}
+
+/* Daily landing — auto-ticked checklist */
+.auto-ticked {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.checklist-row {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 12px;
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid #0f172a;
+}
+.checklist-row:last-child { border-bottom: none; }
+
+.tick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #475569;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.tick-on {
+  background: #22c55e;
+  color: #0f172a;
+}
+
+.checklist-title {
+  font-weight: 600;
+  color: #e2e8f0;
+  text-transform: capitalize;
+}
+
+.checklist-sub {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  margin: 2px 0 8px;
+}
+
+/* Daily landing — nutrition today card */
+.nutrition-today .nutrient-progress-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nutrient-progress-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 4px;
+  font-size: 0.9rem;
+  color: #e2e8f0;
+}
+
+.nutrient-progress-val {
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Daily landing — image upload */
+.image-upload {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px;
+  background: #1e293b;
+  border-radius: 12px;
+  min-width: 0;
+}
+
+.image-upload-label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.image-upload input[type="file"] {
+  background: #0f172a;
+  border: 1px dashed #334155;
+  border-radius: 8px;
+  padding: 14px;
+  color: #94a3b8;
+  font-size: 0.95rem;
+}
+
+.image-upload-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .image-upload-list { grid-template-columns: repeat(4, 1fr); }
+}
+
+.image-upload-list li {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+}
+
+.image-upload-list img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.image-upload-list .supplement-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 28px;
+  height: 28px;
+  background: rgba(15, 23, 42, 0.8);
 }
 
 /* Recharts overrides */
