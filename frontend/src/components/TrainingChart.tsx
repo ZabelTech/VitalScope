@@ -131,7 +131,7 @@ export function TrainingChart({ start, end }: Props) {
         </div>
       </div>
 
-      <ResponsiveContainer width="100%" height={320}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={items}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="week_start" tick={{ fontSize: 11 }} />
@@ -143,7 +143,7 @@ export function TrainingChart({ start, end }: Props) {
           <Bar  yAxisId="sessions" dataKey="strong_sessions" name="Strong"  stackId="sessions" fill="#8b5cf6" />
           <Line yAxisId="km"       type="monotone" dataKey="distance_km" name="Distance (km)" stroke="#22c55e" dot={false} />
         </ComposedChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }

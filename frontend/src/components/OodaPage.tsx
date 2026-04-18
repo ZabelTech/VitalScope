@@ -9,10 +9,8 @@ export interface OodaSection {
 }
 
 export function OodaPage({
-  title,
   sections,
 }: {
-  title: string;
   sections: OodaSection[];
 }) {
   const { hash } = useLocation();
@@ -25,9 +23,6 @@ export function OodaPage({
 
   return (
     <div className="ooda-page">
-      <div className="trends-header">
-        <h2>{title}</h2>
-      </div>
       {sections.length > 1 && (
         <nav className="ooda-section-nav">
           {sections.map((s) => (

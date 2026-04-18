@@ -17,7 +17,7 @@ export function StressChart({ start, end }: Props) {
     <div className="chart-section">
       <h2>Stress</h2>
       <MetricCards items={[{ label: "Avg Stress", stats: stats?.avg_stress ?? null }]} />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data ?? []}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -27,7 +27,7 @@ export function StressChart({ start, end }: Props) {
           <Area type="monotone" dataKey="avg_stress" name="Avg Stress" fill="#f97316" fillOpacity={0.3} stroke="#f97316" connectNulls />
           <Area type="monotone" dataKey="max_stress" name="Max Stress" fill="none" stroke="#ef4444" connectNulls />
         </AreaChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }

@@ -6,7 +6,6 @@ import { TrendsPage } from "./TrendsPage";
 export function OrientPage() {
   return (
     <OodaPage
-      title="Orient"
       sections={[
         { id: "trends", label: "Trends", content: <TrendsPage /> },
         { id: "activity", label: "Activity history", content: <ActivityHistory /> },

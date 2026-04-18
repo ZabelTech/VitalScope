@@ -21,7 +21,7 @@ export function HrvChart({ start, end }: Props) {
     <div className="chart-section">
       <h2>Heart Rate Variability</h2>
       <MetricCards items={[{ label: "Weekly Avg HRV", stats: stats?.weekly_avg ?? null, unit: " ms" }]} />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <LineChart data={items}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -34,7 +34,7 @@ export function HrvChart({ start, end }: Props) {
           <Line type="monotone" dataKey="weekly_avg" name="Weekly Avg" stroke="#8b5cf6" dot={false} connectNulls />
           <Line type="monotone" dataKey="last_night_avg" name="Last Night" stroke="#a78bfa" dot={false} connectNulls strokeDasharray="4 4" />
         </LineChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }

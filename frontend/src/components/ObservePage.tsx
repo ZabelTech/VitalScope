@@ -6,7 +6,6 @@ import { TodayMetrics } from "./TodayMetrics";
 export function ObservePage() {
   return (
     <OodaPage
-      title="Observe"
       sections={[
         { id: "metrics", label: "Today's metrics", content: <TodayMetrics /> },
         { id: "journal", label: "Journal", content: <JournalPage /> },

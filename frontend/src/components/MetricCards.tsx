@@ -19,10 +19,10 @@ export function MetricCards({ items }: { items: CardItem[] }) {
         <div key={item.label} className="metric-card-group">
           <div className="metric-card-title">{item.label}</div>
           <div className="metric-card-row">
-            {(["min", "max", "avg", "median", "volatility"] as const).map((key) => (
+            {(["min", "max", "avg", "median"] as const).map((key) => (
               <div key={key} className="metric-card">
                 <div className="metric-card-label">
-                  {key === "volatility" ? "Vol" : key.charAt(0).toUpperCase() + key.slice(1)}
+                  {key.charAt(0).toUpperCase() + key.slice(1)}
                 </div>
                 <div className="metric-card-value">
                   {fmt(item.stats?.[key] ?? null, item.decimals ?? 0)}

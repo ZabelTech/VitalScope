@@ -23,7 +23,7 @@ export function BodyBatteryChart({ start, end }: Props) {
     <div className="chart-section">
       <h2>Body Battery</h2>
       <MetricCards items={[{ label: "Charged", stats: stats?.charged ?? null }]} />
-      <ResponsiveContainer width="100%" height={300}>
+      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <BarChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />
           <XAxis dataKey="date" tick={{ fontSize: 11 }} />
@@ -33,7 +33,7 @@ export function BodyBatteryChart({ start, end }: Props) {
           <Bar dataKey="charged" name="Charged" fill="#22c55e" />
           <Bar dataKey="drained" name="Drained" fill="#ef4444" />
         </BarChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer></div>
     </div>
   );
 }
