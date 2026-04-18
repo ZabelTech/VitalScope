@@ -2,11 +2,13 @@
 
 import asyncio
 import base64
+import hmac
 import json
 import logging
 import math
 import mimetypes
 import os
+import secrets
 import sqlite3
 import statistics
 import uuid as _uuid
@@ -17,9 +19,9 @@ from typing import Any, Literal, Optional
 import anthropic
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from backend.plugins import REGISTRY as PLUGIN_REGISTRY, discover as discover_plugins
@@ -40,13 +42,91 @@ AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 # ANTHROPIC_API_KEY as a Fly secret on the per-PR app.
 AI_AVAILABLE = bool(ANTHROPIC_API_KEY)
 
+# --- Auth (single shared password) ---
+AUTH_PASSWORD = "JohnBoyd"
+AUTH_COOKIE = "vitalscope_auth"
+# Session secret: stable across restarts if VITALSCOPE_SESSION_SECRET is set
+# (which it should be in prod via `flyctl secrets set`). Falls back to a
+# per-process random value in dev, which means restarts invalidate cookies
+# — acceptable for dev.
+SESSION_SECRET = os.environ.get("VITALSCOPE_SESSION_SECRET") or secrets.token_urlsafe(32)
+
+
+def _auth_token() -> str:
+    """Opaque cookie value. HMAC of the session secret so it's unforgeable
+    without the secret, but stable for a given secret so it survives
+    round-trips without server-side session storage."""
+    return hmac.new(SESSION_SECRET.encode(), b"vitalscope.authenticated", "sha256").hexdigest()
+
+
+def _is_authenticated(request: Request) -> bool:
+    return hmac.compare_digest(
+        request.cookies.get(AUTH_COOKIE, ""), _auth_token()
+    )
+
 app = FastAPI(title="VitalScope API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
+    allow_credentials=True,
 )
+
+
+# --- Auth middleware + endpoints ---
+# Any /api/* request other than the small allow-list below requires a valid
+# auth cookie. Static frontend paths are never gated (the login UI has to
+# load). Demo mode stays gated too — the cookie just needs to be set once.
+
+_AUTH_PUBLIC_PATHS = {
+    "/api/login",
+    "/api/logout",
+    "/api/auth/status",
+    "/api/runtime",
+}
+
+
+@app.middleware("http")
+async def auth_gate(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/") and path not in _AUTH_PUBLIC_PATHS:
+        if not _is_authenticated(request):
+            return JSONResponse(
+                {"detail": "not authenticated"}, status_code=401
+            )
+    return await call_next(request)
+
+
+class LoginBody(BaseModel):
+    password: str
+
+
+@app.post("/api/login")
+def login(body: LoginBody, response: Response):
+    if not hmac.compare_digest(body.password, AUTH_PASSWORD):
+        raise HTTPException(status_code=401, detail="wrong password")
+    response.set_cookie(
+        AUTH_COOKIE,
+        _auth_token(),
+        httponly=True,
+        samesite="lax",
+        secure=ENV_NAME == "prod",
+        max_age=60 * 60 * 24 * 30,  # 30 days
+        path="/",
+    )
+    return {"ok": True}
+
+
+@app.post("/api/logout")
+def logout(response: Response):
+    response.delete_cookie(AUTH_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/status")
+def auth_status(request: Request):
+    return {"authenticated": _is_authenticated(request)}
 
 
 @app.get("/api/runtime")
