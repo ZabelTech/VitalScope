@@ -159,7 +159,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           Most health apps stop at observation — they show you the data and leave interpretation to you.
           VitalScope goes further. The Orient phase is cognitive: it interprets, correlates, and
           contextualizes your signals across every domain simultaneously. No human analyst can do
-          this in real time. An AI can.
+          this in real time. An AI can. It's connected to the sum of human knowledge, has an
+          unlimited attention span, and never sleeps.
         </p>
         <div className="hero-ai-grid">
           <div className="hero-ai-card">
