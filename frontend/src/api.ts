@@ -1,4 +1,6 @@
 import type {
+  AiSettings,
+  AiSettingsUpdate,
   BloodworkAnalysisResult,
   BloodworkPanel,
   BloodworkPanelInput,
@@ -537,5 +539,26 @@ export async function runPluginNow(name: string): Promise<{ status: string; name
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {
   const res = await apiFetch(`/api/plugins/${name}/runs?limit=${limit}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- AI settings ---
+
+export async function getAiSettings(): Promise<AiSettings> {
+  const res = await apiFetch("/api/settings/ai");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateAiSettings(body: AiSettingsUpdate): Promise<AiSettings> {
+  const res = await apiFetch("/api/settings/ai", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
   return res.json();
 }

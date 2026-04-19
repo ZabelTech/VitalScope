@@ -59,6 +59,7 @@ _DEFAULT_MODEL_BY_PROVIDER = {
 AI_MODEL = os.environ.get(
     "VITALSCOPE_AI_MODEL", _DEFAULT_MODEL_BY_PROVIDER[AI_PROVIDER]
 )
+AI_EFFORT: str = os.environ.get("VITALSCOPE_AI_EFFORT", "medium")
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
@@ -169,6 +170,70 @@ def runtime_info():
         "ai_available": AI_AVAILABLE,
         "ai_provider": ("demo" if DEMO_MODE else AI_PROVIDER) if AI_AVAILABLE else None,
         "ai_model": ("demo" if DEMO_MODE else AI_MODEL) if AI_AVAILABLE else None,
+    }
+
+
+def _mask_key(k: str | None) -> str | None:
+    if not k:
+        return None
+    return ("*" * (len(k) - 4) + k[-4:]) if len(k) > 4 else "****"
+
+
+@app.get("/api/settings/ai")
+def get_ai_settings(request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    return {
+        "provider": AI_PROVIDER,
+        "model": AI_MODEL,
+        "effort": AI_EFFORT,
+        "anthropic_key_hint": _mask_key(ANTHROPIC_API_KEY),
+        "openai_key_hint": _mask_key(OPENAI_API_KEY),
+        "openrouter_key_hint": _mask_key(OPENROUTER_API_KEY),
+    }
+
+
+class AiSettingsBody(BaseModel):
+    provider: str
+    model: str
+    effort: str = "medium"
+    anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
+    openrouter_api_key: str | None = None
+
+
+@app.put("/api/settings/ai")
+def update_ai_settings(body: AiSettingsBody, request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    if DEMO_MODE:
+        raise HTTPException(status_code=403, detail="AI config is read-only in demo mode")
+    if body.provider not in ("anthropic", "openai", "openrouter"):
+        raise HTTPException(status_code=422, detail=f"Invalid provider: {body.provider!r}")
+    if not body.model.strip():
+        raise HTTPException(status_code=422, detail="model must not be empty")
+    if body.effort not in ("low", "medium", "high"):
+        raise HTTPException(status_code=422, detail=f"Invalid effort: {body.effort!r}")
+    conn = get_db()
+    conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('provider', ?)", (body.provider,))
+    conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('model', ?)", (body.model,))
+    conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('effort', ?)", (body.effort,))
+    if body.anthropic_api_key is not None:
+        conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('anthropic_api_key', ?)", (body.anthropic_api_key,))
+    if body.openai_api_key is not None:
+        conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('openai_api_key', ?)", (body.openai_api_key,))
+    if body.openrouter_api_key is not None:
+        conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('openrouter_api_key', ?)", (body.openrouter_api_key,))
+    conn.commit()
+    conn.close()
+    _load_ai_config_from_db()
+    return {
+        "provider": AI_PROVIDER,
+        "model": AI_MODEL,
+        "effort": AI_EFFORT,
+        "anthropic_key_hint": _mask_key(ANTHROPIC_API_KEY),
+        "openai_key_hint": _mask_key(OPENAI_API_KEY),
+        "openrouter_key_hint": _mask_key(OPENROUTER_API_KEY),
     }
 
 
@@ -509,11 +574,51 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_uploads_date ON genome_uploads(date)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS ai_config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
 
 ensure_daily_landing_tables()
+
+
+def _load_ai_config_from_db() -> None:
+    """Override AI globals with DB-persisted values when env vars are absent."""
+    global AI_PROVIDER, AI_MODEL, AI_EFFORT, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, AI_AVAILABLE, _ai_provider
+    conn = get_db()
+    rows = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ai_config").fetchall()}
+    conn.close()
+    if not rows:
+        return
+    if not os.environ.get("VITALSCOPE_AI_PROVIDER"):
+        raw = rows.get("provider", AI_PROVIDER)
+        if raw in ("anthropic", "openai", "openrouter"):
+            AI_PROVIDER = raw
+    if not os.environ.get("VITALSCOPE_AI_MODEL"):
+        AI_MODEL = rows.get("model") or _DEFAULT_MODEL_BY_PROVIDER[AI_PROVIDER]
+    if not os.environ.get("VITALSCOPE_AI_EFFORT"):
+        raw_effort = rows.get("effort", AI_EFFORT)
+        if raw_effort in ("low", "medium", "high"):
+            AI_EFFORT = raw_effort
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        ANTHROPIC_API_KEY = rows.get("anthropic_api_key", ANTHROPIC_API_KEY)
+    if not os.environ.get("OPENAI_API_KEY"):
+        OPENAI_API_KEY = rows.get("openai_api_key", OPENAI_API_KEY)
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        OPENROUTER_API_KEY = rows.get("openrouter_api_key", OPENROUTER_API_KEY)
+    _key_map = {"anthropic": ANTHROPIC_API_KEY, "openai": OPENAI_API_KEY, "openrouter": OPENROUTER_API_KEY}
+    AI_AVAILABLE = DEMO_MODE or bool(_key_map[AI_PROVIDER])
+    _ai_provider = None
+
+
+_load_ai_config_from_db()
 
 
 # --- Vendor data: tables (write targets for sync plugins) + views (read API) ---
