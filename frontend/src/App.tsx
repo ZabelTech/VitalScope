@@ -7,6 +7,7 @@ import { LoginForm } from "./components/LoginForm";
 import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
 import { DecidePage } from "./components/DecidePage";
+import { HeroPage } from "./components/HeroPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { useRuntime } from "./hooks/useRuntime";
 
@@ -53,6 +54,7 @@ function App() {
             <Route path="/orient" element={<OrientPage />} />
             <Route path="/decide" element={<DecidePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/hero" element={<HeroPage />} />
           </Routes>
         </main>
       </div>
