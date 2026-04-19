@@ -385,14 +385,6 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <div className="hero-privacy-card-title">You Own the Exit</div>
             <p>Your data is a SQLite file. Open it with any client. Export to CSV. Run your own queries. No vendor lock-in. No export limits. No account deletion required to reclaim what was always yours.</p>
           </div>
-          <div className="hero-privacy-card">
-            <div className="hero-privacy-card-title">Medical Decisions Stay With Clinicians</div>
-            <p>VitalScope surfaces patterns and flags anomalies. It does not diagnose. Abnormal bloodwork means a conversation with a doctor — not a self-prescribed protocol from a forum thread.</p>
-          </div>
-          <div className="hero-privacy-card">
-            <div className="hero-privacy-card-title">Correlations Are Not Causation</div>
-            <p>The AI identifies relationships in your data. It cannot prove cause and effect. Treat every AI insight as a hypothesis to test, not a conclusion to blindly act on.</p>
-          </div>
         </div>
       </section>
 
