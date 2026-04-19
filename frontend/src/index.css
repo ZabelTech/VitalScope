@@ -2063,6 +2063,73 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   line-height: 1.6;
 }
 
+/* Genomics */
+
+.hero-genomics-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+@media (min-width: 640px) {
+  .hero-genomics-grid { grid-template-columns: 1fr 1fr; }
+}
+
+@media (min-width: 1024px) {
+  .hero-genomics-grid { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.hero-genomics-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.hero-genomics-card--accent {
+  border-color: #8b5cf6;
+}
+
+.hero-genomics-card-title {
+  font-weight: 600;
+  font-size: 0.875rem;
+  color: #e2e8f0;
+  margin-bottom: 8px;
+}
+
+.hero-genomics-card p {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.hero-genomics-synthesis {
+  background: linear-gradient(135deg, #1e1b4b 0%, #1e293b 100%);
+  border: 1px solid #4c1d95;
+  border-radius: 10px;
+  padding: 28px 32px;
+  margin-top: 8px;
+}
+
+.hero-genomics-synthesis-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #8b5cf6;
+  margin-bottom: 12px;
+}
+
+.hero-genomics-synthesis p {
+  font-size: 0.9375rem;
+  color: #cbd5e1;
+  line-height: 1.7;
+  margin: 0;
+  max-width: 820px;
+}
+
 /* Final CTA */
 
 .hero-final-cta {

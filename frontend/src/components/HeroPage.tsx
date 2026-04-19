@@ -164,6 +164,49 @@ export function HeroPage() {
         </div>
       </section>
 
+      <section className="hero-section hero-genomics">
+        <div className="hero-section-label">The Missing Layer</div>
+        <h2>Measurements tell you where you are. Your genome tells you why — and where you're predisposed to go.</h2>
+        <p className="hero-section-body">
+          Bloodwork and wearable data are phenotype: the live readout of your physiology right now.
+          DNA sequencing is genotype: the blueprint you were born with. Neither is complete without the other.
+          When you overlay genomic variants on top of continuous biometric data and lab panels,
+          population averages stop mattering and your actual biology starts making sense.
+        </p>
+        <div className="hero-genomics-grid">
+          <div className="hero-genomics-card hero-genomics-card--accent">
+            <div className="hero-genomics-card-title">Outlier Bloodwork Explained</div>
+            <p>Persistently elevated LDL despite a clean diet? APOE ε4 carriage changes the entire risk calculus. Chronically low B12 absorption? An MTHFR C677T variant may be why your methylation pathway runs inefficiently. Genomic context turns unexplained lab anomalies into actionable biology.</p>
+          </div>
+          <div className="hero-genomics-card">
+            <div className="hero-genomics-card-title">Nutrigenomics: Eat for Your Genome</div>
+            <p>VDR polymorphisms predict blunted vitamin D response — explaining why your 25(OH)D bloodwork stalls at suboptimal levels despite supplementation. FADS1/FADS2 variants govern omega-3 conversion efficiency, determining whether dietary ALA reaches EPA/DHA or dead-ends. Your macros are guesses until you know the variants that process them.</p>
+          </div>
+          <div className="hero-genomics-card">
+            <div className="hero-genomics-card-title">Performance Genetics + Training Load</div>
+            <p>ACTN3 R577X determines your ratio of fast-twitch to slow-twitch fibre expression — the genetic underpinning of whether your body is wired for power or endurance. Cross that against your actual training volume and HRV trends to stop programming against your own biology and start working with it.</p>
+          </div>
+          <div className="hero-genomics-card">
+            <div className="hero-genomics-card-title">Inflammation &amp; Recovery Genetics</div>
+            <p>CRP and IL-6 variants raise your baseline inflammatory tone — so a "normal" CRP reading for you may still be elevated relative to your own genetic floor. When your HRV dips after a hard week, knowing whether you carry high-inflammation genotypes tells you whether that's adaptation or a warning sign requiring a longer recovery window.</p>
+          </div>
+          <div className="hero-genomics-card">
+            <div className="hero-genomics-card-title">Chronotype &amp; Sleep Architecture</div>
+            <p>PER3 and CLOCK gene variants directly shape circadian period length and sleep pressure dynamics — the genetic reasons why your HRV and sleep stage data look different from the population charts. Stop optimising for an average chronotype when your genome encodes a specific one.</p>
+          </div>
+          <div className="hero-genomics-card">
+            <div className="hero-genomics-card-title">Pharmacogenomics &amp; Supplements</div>
+            <p>CYP450 enzyme variants determine how rapidly you metabolise caffeine, certain supplements, and medications — the difference between a therapeutic dose and an adverse reaction. When your supplement stack and your drug metabolism profile are in the same system, you stop dosing blind.</p>
+          </div>
+        </div>
+        <div className="hero-genomics-synthesis">
+          <div className="hero-genomics-synthesis-label">The Synthesis</div>
+          <p>
+            Most people treat their genome report as a one-time curiosity. VitalScope treats it as a permanent interpretive layer — the context engine that makes every bloodwork panel, every HRV trend, and every performance plateau legible. When genotype and phenotype converge in the same dashboard, you stop playing statistical averages and start playing your actual hand.
+          </p>
+        </div>
+      </section>
+
       <section className="hero-section hero-responsibility">
         <div className="hero-section-label">Greater Power, Greater Responsibility</div>
         <h2>Unified biometric data is powerful. Handle it accordingly.</h2>
