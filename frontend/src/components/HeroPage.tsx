@@ -246,7 +246,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <p>Biohackers, longevity researchers, and quantified-self self-experimenters iterate protocols faster than any product roadmap can absorb them — CGM curves mapped to sleep onset, peptide stacks titrated against bloodwork, n=1 trials run on their own physiology. VitalScope is open source so they can run those experiments here. Fork the plugins, bend the schema, rewrite the AI prompts, publish variants back. The frontier of human performance isn't being shipped by a vendor — it's being iterated on by the people living at the edge of it.</p>
           </div>
         </div>
-        <div className="hero-dr-callout">
+        <div className="hero-genomics-synthesis">
+          <div className="hero-genomics-synthesis-label">The Short Version</div>
           <p>
             VitalScope is the car. OODA is the engine. Crowdsourced intelligence is the fuel.
           </p>
