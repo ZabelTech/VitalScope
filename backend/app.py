@@ -2398,7 +2398,133 @@ async def analyze_form_check_image(body: AnalyzeImageBody):
     return result
 
 
-# --- Orient AI analysis ---
+# --- Bloodwork analysis ---
+
+_BLOODWORK_TOOL = {
+    "name": "record_bloodwork_panel",
+    "description": (
+        "Record analytes from a blood-panel lab report. Copy analyte names exactly "
+        "as they appear. Use value for numeric results, value_text for qualitative "
+        "results like 'Negative'. Prefer null over guessing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "collection_date": {
+                "type": ["string", "null"],
+                "description": "Lab draw date as YYYY-MM-DD, or null if unclear.",
+            },
+            "lab_name": {
+                "type": ["string", "null"],
+                "description": "Clinic or laboratory name as shown on the report.",
+            },
+            "confidence": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "Overall confidence in extraction quality.",
+            },
+            "results": {
+                "type": "array",
+                "description": "One entry per analyte on the report.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "analyte": {"type": "string"},
+                        "value": {"type": ["number", "null"]},
+                        "value_text": {"type": ["string", "null"]},
+                        "unit": {"type": ["string", "null"]},
+                        "reference_low": {"type": ["number", "null"]},
+                        "reference_high": {"type": ["number", "null"]},
+                        "reference_text": {"type": ["string", "null"]},
+                        "flag": {
+                            "type": ["string", "null"],
+                            "enum": ["low", "normal", "high", "critical", None],
+                        },
+                    },
+                    "required": ["analyte"],
+                    "additionalProperties": False,
+                },
+            },
+            "notes": {
+                "type": "string",
+                "description": "Short summary of the panel — highlights anything notable.",
+            },
+        },
+        "required": ["confidence", "results", "notes"],
+        "additionalProperties": False,
+    },
+}
+
+
+@app.post("/api/bloodwork/analyze-upload")
+async def analyze_bloodwork_upload(body: AnalyzeImageBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+    conn = get_db()
+    try:
+        media_b64, mime = _load_upload_media(conn, body.upload_id, "bloodwork")
+    finally:
+        conn.close()
+
+    system_prompt = (
+        "You are extracting structured lab results from a blood panel report. "
+        "Copy analyte names exactly as they appear. Use value for numeric results, "
+        "value_text for qualitative ones. Use null for any reference bound not shown. "
+        "Set flag based on how value compares to the reference range. "
+        "Do not invent analytes that aren't on the page."
+    )
+    user_text = _append_user_context(
+        "Extract every analyte on this lab report into the results array.", body.user_notes
+    )
+
+    payload = await _call_ai_tool(
+        system=system_prompt,
+        user_text=user_text,
+        media_b64=media_b64,
+        mime=mime,
+        tool=_BLOODWORK_TOOL,
+        timeout_sec=BLOODWORK_AI_TIMEOUT_SEC,
+    )
+
+    raw_results = payload.get("results") or []
+    results: list[dict] = []
+    for r in raw_results:
+        if not isinstance(r, dict) or not r.get("analyte"):
+            continue
+        results.append({
+            "analyte": str(r.get("analyte") or "").strip(),
+            "value": _as_float_or_none(r.get("value")),
+            "value_text": r.get("value_text") or None,
+            "unit": r.get("unit") or None,
+            "reference_low": _as_float_or_none(r.get("reference_low")),
+            "reference_high": _as_float_or_none(r.get("reference_high")),
+            "reference_text": r.get("reference_text") or None,
+            "flag": r.get("flag") or None,
+        })
+
+    return {
+        "model": AI_MODEL,
+        "confidence": payload.get("confidence") or "medium",
+        "collection_date": payload.get("collection_date") or None,
+        "lab_name": payload.get("lab_name") or None,
+        "notes": payload.get("notes") or "",
+        "results": results,
+    }
+
+
+def _as_float_or_none(v: Any) -> Optional[float]:
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# --- Orient phase AI analysis ---
 
 _ORIENT_ANALYSIS_TOOL = {
     "name": "record_health_orientation",
@@ -2625,132 +2751,6 @@ async def orient_analyze(body: OrientAnalyzeBody):
         "overall_summary": str(payload.get("overall_summary") or ""),
         "topics": topics,
     }
-
-
-# --- Bloodwork analysis ---
-
-_BLOODWORK_TOOL = {
-    "name": "record_bloodwork_panel",
-    "description": (
-        "Record analytes from a blood-panel lab report. Copy analyte names exactly "
-        "as they appear. Use value for numeric results, value_text for qualitative "
-        "results like 'Negative'. Prefer null over guessing."
-    ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "collection_date": {
-                "type": ["string", "null"],
-                "description": "Lab draw date as YYYY-MM-DD, or null if unclear.",
-            },
-            "lab_name": {
-                "type": ["string", "null"],
-                "description": "Clinic or laboratory name as shown on the report.",
-            },
-            "confidence": {
-                "type": "string",
-                "enum": ["low", "medium", "high"],
-                "description": "Overall confidence in extraction quality.",
-            },
-            "results": {
-                "type": "array",
-                "description": "One entry per analyte on the report.",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "analyte": {"type": "string"},
-                        "value": {"type": ["number", "null"]},
-                        "value_text": {"type": ["string", "null"]},
-                        "unit": {"type": ["string", "null"]},
-                        "reference_low": {"type": ["number", "null"]},
-                        "reference_high": {"type": ["number", "null"]},
-                        "reference_text": {"type": ["string", "null"]},
-                        "flag": {
-                            "type": ["string", "null"],
-                            "enum": ["low", "normal", "high", "critical", None],
-                        },
-                    },
-                    "required": ["analyte"],
-                    "additionalProperties": False,
-                },
-            },
-            "notes": {
-                "type": "string",
-                "description": "Short summary of the panel — highlights anything notable.",
-            },
-        },
-        "required": ["confidence", "results", "notes"],
-        "additionalProperties": False,
-    },
-}
-
-
-@app.post("/api/bloodwork/analyze-upload")
-async def analyze_bloodwork_upload(body: AnalyzeImageBody):
-    if not AI_AVAILABLE:
-        raise HTTPException(
-            status_code=503,
-            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
-        )
-    conn = get_db()
-    try:
-        media_b64, mime = _load_upload_media(conn, body.upload_id, "bloodwork")
-    finally:
-        conn.close()
-
-    system_prompt = (
-        "You are extracting structured lab results from a blood panel report. "
-        "Copy analyte names exactly as they appear. Use value for numeric results, "
-        "value_text for qualitative ones. Use null for any reference bound not shown. "
-        "Set flag based on how value compares to the reference range. "
-        "Do not invent analytes that aren't on the page."
-    )
-    user_text = _append_user_context(
-        "Extract every analyte on this lab report into the results array.", body.user_notes
-    )
-
-    payload = await _call_ai_tool(
-        system=system_prompt,
-        user_text=user_text,
-        media_b64=media_b64,
-        mime=mime,
-        tool=_BLOODWORK_TOOL,
-        timeout_sec=BLOODWORK_AI_TIMEOUT_SEC,
-    )
-
-    raw_results = payload.get("results") or []
-    results: list[dict] = []
-    for r in raw_results:
-        if not isinstance(r, dict) or not r.get("analyte"):
-            continue
-        results.append({
-            "analyte": str(r.get("analyte") or "").strip(),
-            "value": _as_float_or_none(r.get("value")),
-            "value_text": r.get("value_text") or None,
-            "unit": r.get("unit") or None,
-            "reference_low": _as_float_or_none(r.get("reference_low")),
-            "reference_high": _as_float_or_none(r.get("reference_high")),
-            "reference_text": r.get("reference_text") or None,
-            "flag": r.get("flag") or None,
-        })
-
-    return {
-        "model": AI_MODEL,
-        "confidence": payload.get("confidence") or "medium",
-        "collection_date": payload.get("collection_date") or None,
-        "lab_name": payload.get("lab_name") or None,
-        "notes": payload.get("notes") or "",
-        "results": results,
-    }
-
-
-def _as_float_or_none(v: Any) -> Optional[float]:
-    if v is None or v == "":
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
 
 
 # --- Bloodwork panels (CRUD) ---
@@ -3234,6 +3234,20 @@ def _plugin_config_row(name: str) -> Optional[dict]:
     }
 
 
+def _avg_duration_seconds(name: str) -> Optional[float]:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT AVG(CAST(strftime('%s', finished_at) AS REAL) - CAST(strftime('%s', started_at) AS REAL)) "
+        "FROM (SELECT started_at, finished_at FROM plugin_runs "
+        "      WHERE name=? AND status='ok' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 10)",
+        (name,),
+    ).fetchone()
+    conn.close()
+    if row and row[0] is not None:
+        return round(row[0], 1)
+    return None
+
+
 def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
     masked = dict(cfg["params"])
     for spec in plugin.param_schema:
@@ -3255,6 +3269,7 @@ def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
         "last_run_at": cfg["last_run_at"],
         "last_status": cfg["last_status"],
         "last_message": cfg["last_message"],
+        "avg_duration_seconds": _avg_duration_seconds(plugin.name),
     }
 
 
@@ -3268,7 +3283,7 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _run_plugin_sync(name: str) -> None:
+def _run_plugin_sync(name: str, run_id: Optional[int] = None) -> None:
     """Execute a plugin synchronously and record the run. Called from a threadpool."""
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
@@ -3276,14 +3291,15 @@ def _run_plugin_sync(name: str) -> None:
     cfg = _plugin_config_row(name) or {"params": {}}
     params = cfg["params"]
 
-    conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
-        (name, _utcnow()),
-    )
-    run_id = cur.lastrowid
-    conn.commit()
-    conn.close()
+    if run_id is None:
+        conn = get_db()
+        cur = conn.execute(
+            "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+            (name, _utcnow()),
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        conn.close()
 
     ok, message, rows = True, "", None
     try:
@@ -3314,9 +3330,9 @@ def _run_plugin_sync(name: str) -> None:
 _scheduler: Optional[AsyncIOScheduler] = None
 
 
-async def _run_plugin_async(name: str) -> None:
+async def _run_plugin_async(name: str, run_id: Optional[int] = None) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _run_plugin_sync, name)
+    await loop.run_in_executor(None, _run_plugin_sync, name, run_id)
 
 
 def _reload_job(name: str) -> None:
@@ -3414,8 +3430,16 @@ async def run_plugin_now(name: str):
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
-    asyncio.create_task(_run_plugin_async(name))
-    return {"status": "started", "name": name}
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+        (name, _utcnow()),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    asyncio.create_task(_run_plugin_async(name, run_id))
+    return {"status": "started", "name": name, "run_id": run_id}
 
 
 @app.get("/api/plugins/{name}/runs")

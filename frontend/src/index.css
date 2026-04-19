@@ -1095,6 +1095,43 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   cursor: pointer;
 }
 
+.plugin-progress-bar {
+  height: 4px;
+  width: 100%;
+  background: #1e3a5f;
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 0.75rem;
+}
+
+.plugin-progress-bar-inner {
+  height: 100%;
+  width: 35%;
+  background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+  animation: plugin-slide 1.4s ease-in-out infinite;
+}
+
+@keyframes plugin-slide {
+  0%   { transform: translateX(-150%); }
+  100% { transform: translateX(400%); }
+}
+
+.plugin-eta {
+  font-size: 0.82em;
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+}
+
+.plugin-flash-ok {
+  border-color: #22c55e !important;
+  transition: border-color 0.3s ease;
+}
+
+.plugin-flash-error {
+  border-color: #ef4444 !important;
+  transition: border-color 0.3s ease;
+}
+
 /* Daily landing — work/off toggle */
 .workday-toggle {
   display: flex;

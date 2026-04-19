@@ -9,13 +9,13 @@ import type {
   GenomeUpload,
   GenomeUploadInput,
   JournalEntry,
-  OrientAnalysis,
   Meal,
   MealAnalysisResult,
   NutrientDef,
   NutrientCategory,
   NutrientGoals,
   NutritionDailyTotals,
+  OrientAnalysis,
   PlannedActivity,
   Supplement,
   SupplementIntake,
@@ -496,6 +496,7 @@ export interface PluginConfig {
   last_run_at: string | null;
   last_status: string | null;
   last_message: string | null;
+  avg_duration_seconds: number | null;
 }
 
 export interface PluginRun {
@@ -527,9 +528,10 @@ export async function updatePlugin(
   return res.json();
 }
 
-export async function runPluginNow(name: string): Promise<void> {
+export async function runPluginNow(name: string): Promise<{ status: string; name: string; run_id: number }> {
   const res = await apiFetch(`/api/plugins/${name}/run`, { method: "POST" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {
