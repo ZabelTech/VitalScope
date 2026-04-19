@@ -123,7 +123,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           The OODA loop is the fastest decision cycle ever built for moving, adversarial systems under uncertainty.
           Your physiology is exactly that: it never stops, it never stabilises, and
           every intervention arrives into a state that's already different from the one it was
-          designed for. VitalScope rebuilds the loop around you.
+          designed for.
         </p>
         <div className="hero-ooda-grid">
           <div className="hero-ooda-node">
