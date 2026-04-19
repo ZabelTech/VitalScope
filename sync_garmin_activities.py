@@ -143,6 +143,29 @@ def existing_max_start(conn: sqlite3.Connection) -> str | None:
     return row[0]
 
 
+def _extract_activities_list(page) -> list:
+    """Normalise Garmin's activities response to a plain list.
+
+    `garminconnect.Garmin.get_activities()` declares `dict[str, Any] | list[Any]`
+    as its return type, and Garmin has at times returned `{"activityList": [...]}`
+    instead of a bare list. We previously treated anything non-list as
+    "unexpected" and silently `break`ed — the plugin run recorded ok with
+    zero rows written. Normalise both shapes here so a real shape change
+    surfaces as an exception instead of a silent no-op.
+    """
+    if isinstance(page, list):
+        return page
+    if isinstance(page, dict):
+        for key in ("activityList", "activities", "data", "items"):
+            value = page.get(key)
+            if isinstance(value, list):
+                return value
+    raise RuntimeError(
+        f"Unexpected response shape from get_activities: {type(page).__name__}"
+        + (f" with keys {sorted(page.keys())}" if isinstance(page, dict) else "")
+    )
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Sync Garmin Connect activities")
     p.add_argument("--full", action="store_true",
@@ -205,9 +228,7 @@ def main():
                 print(f"\n  Retry failed at offset {start}: {e}")
                 break
 
-        if not isinstance(page, list):
-            print(f"\n  Unexpected response at offset {start}: {type(page).__name__}")
-            break
+        page = _extract_activities_list(page)
         if not page:
             break
 
