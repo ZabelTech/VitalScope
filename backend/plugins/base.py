@@ -13,6 +13,7 @@ class ParamSpec:
     type: ParamType = "text"
     default: Any = None
     required: bool = False
+    env_var: str | None = None
 
 
 @dataclass

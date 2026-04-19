@@ -27,8 +27,8 @@ register(Plugin(
     default_interval_minutes=1440,
     description="Weight and body-composition readings from EufyLife.",
     param_schema=[
-        ParamSpec("email", "Email", "text", required=True),
-        ParamSpec("password", "Password", "secret", required=True),
+        ParamSpec("email", "Email", "text", required=True, env_var="EUFY_EMAIL"),
+        ParamSpec("password", "Password", "secret", required=True, env_var="EUFY_PASSWORD"),
         ParamSpec("days", "Days to keep (blank = 1)", "int"),
         ParamSpec("all_history", "Keep all history", "bool", default=False),
         ParamSpec("customer_id", "Primary customer ID (optional)", "text"),
