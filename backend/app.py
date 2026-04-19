@@ -2699,6 +2699,16 @@ def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
     for spec in plugin.param_schema:
         if spec.type == "secret":
             masked[spec.key] = "***" if cfg["params"].get(spec.key) else ""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT AVG(CAST((julianday(finished_at) - julianday(started_at)) * 86400 AS INTEGER)) AS avg_sec "
+        "FROM (SELECT started_at, finished_at FROM plugin_runs "
+        "WHERE name=? AND status='ok' AND finished_at IS NOT NULL "
+        "ORDER BY id DESC LIMIT 10)",
+        (plugin.name,),
+    ).fetchone()
+    conn.close()
+    avg_duration = round(row["avg_sec"]) if row and row["avg_sec"] is not None else None
     return {
         "name": plugin.name,
         "label": plugin.label,
@@ -2715,6 +2725,8 @@ def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
         "last_run_at": cfg["last_run_at"],
         "last_status": cfg["last_status"],
         "last_message": cfg["last_message"],
+        "avg_duration_seconds": avg_duration,
+        "baseline_first_run_seconds": plugin.baseline_first_run_seconds,
     }
 
 
@@ -2728,7 +2740,7 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _run_plugin_sync(name: str) -> None:
+def _run_plugin_sync(name: str, run_id: Optional[int] = None) -> None:
     """Execute a plugin synchronously and record the run. Called from a threadpool."""
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
@@ -2737,12 +2749,13 @@ def _run_plugin_sync(name: str) -> None:
     params = cfg["params"]
 
     conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
-        (name, _utcnow()),
-    )
-    run_id = cur.lastrowid
-    conn.commit()
+    if run_id is None:
+        cur = conn.execute(
+            "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+            (name, _utcnow()),
+        )
+        run_id = cur.lastrowid
+        conn.commit()
     conn.close()
 
     ok, message, rows = True, "", None
@@ -2774,9 +2787,9 @@ def _run_plugin_sync(name: str) -> None:
 _scheduler: Optional[AsyncIOScheduler] = None
 
 
-async def _run_plugin_async(name: str) -> None:
+async def _run_plugin_async(name: str, run_id: Optional[int] = None) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _run_plugin_sync, name)
+    await loop.run_in_executor(None, _run_plugin_sync, name, run_id)
 
 
 def _reload_job(name: str) -> None:
@@ -2874,8 +2887,17 @@ async def run_plugin_now(name: str):
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
-    asyncio.create_task(_run_plugin_async(name))
-    return {"status": "started", "name": name}
+    started_at = _utcnow()
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+        (name, started_at),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    asyncio.create_task(_run_plugin_async(name, run_id))
+    return {"status": "started", "name": name, "run_id": run_id, "started_at": started_at}
 
 
 @app.get("/api/plugins/{name}/runs")

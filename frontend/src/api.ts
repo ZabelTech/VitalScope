@@ -440,6 +440,8 @@ export interface PluginConfig {
   last_run_at: string | null;
   last_status: string | null;
   last_message: string | null;
+  avg_duration_seconds: number | null;
+  baseline_first_run_seconds: number;
 }
 
 export interface PluginRun {
@@ -471,9 +473,15 @@ export async function updatePlugin(
   return res.json();
 }
 
-export async function runPluginNow(name: string): Promise<void> {
+export interface PluginRunStarted {
+  run_id: number;
+  started_at: string;
+}
+
+export async function runPluginNow(name: string): Promise<PluginRunStarted> {
   const res = await apiFetch(`/api/plugins/${name}/run`, { method: "POST" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {

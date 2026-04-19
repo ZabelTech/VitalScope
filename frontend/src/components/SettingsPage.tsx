@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   listPlugins,
   listPluginRuns,
@@ -65,6 +65,21 @@ export function SettingsPage() {
   );
 }
 
+interface ActiveRun {
+  runId: number;
+  startedAt: Date;
+  estimatedSeconds: number;
+}
+
+function formatEta(startedAt: Date, estimatedSeconds: number): string {
+  const elapsed = (Date.now() - startedAt.getTime()) / 1000;
+  const remaining = estimatedSeconds - elapsed;
+  if (remaining <= 5) return "almost done…";
+  const mins = Math.floor(remaining / 60);
+  const secs = Math.floor(remaining % 60);
+  return mins > 0 ? `~${mins}m ${secs}s remaining` : `~${secs}s remaining`;
+}
+
 function PluginCard({
   plugin,
   onChanged,
@@ -78,6 +93,10 @@ function PluginCard({
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [runs, setRuns] = useState<PluginRun[]>([]);
+  const [activeRun, setActiveRun] = useState<ActiveRun | null>(null);
+  const [etaDisplay, setEtaDisplay] = useState<string>("");
+  const [flashStatus, setFlashStatus] = useState<"ok" | "error" | null>(null);
+  const stopRef = useRef(false);
 
   async function loadRuns() {
     try {
@@ -90,6 +109,46 @@ function PluginCard({
   useEffect(() => {
     loadRuns();
   }, [plugin.name, plugin.last_run_at]);
+
+  useEffect(() => {
+    if (!activeRun) return;
+    stopRef.current = false;
+
+    setEtaDisplay(formatEta(activeRun.startedAt, activeRun.estimatedSeconds));
+
+    const etaTimer = setInterval(() => {
+      if (stopRef.current) return;
+      setEtaDisplay(formatEta(activeRun.startedAt, activeRun.estimatedSeconds));
+    }, 1000);
+
+    const pollTimer = setInterval(async () => {
+      if (stopRef.current) return;
+      try {
+        const recent = await listPluginRuns(plugin.name, 10);
+        const run = recent.find((r) => r.id === activeRun.runId);
+        if (run && run.finished_at !== null) {
+          stopRef.current = true;
+          clearInterval(etaTimer);
+          clearInterval(pollTimer);
+          setActiveRun(null);
+          setFlashStatus(run.status === "ok" ? "ok" : "error");
+          setTimeout(() => {
+            setFlashStatus(null);
+            onChanged();
+            loadRuns();
+          }, 1500);
+        }
+      } catch {
+        // ignore transient poll errors
+      }
+    }, 2000);
+
+    return () => {
+      stopRef.current = true;
+      clearInterval(etaTimer);
+      clearInterval(pollTimer);
+    };
+  }, [activeRun]);
 
   async function handleSave() {
     setSaving(true);
@@ -112,12 +171,13 @@ function PluginCard({
   async function handleRun() {
     setSaveMsg(null);
     try {
-      await runPluginNow(plugin.name);
-      setSaveMsg("Started — refresh in a moment");
-      setTimeout(() => {
-        onChanged();
-        loadRuns();
-      }, 2000);
+      const { run_id, started_at } = await runPluginNow(plugin.name);
+      const estimatedSeconds = plugin.avg_duration_seconds ?? plugin.baseline_first_run_seconds;
+      setActiveRun({
+        runId: run_id,
+        startedAt: new Date(started_at),
+        estimatedSeconds,
+      });
     } catch (e) {
       setSaveMsg(`Error: ${e}`);
     }
@@ -127,8 +187,13 @@ function PluginCard({
     setParams((prev) => ({ ...prev, [key]: value }));
   }
 
+  const busy = saving || activeRun !== null;
+
   return (
-    <section className="card" style={{ padding: "1rem", margin: "1rem 0" }}>
+    <section
+      className={`card${flashStatus ? ` card-flash-${flashStatus}` : ""}`}
+      style={{ padding: "1rem", margin: "1rem 0" }}
+    >
       <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
         <div>
           <h3 style={{ margin: 0 }}>{plugin.label}</h3>
@@ -147,6 +212,13 @@ function PluginCard({
           Enabled
         </label>
       </header>
+
+      {activeRun && (
+        <div className="plugin-progress">
+          <div className="plugin-progress-bar" />
+          <span className="plugin-eta">{etaDisplay || "estimating…"}</span>
+        </div>
+      )}
 
       <div style={{ display: "grid", gap: "0.75rem", margin: "1rem 0" }}>
         <label style={{ display: "flex", flexDirection: "column" }}>
@@ -169,11 +241,11 @@ function PluginCard({
       </div>
 
       <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-        <button onClick={handleSave} disabled={saving}>
+        <button onClick={handleSave} disabled={busy}>
           {saving ? "Saving…" : "Save"}
         </button>
-        <button onClick={handleRun} disabled={saving}>
-          Run now
+        <button onClick={handleRun} disabled={busy}>
+          {activeRun ? "Running…" : "Run now"}
         </button>
         {saveMsg && <span style={{ opacity: 0.8 }}>{saveMsg}</span>}
       </div>
@@ -188,6 +260,11 @@ function PluginCard({
             </>
           ) : (
             "never"
+          )}
+          {plugin.avg_duration_seconds !== null && (
+            <span style={{ marginLeft: "0.75rem", opacity: 0.6 }}>
+              (avg {plugin.avg_duration_seconds}s)
+            </span>
           )}
         </div>
         {runs.length > 0 && (

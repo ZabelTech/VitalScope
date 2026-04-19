@@ -20,6 +20,7 @@ register(Plugin(
     label="Strong — Workouts",
     default_interval_minutes=720,
     description="Strength training workouts from the Strong app.",
+    baseline_first_run_seconds=180,
     param_schema=[
         ParamSpec("email", "Email", "text", required=True),
         ParamSpec("password", "Password", "secret", required=True),

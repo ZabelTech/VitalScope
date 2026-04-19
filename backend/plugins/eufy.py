@@ -26,6 +26,7 @@ register(Plugin(
     label="EufyLife — Body Composition",
     default_interval_minutes=1440,
     description="Weight and body-composition readings from EufyLife.",
+    baseline_first_run_seconds=120,
     param_schema=[
         ParamSpec("email", "Email", "text", required=True),
         ParamSpec("password", "Password", "secret", required=True),

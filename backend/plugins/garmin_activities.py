@@ -24,6 +24,7 @@ register(Plugin(
     label="Garmin Connect — Activities",
     default_interval_minutes=720,
     description="Workout and activity history from Garmin.",
+    baseline_first_run_seconds=300,
     param_schema=[
         ParamSpec("email", "Email", "text", required=True),
         ParamSpec("password", "Password", "secret", required=True),

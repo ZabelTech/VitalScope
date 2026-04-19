@@ -30,6 +30,7 @@ class Plugin:
     param_schema: list[ParamSpec]
     run_fn: Callable[[dict], RunResult]
     description: str = ""
+    baseline_first_run_seconds: int = 300
 
     def run(self, params: dict) -> RunResult:
         return self.run_fn(params)
