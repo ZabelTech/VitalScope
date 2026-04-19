@@ -121,7 +121,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <h2>Observe. Orient. Decide. Act. Boyd's loop — turned inward.</h2>
         <p className="hero-section-body">
           The OODA loop is the fastest decision cycle ever built for moving, adversarial systems under uncertainty.
-          Your physiology is exactly that kind of system: it never stops, it never stabilises, and
+          Your physiology is exactly that: it never stops, it never stabilises, and
           every intervention arrives into a state that's already different from the one it was
           designed for. VitalScope rebuilds the loop around you.
         </p>
