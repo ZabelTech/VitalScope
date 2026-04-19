@@ -1064,7 +1064,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 .card input[type="text"],
 .card input[type="password"],
-.card input[type="number"] {
+.card input[type="number"],
+.card select {
   background: #0f172a;
   border: 1px solid #334155;
   border-radius: 8px;
@@ -1074,6 +1075,15 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   width: 100%;
   font-family: inherit;
   font-size: 16px;
+}
+
+.card select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%2394a3b8' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 36px;
+  cursor: pointer;
 }
 
 .card button {
