@@ -317,7 +317,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-privacy">
-        <div className="hero-section-label">Data Sovereignty</div>
+        <div className="hero-section-label">Great Power, Greater Responsibility: Data Sovereignty</div>
         <h2>No single stream is sensitive. Combined, they're a high-resolution portrait of you.</h2>
         <p className="hero-section-body">
           An HRV number on its own is noise. A page of lab ranges is noise. Your sleep curve,
