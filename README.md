@@ -231,6 +231,10 @@ python3 sync_eufy.py
 
 Every pull request gets an ephemeral Fly.io app at `https://vitalscope-pr-<N>.fly.dev`, provisioned by `.github/workflows/preview-deploy.yml` and torn down when the PR closes. Previews run with `VITALSCOPE_DEMO=1` — the scheduler is off, plugin credentials are inaccessible, and the SQLite file is reseeded from `seed_demo.py` on every boot so no real health data ever leaves this machine.
 
+## Claude-on-issues automation
+
+Mentioning `@claude` in a GitHub issue runs `.github/workflows/claude.yml`, which has Claude push its work to a `claude/issue-<N>-<timestamp>` branch. `.github/workflows/claude-auto-open-pr.yml` then watches pushes to any `claude/issue-*` branch and opens a PR against `main` (if one isn't already open), linking back to the originating issue via `Closes #N`. The PR title is taken from the latest commit subject.
+
 ## Automatic merge-conflict resolution
 
 When `main` moves, `.github/workflows/claude-resolve-conflicts.yml` scans open PRs, finds any whose GitHub `mergeable` status is `CONFLICTING`, and dispatches Claude Code to merge `main` in and resolve the conflicts. Claude pushes the merge commit back to the PR branch and comments on the PR summarising which files it touched. Fork PRs are skipped (no write access); ambiguous conflicts are left alone with a comment explaining what a human needs to decide. Trigger it manually for a single PR with `workflow_dispatch`.
