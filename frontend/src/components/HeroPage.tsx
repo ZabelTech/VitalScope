@@ -32,15 +32,15 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-section-label">The Broken Ecosystem</div>
         <h2>Your health data is fragmented, monetized, and stuck in the past.</h2>
         <p className="hero-section-body">
-          You wear a fitness wearable. You log your lifts in a gym tracker. You weigh yourself every morning.
-          But your wearable doesn't talk to your gym tracker. Your gym tracker doesn't talk to your smart scale.
+          You wear a fitness wearable. You log your lifts in a gym tracker. You weigh yourself every morning. You track what you eat.
+          But your wearable doesn't talk to your gym tracker. Your gym tracker doesn't talk to your food tracker or your smart scale.
           Your scale phones home to a server in Shenzhen. None of it gives you a
           complete picture — and none of it actually belongs to you.
         </p>
         <div className="hero-problem-grid">
           <div className="hero-problem-item">
             <div className="hero-problem-heading">Data Fragmentation</div>
-            <p>Heart rate in one app. PRs in another. Body composition somewhere else. Insight nowhere.</p>
+            <p>Heart rate in one app. PRs in another. Body composition somewhere else. Bloodwork in a separate portal. DNA data siloed in yet another system. Insight nowhere.</p>
           </div>
           <div className="hero-problem-item">
             <div className="hero-problem-heading">Rigid, Inflexible Analysis</div>
@@ -52,7 +52,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
           <div className="hero-problem-item">
             <div className="hero-problem-heading">Static Plans, No Feedback Loop</div>
-            <p>A PDF program written for a generic human, with zero feedback from your actual physiology. You adapt. Your plan doesn't. That gap is costing you results.</p>
+            <p>A program designed for a generic human, with zero feedback from your actual physiology. You adapt. Your plan doesn't. That gap is costing you results.</p>
           </div>
           <div className="hero-problem-item">
             <div className="hero-problem-heading">You Are the Product</div>
@@ -67,7 +67,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
 
       <section className="hero-section hero-deadreckoning">
         <div className="hero-section-label">Why Stale Data Kills</div>
-        <h2>Dead reckoning works in open ocean. In a dogfight — or inside your own biology — it gets you killed.</h2>
+        <h2>Dead reckoning works in open ocean. In a fighter jet dogfight — or inside your own biology — it gets you killed.</h2>
         <p className="hero-section-body">
           Dead reckoning is the practice of estimating your current position from a last known fix,
           advancing it using assumed speed and heading. For centuries it was the best sailors had.
@@ -80,14 +80,10 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
               Two aircraft are engaged at a combined closing speed above 1,000 mph.
               The enemy's position from three seconds ago is irrelevant — they've already altered
               heading, bled energy, and rolled out of your firing cone. If you shoot at where
-              your mental model says they <em>should</em> be, you miss clean. The 1–2 seconds
-              it takes to correct that model is the window they need to lock a firing solution
-              on you. You don't get a second chance to update the picture.
+              your mental model says they <em>should</em> be, you miss clean.
             </p>
             <p>
-              Colonel John Boyd flew against every student at Nellis in under forty seconds — not
-              because he was faster, but because he could cycle his situational model faster than
-              his opponent could maintain theirs. The pilot flying on stale data wasn't just
+              The pilot flying on stale data wasn't just
               inaccurate; they were acting on a world that had already ceased to exist.
             </p>
           </div>
@@ -114,7 +110,9 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </div>
         <div className="hero-dr-callout">
           <p>
-            Boyd's insight was not that you need more data — it was that you need to cycle your
+            Colonel John Boyd flew against every student at Nellis in under forty seconds — not
+            because he was faster, but because he could cycle his situational model faster than
+            his opponent could maintain theirs. Boyd's insight was not that you need more data — it was that you need to cycle your
             observation and orientation faster than the environment changes. In the air, that is
             measured in seconds. In your biology, it is measured in days and weeks. The principle
             is identical: the pilot — or the athlete, or the person managing their own health —
@@ -177,8 +175,12 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <p>Photograph your plate. AI identifies macros, micronutrients, and bioactives — then cross-references against your supplement stack and daily targets to surface real nutritional gaps.</p>
           </div>
           <div className="hero-ai-card">
-            <div className="hero-ai-card-title">Form Assessment</div>
-            <p>Record a lift. AI analyzes movement mechanics, flags technique drift under fatigue, and builds a longitudinal record of your form quality over weeks and months of training.</p>
+            <div className="hero-ai-card-title">Visual Assessment</div>
+            <p>Photograph yourself. The AI analyses your appearance to assess visible physical indicators — estimated BMI, water retention, and other visually noticeable vitals — and builds a longitudinal record across weeks and months of tracking.</p>
+          </div>
+          <div className="hero-ai-card">
+            <div className="hero-ai-card-title">DNA Sequencing Analysis</div>
+            <p>Upload your raw genome file. AI maps your variants against performance, nutrition, recovery, and metabolic pathways — translating genetic data into context that makes every other metric in your dashboard make sense.</p>
           </div>
           <div className="hero-ai-card">
             <div className="hero-ai-card-title">Cross-Domain Correlation</div>
@@ -204,7 +206,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <div className="hero-source-metrics">
               Heart rate · HRV · Sleep architecture · Stress score · Body battery · Steps · VO2 max · Activities
             </div>
-            <p>Continuous intraday time-series plus nightly summaries. Always re-fetches the last 48 hours because your overnight physiology is still being written at sync time.</p>
+            <p>Continuous intraday time-series plus nightly summaries. Always re-fetches recent data because your overnight physiology is still being written at sync time.</p>
           </div>
           <div className="hero-source-card">
             <div className="hero-source-name">Gym Tracker</div>
@@ -235,26 +237,12 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <h2>Connect any data source. The plugin architecture was built for it.</h2>
         <p className="hero-section-body">
           VitalScope ships with connectors for the most popular health platforms,
-          but the plugin system is open. Every data source is a self-contained plugin:
-          a sync script that writes to SQLite plus a lightweight wrapper that schedules it,
-          passes credentials, and records every run. Nothing hardwired. Nothing locked.
+          but the plugin system is open. Nothing hardwired. Nothing locked.
         </p>
         <div className="hero-plugins-grid">
           <div className="hero-plugin-card">
             <div className="hero-plugin-card-title">Bring Your Own Source</div>
             <p>Write a sync script for any platform with an API or data export. Implement two methods, register the plugin, and your new data source flows into the same dashboard, the same charts, and the same AI correlation engine as every built-in connector.</p>
-          </div>
-          <div className="hero-plugin-card">
-            <div className="hero-plugin-card-title">Incremental by Default</div>
-            <p>Every plugin fetches only new data on each run — querying the last recorded timestamp and syncing forward. Full resyncs are opt-in via a single flag. Your database stays lean and your syncs stay fast regardless of how many sources you've wired in.</p>
-          </div>
-          <div className="hero-plugin-card">
-            <div className="hero-plugin-card-title">Scheduled & Audited</div>
-            <p>The scheduler runs every registered plugin on its configured interval. Every run — success or failure — is recorded: what ran, when, how long, and what it returned. You always know the state of your data pipeline without having to check.</p>
-          </div>
-          <div className="hero-plugin-card">
-            <div className="hero-plugin-card-title">Credentials You Control</div>
-            <p>Plugin credentials live in environment variables, never in the database. Token caches stay on your own machine. Rotate a credential and the next sync picks it up automatically — no config files to hunt down, no dashboard UI to re-authorise.</p>
           </div>
         </div>
       </section>
@@ -357,7 +345,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-responsibility">
-        <div className="hero-section-label">Greater Power, Greater Responsibility</div>
+        <div className="hero-section-label">Great Power, Greater Responsibility</div>
         <h2>Unified biometric data is powerful. Handle it accordingly.</h2>
         <p className="hero-section-body">
           Combining heart rate variability, body composition, sleep architecture, bloodwork panels, and
@@ -366,16 +354,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </p>
         <div className="hero-responsibility-grid">
           <div className="hero-responsibility-item">
-            <div className="hero-responsibility-heading">Medical Decisions Stay With Clinicians</div>
-            <p>VitalScope surfaces patterns and flags anomalies. It does not diagnose. Abnormal bloodwork means a conversation with a doctor — not a self-prescribed protocol from a forum thread.</p>
-          </div>
-          <div className="hero-responsibility-item">
-            <div className="hero-responsibility-heading">Correlations Are Not Causation</div>
-            <p>The AI identifies relationships in your data. It cannot prove cause and effect. Treat every AI insight as a hypothesis to test, not a conclusion to blindly act on.</p>
-          </div>
-          <div className="hero-responsibility-item">
-            <div className="hero-responsibility-heading">Access Control Is Non-Negotiable</div>
-            <p>Your instance must be behind authentication. If you self-host on a home server or VPS, your security posture must be commensurate with the sensitivity of what's inside.</p>
+            <div className="hero-responsibility-heading">DNA Sequencing Is Permanent</div>
+            <p>Your genome cannot be changed. Uploading and analysing DNA data is an irreversible act with lifelong implications — for insurance, employment, and family members who share your variants. Understand what you are storing and who can access it before you upload.</p>
           </div>
         </div>
       </section>
@@ -404,6 +384,18 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <div className="hero-privacy-card">
             <div className="hero-privacy-card-title">You Own the Exit</div>
             <p>Your data is a SQLite file. Open it with any client. Export to CSV. Run your own queries. No vendor lock-in. No export limits. No account deletion required to reclaim what was always yours.</p>
+          </div>
+          <div className="hero-privacy-card">
+            <div className="hero-privacy-card-title">Medical Decisions Stay With Clinicians</div>
+            <p>VitalScope surfaces patterns and flags anomalies. It does not diagnose. Abnormal bloodwork means a conversation with a doctor — not a self-prescribed protocol from a forum thread.</p>
+          </div>
+          <div className="hero-privacy-card">
+            <div className="hero-privacy-card-title">Correlations Are Not Causation</div>
+            <p>The AI identifies relationships in your data. It cannot prove cause and effect. Treat every AI insight as a hypothesis to test, not a conclusion to blindly act on.</p>
+          </div>
+          <div className="hero-privacy-card">
+            <div className="hero-privacy-card-title">Access Control Is Non-Negotiable</div>
+            <p>Your instance must be behind authentication. If you self-host on a home server or VPS, your security posture must be commensurate with the sensitivity of what's inside.</p>
           </div>
         </div>
       </section>
