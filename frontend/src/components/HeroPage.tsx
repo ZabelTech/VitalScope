@@ -393,10 +393,6 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <div className="hero-privacy-card-title">Correlations Are Not Causation</div>
             <p>The AI identifies relationships in your data. It cannot prove cause and effect. Treat every AI insight as a hypothesis to test, not a conclusion to blindly act on.</p>
           </div>
-          <div className="hero-privacy-card">
-            <div className="hero-privacy-card-title">Access Control Is Non-Negotiable</div>
-            <p>Your instance must be behind authentication. If you self-host on a home server or VPS, your security posture must be commensurate with the sensitivity of what's inside.</p>
-          </div>
         </div>
       </section>
 
