@@ -250,7 +250,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <div className="hero-genomics-synthesis-label">The Short Version</div>
           <p>
             VitalScope is the car. OODA is the engine. Crowdsourced intelligence is the fuel.
-            The driver is the person who refuses to outsource their own biology to doctors and
+            The driver is the person who refuses to outsource their own destiny to doctors and
             academics operating on decades-old knowledge under artificial regulation.
           </p>
         </div>
