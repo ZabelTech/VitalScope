@@ -241,6 +241,10 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <div className="hero-plugin-card-title">Bring Your Own Source</div>
             <p>Write a sync script for any platform with an API or data export. Implement two methods, register the plugin, and your new data source flows into the same dashboard, the same charts, and the same AI correlation engine as every built-in connector.</p>
           </div>
+          <div className="hero-plugin-card">
+            <div className="hero-plugin-card-title">Forked at the Forefront of Human Evolution</div>
+            <p>Biohackers, longevity researchers, and quantified-self self-experimenters iterate protocols faster than any product roadmap can absorb them — CGM curves mapped to sleep onset, peptide stacks titrated against bloodwork, n=1 trials run on their own physiology. VitalScope is open source so they can run those experiments here. Fork the plugins, bend the schema, rewrite the AI prompts, publish variants back. The frontier of human performance isn't being shipped by a vendor — it's being iterated on by the people living at the edge of it.</p>
+          </div>
         </div>
       </section>
 
