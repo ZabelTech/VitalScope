@@ -114,6 +114,7 @@ Every sync script must:
 - **Strong auth is JWT with 20 min TTL.** `sync_strong.py` handles refresh via `/auth/login/refresh`.
 - **Strong set types**: weight cells are `BARBELL_WEIGHT`, `DUMBBELL_WEIGHT`, `MACHINE_WEIGHT`, etc. — not just `WEIGHT`. The parser matches any `*_WEIGHT` cellType.
 - **Garmin Connect 429s** on login frequently. The `garminconnect` library retries internally; don't panic if you see `mobile+cffi returned 429` on first login — it usually succeeds on the next attempt.
+- **`client.get_activities()` can return a dict or a list.** The upstream type hint is `dict[str, Any] | list[Any]`; Garmin has wrapped the response in `{"activityList": [...]}` at times. `sync_garmin_activities.py` normalises both shapes via `_extract_activities_list` and raises on anything else, because the previous "silently break on non-list" path meant the plugin recorded status=ok with zero rows written.
 - **SQLite ALTER TABLE is limited.** When you change a table schema in a sync script, drop & recreate rather than trying to `ALTER`.
 - **Backend's `strftime('%Y-%W', ...)`** must be escaped as `'%%Y-%%W'` inside an f-string or Python `%` formatting will eat the percents.
 - **FastAPI path routing order matters**: `/api/workouts/{workout_id}` must be registered *after* `/api/workouts/stats`, `/api/workouts/weekly-volume`, etc., or the more specific routes get matched by the `{workout_id}` variable.
