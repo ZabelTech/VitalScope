@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import gzip
 import hmac
 import json
 import logging
@@ -60,6 +61,7 @@ AI_MODEL = os.environ.get(
 )
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
+ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
 
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
@@ -369,36 +371,46 @@ def ensure_daily_landing_tables() -> None:
         """
         CREATE TABLE IF NOT EXISTS uploads (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork')),
+            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
             date       TEXT NOT NULL,
             filename   TEXT NOT NULL,
             mime       TEXT NOT NULL,
             bytes      INTEGER NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            meal_id                       INTEGER,
+            body_composition_estimate_id  INTEGER,
+            bloodwork_panel_id            INTEGER,
+            genome_upload_id              INTEGER
         )
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
-    # Migrate pre-bloodwork databases: SQLite can't ALTER a CHECK, so rebuild
-    # the table when the stored schema still has the old kind whitelist.
+    # Migrate databases that predate the genome kind: SQLite can't ALTER a
+    # CHECK, so rebuild the table whenever the kind whitelist is outdated.
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='uploads'").fetchone()
-    if row and "'bloodwork'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
+    if row and "'genome'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
+        _ec = {r[1] for r in conn.execute("PRAGMA table_info(uploads)")}
+        _base = "id, kind, date, filename, mime, bytes, created_at"
+        _extra = [c for c in ("meal_id", "body_composition_estimate_id", "bloodwork_panel_id") if c in _ec]
+        _col_list = _base + (", " + ", ".join(_extra) if _extra else "")
         conn.executescript(
-            """
+            f"""
             PRAGMA foreign_keys = OFF;
             CREATE TABLE uploads_new (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork')),
+                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
                 date       TEXT NOT NULL,
                 filename   TEXT NOT NULL,
                 mime       TEXT NOT NULL,
                 bytes      INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 meal_id                       INTEGER,
-                body_composition_estimate_id  INTEGER
+                body_composition_estimate_id  INTEGER,
+                bloodwork_panel_id            INTEGER,
+                genome_upload_id              INTEGER
             );
-            INSERT INTO uploads_new (id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id)
-                SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id FROM uploads;
+            INSERT INTO uploads_new ({_col_list})
+                SELECT {_col_list} FROM uploads;
             DROP TABLE uploads;
             ALTER TABLE uploads_new RENAME TO uploads;
             CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date);
@@ -413,6 +425,8 @@ def ensure_daily_landing_tables() -> None:
         conn.execute("ALTER TABLE uploads ADD COLUMN body_composition_estimate_id INTEGER")
     if "bloodwork_panel_id" not in existing:
         conn.execute("ALTER TABLE uploads ADD COLUMN bloodwork_panel_id INTEGER")
+    if "genome_upload_id" not in existing:
+        conn.execute("ALTER TABLE uploads ADD COLUMN genome_upload_id INTEGER")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS body_composition_estimates (
@@ -479,6 +493,22 @@ def ensure_daily_landing_tables() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_bloodwork_results_analyte ON bloodwork_results(analyte)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_uploads (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            date             TEXT NOT NULL,
+            source_upload_id INTEGER,
+            variant_count    INTEGER NOT NULL DEFAULT 0,
+            rs_count         INTEGER NOT NULL DEFAULT 0,
+            chromosomes      TEXT,
+            notes            TEXT,
+            created_at       TEXT NOT NULL,
+            FOREIGN KEY (source_upload_id) REFERENCES uploads(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_uploads_date ON genome_uploads(date)")
     conn.commit()
     conn.close()
 
@@ -1658,11 +1688,12 @@ def list_planned(start: Optional[str] = None, end: Optional[str] = None):
 
 MAX_UPLOAD_BYTES_IMAGE = 5 * 1024 * 1024
 MAX_UPLOAD_BYTES_BLOODWORK = 10 * 1024 * 1024
+MAX_UPLOAD_BYTES_GENOME = 50 * 1024 * 1024
 
 
 @app.post("/api/uploads")
 async def upload_file(
-    kind: Literal["meal", "form", "bloodwork"] = Form(...),
+    kind: Literal["meal", "form", "bloodwork", "genome"] = Form(...),
     date: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -1671,6 +1702,12 @@ async def upload_file(
         if not (ct.startswith("image/") or ct == "application/pdf"):
             raise HTTPException(status_code=400, detail="image/* or application/pdf required")
         size_limit = MAX_UPLOAD_BYTES_BLOODWORK
+    elif kind == "genome":
+        if not (ct.startswith("text/") or ct in (
+            "application/octet-stream", "application/gzip", "application/x-gzip",
+        )):
+            raise HTTPException(status_code=400, detail="VCF or VCF.gz file required")
+        size_limit = MAX_UPLOAD_BYTES_GENOME
     else:
         if not ct.startswith("image/"):
             raise HTTPException(status_code=400, detail="image/* required")
@@ -1697,12 +1734,13 @@ async def upload_file(
     return {
         "id": upload_id, "kind": kind, "date": date, "filename": rel,
         "mime": ct, "bytes": len(data), "created_at": now,
-        "meal_id": None, "body_composition_estimate_id": None, "bloodwork_panel_id": None,
+        "meal_id": None, "body_composition_estimate_id": None,
+        "bloodwork_panel_id": None, "genome_upload_id": None,
     }
 
 
 @app.get("/api/uploads")
-def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork"]] = None, date: Optional[str] = None):
+def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork", "genome"]] = None, date: Optional[str] = None):
     conn = get_db()
     clauses, params = [], []
     if kind:
@@ -1713,7 +1751,7 @@ def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork"]] = None, da
         params.append(date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id, bloodwork_panel_id FROM uploads{where} ORDER BY id DESC",
+        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id, bloodwork_panel_id, genome_upload_id FROM uploads{where} ORDER BY id DESC",
         params,
     ).fetchall()
     conn.close()
@@ -1777,6 +1815,16 @@ class AIProvider:
     ) -> dict:
         raise NotImplementedError
 
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        raise NotImplementedError
+
 
 class AnthropicProvider(AIProvider):
     name = "anthropic"
@@ -1821,6 +1869,45 @@ class AnthropicProvider(AIProvider):
                             {"type": "text", "text": user_text},
                         ],
                     }],
+                ),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail=f"Claude timed out after {timeout_sec}s")
+        except anthropic.APIStatusError as e:
+            _ai_logger.warning("Claude API error %s: %s", e.status_code, e.message)
+            raise HTTPException(status_code=502, detail=f"Claude API error: {e.message}")
+        except anthropic.APIConnectionError as e:
+            _ai_logger.warning("Claude connection error: %s", e)
+            raise HTTPException(status_code=502, detail="Claude connection error")
+
+        tool_block = next(
+            (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == tool_name),
+            None,
+        )
+        if tool_block is None:
+            _ai_logger.warning("No tool_use block in Claude response: %s", response.content)
+            raise HTTPException(status_code=502, detail="Claude did not return a tool_use block")
+        return tool_block.input or {}
+
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        tool_name = tool["name"]
+        try:
+            response = await asyncio.wait_for(
+                self._client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    system=system,
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": tool_name},
+                    messages=[{"role": "user", "content": user_text}],
                 ),
                 timeout=timeout_sec,
             )
@@ -1893,6 +1980,59 @@ class OpenAIProvider(AIProvider):
                     },
                 ],
             },
+        ]
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=[openai_tool],
+                    tool_choice={"type": "function", "function": {"name": tool_name}},
+                    parallel_tool_calls=False,
+                    max_tokens=4096,
+                ),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail=f"{self.name} timed out after {timeout_sec}s")
+        except self._openai.APIStatusError as e:
+            _ai_logger.warning("%s API error %s: %s", self.name, e.status_code, e.message)
+            raise HTTPException(status_code=502, detail=f"{self.name} API error: {e.message}")
+        except self._openai.APIConnectionError as e:
+            _ai_logger.warning("%s connection error: %s", self.name, e)
+            raise HTTPException(status_code=502, detail=f"{self.name} connection error")
+
+        tool_calls = (response.choices[0].message.tool_calls or []) if response.choices else []
+        call = next((c for c in tool_calls if c.function and c.function.name == tool_name), None)
+        if call is None:
+            _ai_logger.warning("No matching tool_call in %s response: %s", self.name, response)
+            raise HTTPException(status_code=502, detail=f"{self.name} did not return a tool call")
+        try:
+            return json.loads(call.function.arguments or "{}")
+        except json.JSONDecodeError as e:
+            _ai_logger.warning("Bad JSON in %s tool_call: %s", self.name, e)
+            raise HTTPException(status_code=502, detail=f"{self.name} returned invalid tool-call JSON")
+
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        tool_name = tool["name"]
+        openai_tool = {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": tool.get("description", ""),
+                "parameters": tool["input_schema"],
+            },
+        }
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_text},
         ]
         try:
             response = await asyncio.wait_for(
@@ -2041,6 +2181,23 @@ async def _call_ai_tool(
         user_text=user_text,
         media_b64=media_b64,
         mime=mime,
+        tool=tool,
+        timeout_sec=timeout_sec if timeout_sec is not None else AI_TIMEOUT_SEC,
+    )
+
+
+async def _call_ai_text_tool(
+    *,
+    system: str,
+    user_text: str,
+    tool: dict,
+    timeout_sec: Optional[int] = None,
+) -> dict:
+    """Run a text-only tool-use call via the configured provider (no image/PDF)."""
+    provider = _get_ai_provider()
+    return await provider.analyze_text_with_tool(
+        system=system,
+        user_text=user_text,
         tool=tool,
         timeout_sec=timeout_sec if timeout_sec is not None else AI_TIMEOUT_SEC,
     )
@@ -2367,6 +2524,235 @@ def _as_float_or_none(v: Any) -> Optional[float]:
         return None
 
 
+# --- Orient phase AI analysis ---
+
+_ORIENT_ANALYSIS_TOOL = {
+    "name": "record_health_orientation",
+    "description": (
+        "Record a structured health orientation summary split into topic areas. "
+        "Each topic should include key insights with evidence context, any alerts "
+        "or concerns, and actionable recommendations."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "overall_summary": {
+                "type": "string",
+                "description": "2-3 sentence big-picture read on current health state.",
+            },
+            "topics": {
+                "type": "array",
+                "description": "Analysis split by health domain.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "enum": ["health", "performance", "recovery", "body_composition"],
+                            "description": "Topic identifier.",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Human-readable topic name.",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "1-2 sentence summary for this topic.",
+                        },
+                        "insights": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Key observations referencing actual data values. Include relevant evidence-based context where applicable.",
+                        },
+                        "alerts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Genuine concerns that warrant attention. Leave empty if nothing is alarming.",
+                        },
+                        "recommendations": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Specific, actionable next steps based on the data.",
+                        },
+                    },
+                    "required": ["id", "label", "summary", "insights", "alerts", "recommendations"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["overall_summary", "topics"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> dict:
+    today = date.today()
+    end_date = today.isoformat()
+    start_date = (today - timedelta(days=window_days)).isoformat()
+    prev_start = (today - timedelta(days=window_days * 2)).isoformat()
+
+    def rows_to_list(rows: list) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    hr = rows_to_list(conn.execute(
+        "SELECT date, resting_hr, avg_7d_resting_hr FROM heart_rate_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    hrv = rows_to_list(conn.execute(
+        "SELECT date, weekly_avg, last_night_avg, "
+        "baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    sleep = rows_to_list(conn.execute(
+        "SELECT date, sleep_score, sleep_score_quality, "
+        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
+        "avg_spo2, avg_sleep_stress "
+        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    stress = rows_to_list(conn.execute(
+        "SELECT date, avg_stress, max_stress FROM stress_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    body_battery = rows_to_list(conn.execute(
+        "SELECT date, charged, drained FROM body_battery_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    steps = rows_to_list(conn.execute(
+        "SELECT date, total_steps, step_goal FROM steps_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    weight = rows_to_list(conn.execute(
+        "SELECT date, weight_kg, body_fat_pct, muscle_mass_kg, bmi "
+        "FROM weight_daily WHERE date BETWEEN ? AND ? "
+        "AND weight_kg IS NOT NULL ORDER BY date",
+        (prev_start, end_date),
+    ).fetchall())
+
+    workouts = rows_to_list(conn.execute(
+        "SELECT w.date, w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date DESC LIMIT 10",
+        (prev_start, end_date),
+    ).fetchall())
+
+    bp = conn.execute(
+        "SELECT id, date, notes FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    bloodwork = None
+    if bp:
+        flagged = rows_to_list(conn.execute(
+            "SELECT analyte, value, value_text, unit, reference_low, reference_high, flag "
+            "FROM bloodwork_results WHERE panel_id = ? AND flag IS NOT NULL AND flag != 'normal' "
+            "ORDER BY sort_order LIMIT 20",
+            (bp["id"],),
+        ).fetchall())
+        bloodwork = {
+            "date": bp["date"],
+            "notes": bp["notes"],
+            "flagged_results": flagged,
+        }
+
+    return {
+        "analysis_date": end_date,
+        "window_days": window_days,
+        "heart_rate": hr,
+        "hrv": hrv,
+        "sleep": sleep,
+        "stress": stress,
+        "body_battery": body_battery,
+        "steps": steps,
+        "weight": weight,
+        "recent_workouts": workouts,
+        "bloodwork": bloodwork,
+    }
+
+
+class OrientAnalyzeBody(BaseModel):
+    window_days: int = 14
+
+
+@app.post("/api/orient/analyze")
+async def orient_analyze(body: OrientAnalyzeBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    conn = get_db()
+    try:
+        metrics = _gather_orient_metrics(conn, window_days=max(7, min(30, body.window_days)))
+    finally:
+        conn.close()
+
+    metrics_json = json.dumps(metrics, indent=2, default=str)
+
+    system_prompt = (
+        "You are a personal health analyst with expertise in cardiovascular physiology, "
+        "sports science, sleep science, and strength training. Interpret the user's "
+        "wearable data and workout logs. Identify meaningful trends and anomalies, "
+        "and provide evidence-based insights — where relevant, cite known research "
+        "findings from your training data (e.g. studies on HRV, sleep stages, training load). "
+        "Be specific: reference actual values from the data rather than giving generic advice. "
+        "Alerts should flag genuine concerns only, not normal day-to-day variation. "
+        "Recommendations must be actionable and grounded in the numbers shown. "
+        "Compare the first half of the window to the second half where this is informative."
+    )
+
+    user_text = (
+        f"Analyse my health data for the {metrics['window_days']}-day window "
+        f"ending {metrics['analysis_date']}. Identify trends, compare recent values "
+        "to earlier in the window, flag anything concerning, and give evidence-based "
+        f"recommendations.\n\nData (JSON):\n{metrics_json}"
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
+        tool=_ORIENT_ANALYSIS_TOOL,
+        timeout_sec=ORIENT_AI_TIMEOUT_SEC,
+    )
+
+    topics = []
+    for t in (payload.get("topics") or []):
+        if not isinstance(t, dict) or not t.get("id"):
+            continue
+        topics.append({
+            "id": str(t.get("id") or ""),
+            "label": str(t.get("label") or t.get("id") or ""),
+            "summary": str(t.get("summary") or ""),
+            "insights": [str(i) for i in (t.get("insights") or []) if i],
+            "alerts": [str(a) for a in (t.get("alerts") or []) if a],
+            "recommendations": [str(r) for r in (t.get("recommendations") or []) if r],
+        })
+
+    return {
+        "model": AI_MODEL,
+        "analysis_date": metrics["analysis_date"],
+        "window_days": metrics["window_days"],
+        "overall_summary": str(payload.get("overall_summary") or ""),
+        "topics": topics,
+    }
+
+
 # --- Bloodwork panels (CRUD) ---
 
 class BloodworkResultIn(BaseModel):
@@ -2498,6 +2884,160 @@ def delete_bloodwork_panel(panel_id: int):
         (panel_id,),
     )
     conn.execute("DELETE FROM bloodwork_panels WHERE id = ?", (panel_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+# --- Genome uploads (VCF parse + CRUD) ---
+
+def _chrom_sort_key(c: str) -> tuple:
+    stripped = c.lstrip("chr").lstrip("Chr")
+    return (0, int(stripped), "") if stripped.isdigit() else (1, 0, stripped)
+
+
+def _parse_vcf(path: Path) -> dict:
+    with open(path, "rb") as _fcheck:
+        is_gz = _fcheck.read(2) == b"\x1f\x8b"
+    open_fn = (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace")) if is_gz else (lambda p: open(p, "rt", encoding="utf-8", errors="replace"))
+    variant_count = 0
+    rs_count = 0
+    chromosomes: set[str] = set()
+    header_found = False
+    with open_fn(path) as fh:
+        for line in fh:
+            if line.startswith("##"):
+                continue
+            if line.startswith("#CHROM"):
+                header_found = True
+                continue
+            parts = line.split("\t", 3)
+            if len(parts) < 3:
+                continue
+            variant_count += 1
+            chrom = parts[0].strip()
+            if chrom:
+                chromosomes.add(chrom)
+            rs_id = parts[2].strip()
+            if rs_id and rs_id != ".":
+                rs_count += 1
+    if not header_found and variant_count == 0:
+        raise ValueError("not a valid VCF file")
+    return {
+        "variant_count": variant_count,
+        "rs_count": rs_count,
+        "chromosomes": sorted(chromosomes, key=_chrom_sort_key),
+    }
+
+
+class GenomeParseBody(BaseModel):
+    upload_id: int
+
+
+class GenomeUploadIn(BaseModel):
+    date: str
+    source_upload_id: Optional[int] = None
+    variant_count: int = 0
+    rs_count: int = 0
+    chromosomes: list[str] = []
+    notes: Optional[str] = None
+
+
+def _row_to_genome_upload(row: sqlite3.Row) -> dict:
+    chroms = json.loads(row["chromosomes"] or "[]")
+    return {
+        "id": row["id"],
+        "date": row["date"],
+        "source_upload_id": row["source_upload_id"],
+        "variant_count": row["variant_count"],
+        "rs_count": row["rs_count"],
+        "chromosomes": chroms,
+        "notes": row["notes"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.post("/api/genome/parse-upload")
+def parse_genome_upload(body: GenomeParseBody):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT kind, filename FROM uploads WHERE id = ?", (body.upload_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="upload not found")
+    if row["kind"] != "genome":
+        raise HTTPException(status_code=400, detail="upload is not a genome file")
+    path = (UPLOADS_DIR / row["filename"]).resolve()
+    if not str(path).startswith(str(UPLOADS_DIR.resolve())) or not path.is_file():
+        raise HTTPException(status_code=404, detail="file missing on disk")
+    try:
+        result = _parse_vcf(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"VCF parse error: {exc}")
+    return result
+
+
+@app.post("/api/genome-uploads")
+def create_genome_upload(body: GenomeUploadIn):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO genome_uploads
+           (date, source_upload_id, variant_count, rs_count, chromosomes, notes, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            body.date, body.source_upload_id, body.variant_count, body.rs_count,
+            json.dumps(body.chromosomes), body.notes, now,
+        ),
+    )
+    genome_id = cur.lastrowid
+    if body.source_upload_id is not None:
+        conn.execute(
+            "UPDATE uploads SET genome_upload_id = ? WHERE id = ? AND kind = 'genome'",
+            (genome_id, body.source_upload_id),
+        )
+    conn.commit()
+    row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
+    conn.close()
+    return _row_to_genome_upload(row)
+
+
+@app.get("/api/genome-uploads")
+def list_genome_uploads(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM genome_uploads WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [_row_to_genome_upload(r) for r in rows]
+
+
+@app.get("/api/genome-uploads/{genome_id}")
+def get_genome_upload(genome_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    return _row_to_genome_upload(row)
+
+
+@app.delete("/api/genome-uploads/{genome_id}")
+def delete_genome_upload(genome_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    conn.execute(
+        "UPDATE uploads SET genome_upload_id = NULL WHERE genome_upload_id = ?", (genome_id,)
+    )
+    conn.execute("DELETE FROM genome_uploads WHERE id = ?", (genome_id,))
     conn.commit()
     conn.close()
     return {"status": "ok"}
@@ -2670,6 +3210,39 @@ def ensure_plugin_tables() -> None:
             "VALUES (?, 0, ?, '{}')",
             (name, plugin.default_interval_minutes),
         )
+
+    # Backfill params from env vars for any param that has an env_var and is currently unset.
+    # Also enable the plugin if all required params are now populated.
+    for name, plugin in PLUGIN_REGISTRY.items():
+        row = conn.execute(
+            "SELECT enabled, params_json FROM plugin_configs WHERE name=?", (name,)
+        ).fetchone()
+        if row is None:
+            continue
+        params = json.loads(row["params_json"] or "{}")
+        changed = False
+        for spec in plugin.param_schema:
+            if spec.env_var and not params.get(spec.key):
+                val = os.environ.get(spec.env_var, "")
+                if val:
+                    params[spec.key] = val
+                    changed = True
+        if changed:
+            all_required_filled = all(
+                params.get(s.key) for s in plugin.param_schema if s.required
+            )
+            new_enabled = 1 if all_required_filled else row["enabled"]
+            conn.execute(
+                "UPDATE plugin_configs SET params_json=?, enabled=? WHERE name=?",
+                (json.dumps(params), new_enabled, name),
+            )
+
+    # Mark any plugin_runs that were still 'running' when the server last stopped.
+    conn.execute(
+        "UPDATE plugin_runs SET status='interrupted', finished_at=? WHERE status='running'",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+
     conn.commit()
     conn.close()
 
@@ -2694,6 +3267,20 @@ def _plugin_config_row(name: str) -> Optional[dict]:
     }
 
 
+def _avg_duration_seconds(name: str) -> Optional[float]:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT AVG(CAST(strftime('%s', finished_at) AS REAL) - CAST(strftime('%s', started_at) AS REAL)) "
+        "FROM (SELECT started_at, finished_at FROM plugin_runs "
+        "      WHERE name=? AND status='ok' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 10)",
+        (name,),
+    ).fetchone()
+    conn.close()
+    if row and row[0] is not None:
+        return round(row[0], 1)
+    return None
+
+
 def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
     masked = dict(cfg["params"])
     for spec in plugin.param_schema:
@@ -2715,6 +3302,7 @@ def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
         "last_run_at": cfg["last_run_at"],
         "last_status": cfg["last_status"],
         "last_message": cfg["last_message"],
+        "avg_duration_seconds": _avg_duration_seconds(plugin.name),
     }
 
 
@@ -2728,7 +3316,7 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _run_plugin_sync(name: str) -> None:
+def _run_plugin_sync(name: str, run_id: Optional[int] = None) -> None:
     """Execute a plugin synchronously and record the run. Called from a threadpool."""
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
@@ -2736,14 +3324,15 @@ def _run_plugin_sync(name: str) -> None:
     cfg = _plugin_config_row(name) or {"params": {}}
     params = cfg["params"]
 
-    conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
-        (name, _utcnow()),
-    )
-    run_id = cur.lastrowid
-    conn.commit()
-    conn.close()
+    if run_id is None:
+        conn = get_db()
+        cur = conn.execute(
+            "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+            (name, _utcnow()),
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        conn.close()
 
     ok, message, rows = True, "", None
     try:
@@ -2774,9 +3363,9 @@ def _run_plugin_sync(name: str) -> None:
 _scheduler: Optional[AsyncIOScheduler] = None
 
 
-async def _run_plugin_async(name: str) -> None:
+async def _run_plugin_async(name: str, run_id: Optional[int] = None) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _run_plugin_sync, name)
+    await loop.run_in_executor(None, _run_plugin_sync, name, run_id)
 
 
 def _reload_job(name: str) -> None:
@@ -2874,8 +3463,16 @@ async def run_plugin_now(name: str):
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
-    asyncio.create_task(_run_plugin_async(name))
-    return {"status": "started", "name": name}
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+        (name, _utcnow()),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    asyncio.create_task(_run_plugin_async(name, run_id))
+    return {"status": "started", "name": name, "run_id": run_id}
 
 
 @app.get("/api/plugins/{name}/runs")

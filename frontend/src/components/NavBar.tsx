@@ -12,6 +12,7 @@ export function NavBar() {
         <NavLink to="/orient">Orient</NavLink>
         <NavLink to="/decide">Decide</NavLink>
         <NavLink to="/act">Act</NavLink>
+        <NavLink to="/hero">About</NavLink>
       </nav>
       <NavLink to="/settings" className="nav-cog" aria-label="Settings">
         <svg

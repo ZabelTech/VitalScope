@@ -5,6 +5,9 @@ import type {
   BodyCompositionEstimate,
   BodyCompositionEstimateInput,
   FormCheckAnalysisResult,
+  GenomeParseResult,
+  GenomeUpload,
+  GenomeUploadInput,
   JournalEntry,
   Meal,
   MealAnalysisResult,
@@ -12,6 +15,7 @@ import type {
   NutrientCategory,
   NutrientGoals,
   NutritionDailyTotals,
+  OrientAnalysis,
   PlannedActivity,
   Supplement,
   SupplementIntake,
@@ -416,6 +420,58 @@ export async function deleteBloodworkPanel(id: number): Promise<void> {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
+// --- Genome uploads ---
+
+export async function parseGenomeUpload(upload_id: number): Promise<GenomeParseResult> {
+  const res = await apiFetch("/api/genome/parse-upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function createGenomeUpload(body: GenomeUploadInput): Promise<GenomeUpload> {
+  const res = await apiFetch("/api/genome-uploads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function listGenomeUploads(start: string, end: string): Promise<GenomeUpload[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/genome-uploads?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteGenomeUpload(id: number): Promise<void> {
+  const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Orient AI analysis ---
+
+export async function analyzeOrient(window_days = 14): Promise<OrientAnalysis> {
+  const res = await apiFetch("/api/orient/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ window_days }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
 // --- Plugins ---
 
 export type PluginParamType = "text" | "secret" | "int" | "bool";
@@ -440,6 +496,7 @@ export interface PluginConfig {
   last_run_at: string | null;
   last_status: string | null;
   last_message: string | null;
+  avg_duration_seconds: number | null;
 }
 
 export interface PluginRun {
@@ -471,9 +528,10 @@ export async function updatePlugin(
   return res.json();
 }
 
-export async function runPluginNow(name: string): Promise<void> {
+export async function runPluginNow(name: string): Promise<{ status: string; name: string; run_id: number }> {
   const res = await apiFetch(`/api/plugins/${name}/run`, { method: "POST" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {

@@ -21,8 +21,8 @@ register(Plugin(
     default_interval_minutes=720,
     description="Strength training workouts from the Strong app.",
     param_schema=[
-        ParamSpec("email", "Email", "text", required=True),
-        ParamSpec("password", "Password", "secret", required=True),
+        ParamSpec("email", "Email", "text", required=True, env_var="STRONG_EMAIL"),
+        ParamSpec("password", "Password", "secret", required=True, env_var="STRONG_PASSWORD"),
         ParamSpec("full_sync", "Full resync", "bool", default=False),
     ],
     run_fn=_run,

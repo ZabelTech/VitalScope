@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   listPlugins,
   listPluginRuns,
@@ -72,12 +72,63 @@ function PluginCard({
   plugin: PluginConfig;
   onChanged: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(true);
   const [enabled, setEnabled] = useState(plugin.enabled);
-  const [interval, setInterval] = useState(plugin.interval_minutes);
+  const [intervalMin, setIntervalMin] = useState(plugin.interval_minutes);
   const [params, setParams] = useState<Record<string, unknown>>(plugin.params);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
   const [runs, setRuns] = useState<PluginRun[]>([]);
+
+  const [activeRunId, setActiveRunId] = useState<number | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const [capturedAvg, setCapturedAvg] = useState<number | null>(null);
+  const [runFlash, setRunFlash] = useState<"ok" | "error" | null>(null);
+  const pollRef = useRef<number | null>(null);
+  const tickRef = useRef<number | null>(null);
+
+  function stopTracking() {
+    if (pollRef.current !== null) { clearInterval(pollRef.current); pollRef.current = null; }
+    if (tickRef.current !== null) { clearInterval(tickRef.current); tickRef.current = null; }
+    setActiveRunId(null);
+    setElapsed(0);
+  }
+
+  function startTracking(runId: number, avg: number | null) {
+    const startedAt = Date.now();
+    setActiveRunId(runId);
+    setElapsed(0);
+    setCapturedAvg(avg);
+
+    tickRef.current = window.setInterval(() => {
+      setElapsed(Math.round((Date.now() - startedAt) / 1000));
+    }, 1000);
+
+    pollRef.current = window.setInterval(async () => {
+      try {
+        const recent = await listPluginRuns(plugin.name, 5);
+        const ourRun = recent.find((r) => r.id === runId);
+        if (ourRun && ourRun.finished_at !== null) {
+          stopTracking();
+          setRunFlash(ourRun.status === "ok" ? "ok" : "error");
+          setTimeout(() => {
+            setRunFlash(null);
+            onChanged();
+            loadRuns();
+          }, 1500);
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }, 2000);
+  }
+
+  useEffect(() => {
+    return () => {
+      if (pollRef.current !== null) clearInterval(pollRef.current);
+      if (tickRef.current !== null) clearInterval(tickRef.current);
+    };
+  }, []);
 
   async function loadRuns() {
     try {
@@ -97,7 +148,7 @@ function PluginCard({
     try {
       await updatePlugin(plugin.name, {
         enabled,
-        interval_minutes: interval,
+        interval_minutes: intervalMin,
         params,
       });
       setSaveMsg("Saved");
@@ -112,12 +163,8 @@ function PluginCard({
   async function handleRun() {
     setSaveMsg(null);
     try {
-      await runPluginNow(plugin.name);
-      setSaveMsg("Started — refresh in a moment");
-      setTimeout(() => {
-        onChanged();
-        loadRuns();
-      }, 2000);
+      const result = await runPluginNow(plugin.name);
+      startTracking(result.run_id, plugin.avg_duration_seconds);
     } catch (e) {
       setSaveMsg(`Error: ${e}`);
     }
@@ -127,18 +174,40 @@ function PluginCard({
     setParams((prev) => ({ ...prev, [key]: value }));
   }
 
+  function etaText(): string {
+    if (capturedAvg === null) {
+      return `Running for ${elapsed}s`;
+    }
+    const remaining = Math.round(capturedAvg - elapsed);
+    if (remaining <= 0) return "Almost done…";
+    return `~${remaining}s remaining`;
+  }
+
+  const cardClass =
+    "card" +
+    (runFlash === "ok" ? " plugin-flash-ok" : runFlash === "error" ? " plugin-flash-error" : "");
+
   return (
-    <section className="card" style={{ padding: "1rem", margin: "1rem 0" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div>
-          <h3 style={{ margin: 0 }}>{plugin.label}</h3>
-          {plugin.description && (
-            <p style={{ margin: "0.25rem 0", opacity: 0.7, fontSize: "0.9em" }}>
-              {plugin.description}
-            </p>
-          )}
+    <section className={cardClass} style={{ padding: "1rem", margin: "1rem 0" }}>
+      <header
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "0.8em", opacity: 0.6, lineHeight: 1 }}>{collapsed ? "▸" : "▾"}</span>
+          <div>
+            <h3 style={{ margin: 0 }}>{plugin.label}</h3>
+            {plugin.description && (
+              <p style={{ margin: "0.1rem 0 0", opacity: 0.7, fontSize: "0.9em" }}>
+                {plugin.description}
+              </p>
+            )}
+          </div>
         </div>
-        <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <label
+          style={{ display: "flex", gap: "0.5rem", alignItems: "center", cursor: "pointer" }}
+          onClick={(e) => e.stopPropagation()}
+        >
           <input
             type="checkbox"
             checked={enabled}
@@ -148,62 +217,77 @@ function PluginCard({
         </label>
       </header>
 
-      <div style={{ display: "grid", gap: "0.75rem", margin: "1rem 0" }}>
-        <label style={{ display: "flex", flexDirection: "column" }}>
-          <span>Interval (minutes)</span>
-          <input
-            type="number"
-            min={1}
-            value={interval}
-            onChange={(e) => setInterval(parseInt(e.target.value || "0", 10))}
-          />
-        </label>
-        {plugin.param_schema.map((spec) => (
-          <ParamField
-            key={spec.key}
-            spec={spec}
-            value={params[spec.key]}
-            onChange={(v) => updateParam(spec.key, v)}
-          />
-        ))}
-      </div>
-
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-        <button onClick={handleSave} disabled={saving}>
-          {saving ? "Saving…" : "Save"}
-        </button>
-        <button onClick={handleRun} disabled={saving}>
-          Run now
-        </button>
-        {saveMsg && <span style={{ opacity: 0.8 }}>{saveMsg}</span>}
-      </div>
-
-      <div style={{ marginTop: "0.75rem", fontSize: "0.85em", opacity: 0.8 }}>
-        <div>
-          Last run:{" "}
-          {plugin.last_run_at ? (
-            <>
-              {plugin.last_run_at} — <b>{plugin.last_status}</b>
-              {plugin.last_message ? ` — ${plugin.last_message}` : ""}
-            </>
-          ) : (
-            "never"
+      {!collapsed && (
+        <>
+          {activeRunId !== null && (
+            <div className="plugin-progress-bar">
+              <div className="plugin-progress-bar-inner" />
+            </div>
           )}
-        </div>
-        {runs.length > 0 && (
-          <details style={{ marginTop: "0.5rem" }}>
-            <summary>Recent runs ({runs.length})</summary>
-            <ul style={{ margin: "0.5rem 0", paddingLeft: "1.25rem" }}>
-              {runs.map((r) => (
-                <li key={r.id}>
-                  {r.started_at} → {r.status}
-                  {r.message ? ` — ${r.message}` : ""}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
+
+          <div style={{ display: "grid", gap: "0.75rem", margin: "1rem 0" }}>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>Interval (minutes)</span>
+              <input
+                type="number"
+                min={1}
+                value={intervalMin}
+                onChange={(e) => setIntervalMin(parseInt(e.target.value || "0", 10))}
+              />
+            </label>
+            {plugin.param_schema.map((spec) => (
+              <ParamField
+                key={spec.key}
+                spec={spec}
+                value={params[spec.key]}
+                onChange={(v) => updateParam(spec.key, v)}
+              />
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <button onClick={handleSave} disabled={saving || activeRunId !== null}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button onClick={handleRun} disabled={saving || activeRunId !== null}>
+              {activeRunId !== null ? "Running…" : "Run now"}
+            </button>
+            {activeRunId !== null && (
+              <span className="plugin-eta">{etaText()}</span>
+            )}
+            {saveMsg && activeRunId === null && (
+              <span style={{ opacity: 0.8 }}>{saveMsg}</span>
+            )}
+          </div>
+
+          <div style={{ marginTop: "0.75rem", fontSize: "0.85em", opacity: 0.8 }}>
+            <div>
+              Last run:{" "}
+              {plugin.last_run_at ? (
+                <>
+                  {plugin.last_run_at} — <b>{plugin.last_status}</b>
+                  {plugin.last_message ? ` — ${plugin.last_message}` : ""}
+                </>
+              ) : (
+                "never"
+              )}
+            </div>
+            {runs.length > 0 && (
+              <details style={{ marginTop: "0.5rem" }}>
+                <summary>Recent runs ({runs.length})</summary>
+                <ul style={{ margin: "0.5rem 0", paddingLeft: "1.25rem" }}>
+                  {runs.map((r) => (
+                    <li key={r.id}>
+                      {r.started_at} → {r.status}
+                      {r.message ? ` — ${r.message}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }
