@@ -3520,13 +3520,13 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _run_plugin_sync(name: str, run_id: Optional[int] = None) -> None:
+def _run_plugin_sync(name: str, run_id: Optional[int] = None, param_overrides: Optional[dict] = None) -> None:
     """Execute a plugin synchronously and record the run. Called from a threadpool."""
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         return
     cfg = _plugin_config_row(name) or {"params": {}}
-    params = cfg["params"]
+    params = {**cfg["params"], **(param_overrides or {})}
 
     if run_id is None:
         conn = get_db()
@@ -3567,9 +3567,9 @@ def _run_plugin_sync(name: str, run_id: Optional[int] = None) -> None:
 _scheduler: Optional[AsyncIOScheduler] = None
 
 
-async def _run_plugin_async(name: str, run_id: Optional[int] = None) -> None:
+async def _run_plugin_async(name: str, run_id: Optional[int] = None, param_overrides: Optional[dict] = None) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _run_plugin_sync, name, run_id)
+    await loop.run_in_executor(None, _run_plugin_sync, name, run_id, param_overrides)
 
 
 def _reload_job(name: str) -> None:
@@ -3661,7 +3661,7 @@ def update_plugin(name: str, body: PluginUpdateBody):
 
 
 @app.post("/api/plugins/{name}/run")
-async def run_plugin_now(name: str):
+async def run_plugin_now(name: str, full: bool = False):
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
@@ -3673,7 +3673,8 @@ async def run_plugin_now(name: str):
     run_id = cur.lastrowid
     conn.commit()
     conn.close()
-    asyncio.create_task(_run_plugin_async(name, run_id))
+    overrides = {"full_sync": True, "all_history": True} if full else None
+    asyncio.create_task(_run_plugin_async(name, run_id, overrides))
     return {"status": "started", "name": name, "run_id": run_id}
 
 
