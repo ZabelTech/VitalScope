@@ -2,9 +2,10 @@ import { useState } from "react";
 
 interface Props {
   onSuccess: () => void;
+  onCancel?: () => void;
 }
 
-export function LoginForm({ onSuccess }: Props) {
+export function LoginForm({ onSuccess, onCancel }: Props) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -58,6 +59,11 @@ export function LoginForm({ onSuccess }: Props) {
             {submitting ? "Signing in…" : "Sign in"}
           </button>
         </div>
+        {onCancel && (
+          <button type="button" className="login-back-link" onClick={onCancel}>
+            ← Back to homepage
+          </button>
+        )}
       </form>
     </div>
   );

@@ -7,6 +7,7 @@ import { LoginForm } from "./components/LoginForm";
 import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
 import { DecidePage } from "./components/DecidePage";
+import { HeroPage } from "./components/HeroPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { useRuntime } from "./hooks/useRuntime";
 
@@ -25,6 +26,7 @@ type AuthState = "loading" | "authed" | "unauthed";
 
 function App() {
   const [auth, setAuth] = useState<AuthState>("loading");
+  const [showLogin, setShowLogin] = useState(false);
 
   useEffect(() => {
     fetch("/api/auth/status", { credentials: "same-origin" })
@@ -37,7 +39,17 @@ function App() {
     return <div className="app" />;
   }
   if (auth === "unauthed") {
-    return <LoginForm onSuccess={() => setAuth("authed")} />;
+    if (showLogin) {
+      return <LoginForm onSuccess={() => setAuth("authed")} onCancel={() => setShowLogin(false)} />;
+    }
+    return (
+      <BrowserRouter>
+        <div className="app">
+          <DemoBanner />
+          <HeroPage onLoginClick={() => setShowLogin(true)} />
+        </div>
+      </BrowserRouter>
+    );
   }
 
   return (
@@ -53,6 +65,7 @@ function App() {
             <Route path="/orient" element={<OrientPage />} />
             <Route path="/decide" element={<DecidePage />} />
             <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/hero" element={<HeroPage />} />
           </Routes>
         </main>
       </div>
