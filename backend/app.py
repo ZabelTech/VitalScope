@@ -59,6 +59,7 @@ AI_MODEL = os.environ.get(
     "VITALSCOPE_AI_MODEL", _DEFAULT_MODEL_BY_PROVIDER[AI_PROVIDER]
 )
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
+BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
@@ -2031,6 +2032,7 @@ async def _call_ai_tool(
     media_b64: str,
     mime: str,
     tool: dict,
+    timeout_sec: Optional[int] = None,
 ) -> dict:
     """Run a vision tool-use call via the configured provider."""
     provider = _get_ai_provider()
@@ -2040,7 +2042,7 @@ async def _call_ai_tool(
         media_b64=media_b64,
         mime=mime,
         tool=tool,
-        timeout_sec=AI_TIMEOUT_SEC,
+        timeout_sec=timeout_sec if timeout_sec is not None else AI_TIMEOUT_SEC,
     )
 
 
@@ -2327,6 +2329,7 @@ async def analyze_bloodwork_upload(body: AnalyzeImageBody):
         media_b64=media_b64,
         mime=mime,
         tool=_BLOODWORK_TOOL,
+        timeout_sec=BLOODWORK_AI_TIMEOUT_SEC,
     )
 
     raw_results = payload.get("results") or []
