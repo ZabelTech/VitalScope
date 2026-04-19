@@ -24,8 +24,8 @@ export function HeroPage() {
         <div className="hero-section-label">The Broken Ecosystem</div>
         <h2>Your health data is fragmented, monetized, and stuck in the past.</h2>
         <p className="hero-section-body">
-          You wear a smartwatch. You log your lifts. You weigh yourself every morning.
-          But Garmin doesn't talk to Strong. Strong doesn't talk to your scale.
+          You wear a fitness wearable. You log your lifts in a gym tracker. You weigh yourself every morning.
+          But your wearable doesn't talk to your gym tracker. Your gym tracker doesn't talk to your smart scale.
           Your scale phones home to a server in Shenzhen. None of it gives you a
           complete picture — and none of it actually belongs to you.
         </p>
@@ -48,7 +48,7 @@ export function HeroPage() {
           </div>
           <div className="hero-problem-item">
             <div className="hero-problem-heading">You Are the Product</div>
-            <p>Garmin, Fitbit, Whoop, MyFitnessPal. Your most intimate biological data — sold, licensed, and aggregated by corporations you'll never audit and can't hold accountable.</p>
+            <p>Fitness wearables, gym trackers, food trackers, smart scales. Your most intimate biological data — sold, licensed, and aggregated by corporations you'll never audit and can't hold accountable.</p>
           </div>
           <div className="hero-problem-item">
             <div className="hero-problem-heading">Walled Gardens</div>
@@ -134,21 +134,21 @@ export function HeroPage() {
         </p>
         <div className="hero-sources-grid">
           <div className="hero-source-card">
-            <div className="hero-source-name">Garmin Connect</div>
+            <div className="hero-source-name">Fitness Wearable</div>
             <div className="hero-source-metrics">
               Heart rate · HRV · Sleep architecture · Stress score · Body battery · Steps · VO2 max · Activities
             </div>
             <p>Continuous intraday time-series plus nightly summaries. Always re-fetches the last 48 hours because your overnight physiology is still being written at sync time.</p>
           </div>
           <div className="hero-source-card">
-            <div className="hero-source-name">Strong (Gym Tracker)</div>
+            <div className="hero-source-name">Gym Tracker</div>
             <div className="hero-source-metrics">
               Exercises · Sets · Reps · Weight · Volume load · PRs · Rest periods · Training density
             </div>
             <p>Every working set logged, never inflated by rest-timer rows. Progressive overload curves, weekly volume, and training density across every movement pattern in your history.</p>
           </div>
           <div className="hero-source-card">
-            <div className="hero-source-name">EufyLife Scale</div>
+            <div className="hero-source-name">Smart Scale</div>
             <div className="hero-source-metrics">
               Weight · Body fat % · Muscle mass · Bone mass · BMR · Visceral fat index
             </div>
@@ -160,6 +160,35 @@ export function HeroPage() {
               Nutrition · Bloodwork · Supplements · Water intake · Daily journal · Form checks
             </div>
             <p>The data your wearables can't capture: what you ate, what you took, how you felt, what you noticed. Logged once, available for correlation forever.</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="hero-section hero-plugins">
+        <div className="hero-section-label">Extensible by Design</div>
+        <h2>Connect any data source. The plugin architecture was built for it.</h2>
+        <p className="hero-section-body">
+          VitalScope ships with connectors for the most popular health platforms,
+          but the plugin system is open. Every data source is a self-contained plugin:
+          a sync script that writes to SQLite plus a lightweight wrapper that schedules it,
+          passes credentials, and records every run. Nothing hardwired. Nothing locked.
+        </p>
+        <div className="hero-plugins-grid">
+          <div className="hero-plugin-card">
+            <div className="hero-plugin-card-title">Bring Your Own Source</div>
+            <p>Write a sync script for any platform with an API or data export. Implement two methods, register the plugin, and your new data source flows into the same dashboard, the same charts, and the same AI correlation engine as every built-in connector.</p>
+          </div>
+          <div className="hero-plugin-card">
+            <div className="hero-plugin-card-title">Incremental by Default</div>
+            <p>Every plugin fetches only new data on each run — querying the last recorded timestamp and syncing forward. Full resyncs are opt-in via a single flag. Your database stays lean and your syncs stay fast regardless of how many sources you've wired in.</p>
+          </div>
+          <div className="hero-plugin-card">
+            <div className="hero-plugin-card-title">Scheduled & Audited</div>
+            <p>The scheduler runs every registered plugin on its configured interval. Every run — success or failure — is recorded: what ran, when, how long, and what it returned. You always know the state of your data pipeline without having to check.</p>
+          </div>
+          <div className="hero-plugin-card">
+            <div className="hero-plugin-card-title">Credentials You Control</div>
+            <p>Plugin credentials live in environment variables, never in the database. Token caches stay on your own machine. Rotate a credential and the next sync picks it up automatically — no config files to hunt down, no dashboard UI to re-authorise.</p>
           </div>
         </div>
       </section>
