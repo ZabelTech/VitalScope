@@ -1,6 +1,10 @@
 import { Link } from "react-router-dom";
 
-export function HeroPage() {
+interface HeroPageProps {
+  onLoginClick?: () => void;
+}
+
+export function HeroPage({ onLoginClick }: HeroPageProps) {
   return (
     <div className="hero-page">
       <section className="hero-fold">
@@ -15,7 +19,11 @@ export function HeroPage() {
           stand, what it means, and what to do next.
         </p>
         <div className="hero-actions">
-          <Link to="/" className="hero-cta-primary">Enter Dashboard</Link>
+          {onLoginClick ? (
+            <button className="hero-cta-primary" onClick={onLoginClick}>Sign In</button>
+          ) : (
+            <Link to="/" className="hero-cta-primary">Enter Dashboard</Link>
+          )}
           <a href="#problem" className="hero-cta-secondary">Why It Matters</a>
         </div>
       </section>
@@ -408,7 +416,11 @@ export function HeroPage() {
           VitalScope captures it, connects it, and puts you back in command.
         </p>
         <div className="hero-actions">
-          <Link to="/" className="hero-cta-primary">Enter VitalScope</Link>
+          {onLoginClick ? (
+            <button className="hero-cta-primary" onClick={onLoginClick}>Sign In</button>
+          ) : (
+            <Link to="/" className="hero-cta-primary">Enter VitalScope</Link>
+          )}
         </div>
       </section>
     </div>

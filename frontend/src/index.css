@@ -1670,6 +1670,20 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   min-height: 44px;
 }
 
+.login-back-link {
+  background: none;
+  border: none;
+  color: #64748b;
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 4px 0;
+  text-align: center;
+  font-family: inherit;
+}
+.login-back-link:hover {
+  color: #94a3b8;
+}
+
 /* Recharts overrides */
 .recharts-text {
   fill: #94a3b8 !important;
