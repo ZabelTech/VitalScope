@@ -8,6 +8,7 @@ not fetched here to avoid schema clash.
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import time
@@ -18,7 +19,7 @@ from garminconnect import GarminConnectTooManyRequestsError
 
 from sync_garmin import get_client
 
-DB_PATH = Path(__file__).parent / "vitalscope.db"
+DB_PATH = Path(os.environ.get("VITALSCOPE_DB") or Path(__file__).parent / "vitalscope.db")
 PAGE_SIZE = 100
 
 SCHEMA = """

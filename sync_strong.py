@@ -15,7 +15,7 @@ from pathlib import Path
 
 import requests
 
-DB_PATH = Path(__file__).parent / "vitalscope.db"
+DB_PATH = Path(os.environ.get("VITALSCOPE_DB") or Path(__file__).parent / "vitalscope.db")
 TOKEN_PATH = Path("~/.strongapp").expanduser()
 
 BASE_URL = "https://back.strong.app"

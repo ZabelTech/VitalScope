@@ -14,7 +14,7 @@ import requests
 
 TOKEN_DIR = Path("~/.eufylife").expanduser()
 TOKEN_FILE = TOKEN_DIR / "token.json"
-DB_PATH = Path(__file__).parent / "vitalscope.db"
+DB_PATH = Path(os.environ.get("VITALSCOPE_DB") or Path(__file__).parent / "vitalscope.db")
 
 API_BASE_URL = "https://appliances-api-eu.eufylife.com"
 LOGIN_URL = f"{API_BASE_URL}/v1/user/v2/email/login"
