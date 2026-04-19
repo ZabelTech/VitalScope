@@ -223,7 +223,7 @@ export interface DateRange {
   latest: string;
 }
 
-export type UploadKind = "meal" | "form" | "bloodwork";
+export type UploadKind = "meal" | "form" | "bloodwork" | "genome";
 
 export interface Upload {
   id: number;
@@ -236,6 +236,7 @@ export interface Upload {
   meal_id: number | null;
   body_composition_estimate_id: number | null;
   bloodwork_panel_id: number | null;
+  genome_upload_id: number | null;
 }
 
 export interface MealAnalysisResult {
@@ -364,4 +365,47 @@ export interface BloodworkPanelInput {
   notes?: string | null;
   confidence?: "low" | "medium" | "high" | null;
   results: BloodworkResult[];
+}
+
+export interface OrientTopic {
+  id: "health" | "performance" | "recovery" | "body_composition";
+  label: string;
+  summary: string;
+  insights: string[];
+  alerts: string[];
+  recommendations: string[];
+}
+
+export interface OrientAnalysis {
+  model: string;
+  analysis_date: string;
+  window_days: number;
+  overall_summary: string;
+  topics: OrientTopic[];
+}
+
+export interface GenomeParseResult {
+  variant_count: number;
+  rs_count: number;
+  chromosomes: string[];
+}
+
+export interface GenomeUpload {
+  id: number;
+  date: string;
+  source_upload_id: number | null;
+  variant_count: number;
+  rs_count: number;
+  chromosomes: string[];
+  notes: string | null;
+  created_at: string;
+}
+
+export interface GenomeUploadInput {
+  date: string;
+  source_upload_id?: number | null;
+  variant_count: number;
+  rs_count: number;
+  chromosomes: string[];
+  notes?: string | null;
 }
