@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import gzip
 import hmac
 import json
 import logging
@@ -369,36 +370,46 @@ def ensure_daily_landing_tables() -> None:
         """
         CREATE TABLE IF NOT EXISTS uploads (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork')),
+            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
             date       TEXT NOT NULL,
             filename   TEXT NOT NULL,
             mime       TEXT NOT NULL,
             bytes      INTEGER NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            meal_id                       INTEGER,
+            body_composition_estimate_id  INTEGER,
+            bloodwork_panel_id            INTEGER,
+            genome_upload_id              INTEGER
         )
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
-    # Migrate pre-bloodwork databases: SQLite can't ALTER a CHECK, so rebuild
-    # the table when the stored schema still has the old kind whitelist.
+    # Migrate databases that predate the genome kind: SQLite can't ALTER a
+    # CHECK, so rebuild the table whenever the kind whitelist is outdated.
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='uploads'").fetchone()
-    if row and "'bloodwork'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
+    if row and "'genome'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
+        _ec = {r[1] for r in conn.execute("PRAGMA table_info(uploads)")}
+        _base = "id, kind, date, filename, mime, bytes, created_at"
+        _extra = [c for c in ("meal_id", "body_composition_estimate_id", "bloodwork_panel_id") if c in _ec]
+        _col_list = _base + (", " + ", ".join(_extra) if _extra else "")
         conn.executescript(
-            """
+            f"""
             PRAGMA foreign_keys = OFF;
             CREATE TABLE uploads_new (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork')),
+                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
                 date       TEXT NOT NULL,
                 filename   TEXT NOT NULL,
                 mime       TEXT NOT NULL,
                 bytes      INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 meal_id                       INTEGER,
-                body_composition_estimate_id  INTEGER
+                body_composition_estimate_id  INTEGER,
+                bloodwork_panel_id            INTEGER,
+                genome_upload_id              INTEGER
             );
-            INSERT INTO uploads_new (id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id)
-                SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id FROM uploads;
+            INSERT INTO uploads_new ({_col_list})
+                SELECT {_col_list} FROM uploads;
             DROP TABLE uploads;
             ALTER TABLE uploads_new RENAME TO uploads;
             CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date);
@@ -413,6 +424,8 @@ def ensure_daily_landing_tables() -> None:
         conn.execute("ALTER TABLE uploads ADD COLUMN body_composition_estimate_id INTEGER")
     if "bloodwork_panel_id" not in existing:
         conn.execute("ALTER TABLE uploads ADD COLUMN bloodwork_panel_id INTEGER")
+    if "genome_upload_id" not in existing:
+        conn.execute("ALTER TABLE uploads ADD COLUMN genome_upload_id INTEGER")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS body_composition_estimates (
@@ -479,6 +492,22 @@ def ensure_daily_landing_tables() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_bloodwork_results_analyte ON bloodwork_results(analyte)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_uploads (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            date             TEXT NOT NULL,
+            source_upload_id INTEGER,
+            variant_count    INTEGER NOT NULL DEFAULT 0,
+            rs_count         INTEGER NOT NULL DEFAULT 0,
+            chromosomes      TEXT,
+            notes            TEXT,
+            created_at       TEXT NOT NULL,
+            FOREIGN KEY (source_upload_id) REFERENCES uploads(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_uploads_date ON genome_uploads(date)")
     conn.commit()
     conn.close()
 
@@ -1658,11 +1687,12 @@ def list_planned(start: Optional[str] = None, end: Optional[str] = None):
 
 MAX_UPLOAD_BYTES_IMAGE = 5 * 1024 * 1024
 MAX_UPLOAD_BYTES_BLOODWORK = 10 * 1024 * 1024
+MAX_UPLOAD_BYTES_GENOME = 50 * 1024 * 1024
 
 
 @app.post("/api/uploads")
 async def upload_file(
-    kind: Literal["meal", "form", "bloodwork"] = Form(...),
+    kind: Literal["meal", "form", "bloodwork", "genome"] = Form(...),
     date: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -1671,6 +1701,12 @@ async def upload_file(
         if not (ct.startswith("image/") or ct == "application/pdf"):
             raise HTTPException(status_code=400, detail="image/* or application/pdf required")
         size_limit = MAX_UPLOAD_BYTES_BLOODWORK
+    elif kind == "genome":
+        if not (ct.startswith("text/") or ct in (
+            "application/octet-stream", "application/gzip", "application/x-gzip",
+        )):
+            raise HTTPException(status_code=400, detail="VCF or VCF.gz file required")
+        size_limit = MAX_UPLOAD_BYTES_GENOME
     else:
         if not ct.startswith("image/"):
             raise HTTPException(status_code=400, detail="image/* required")
@@ -1697,12 +1733,13 @@ async def upload_file(
     return {
         "id": upload_id, "kind": kind, "date": date, "filename": rel,
         "mime": ct, "bytes": len(data), "created_at": now,
-        "meal_id": None, "body_composition_estimate_id": None, "bloodwork_panel_id": None,
+        "meal_id": None, "body_composition_estimate_id": None,
+        "bloodwork_panel_id": None, "genome_upload_id": None,
     }
 
 
 @app.get("/api/uploads")
-def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork"]] = None, date: Optional[str] = None):
+def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork", "genome"]] = None, date: Optional[str] = None):
     conn = get_db()
     clauses, params = [], []
     if kind:
@@ -1713,7 +1750,7 @@ def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork"]] = None, da
         params.append(date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id, bloodwork_panel_id FROM uploads{where} ORDER BY id DESC",
+        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id, bloodwork_panel_id, genome_upload_id FROM uploads{where} ORDER BY id DESC",
         params,
     ).fetchall()
     conn.close()
@@ -2498,6 +2535,160 @@ def delete_bloodwork_panel(panel_id: int):
         (panel_id,),
     )
     conn.execute("DELETE FROM bloodwork_panels WHERE id = ?", (panel_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+# --- Genome uploads (VCF parse + CRUD) ---
+
+def _chrom_sort_key(c: str) -> tuple:
+    stripped = c.lstrip("chr").lstrip("Chr")
+    return (0, int(stripped), "") if stripped.isdigit() else (1, 0, stripped)
+
+
+def _parse_vcf(path: Path) -> dict:
+    with open(path, "rb") as _fcheck:
+        is_gz = _fcheck.read(2) == b"\x1f\x8b"
+    open_fn = (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace")) if is_gz else (lambda p: open(p, "rt", encoding="utf-8", errors="replace"))
+    variant_count = 0
+    rs_count = 0
+    chromosomes: set[str] = set()
+    header_found = False
+    with open_fn(path) as fh:
+        for line in fh:
+            if line.startswith("##"):
+                continue
+            if line.startswith("#CHROM"):
+                header_found = True
+                continue
+            parts = line.split("\t", 3)
+            if len(parts) < 3:
+                continue
+            variant_count += 1
+            chrom = parts[0].strip()
+            if chrom:
+                chromosomes.add(chrom)
+            rs_id = parts[2].strip()
+            if rs_id and rs_id != ".":
+                rs_count += 1
+    if not header_found and variant_count == 0:
+        raise ValueError("not a valid VCF file")
+    return {
+        "variant_count": variant_count,
+        "rs_count": rs_count,
+        "chromosomes": sorted(chromosomes, key=_chrom_sort_key),
+    }
+
+
+class GenomeParseBody(BaseModel):
+    upload_id: int
+
+
+class GenomeUploadIn(BaseModel):
+    date: str
+    source_upload_id: Optional[int] = None
+    variant_count: int = 0
+    rs_count: int = 0
+    chromosomes: list[str] = []
+    notes: Optional[str] = None
+
+
+def _row_to_genome_upload(row: sqlite3.Row) -> dict:
+    chroms = json.loads(row["chromosomes"] or "[]")
+    return {
+        "id": row["id"],
+        "date": row["date"],
+        "source_upload_id": row["source_upload_id"],
+        "variant_count": row["variant_count"],
+        "rs_count": row["rs_count"],
+        "chromosomes": chroms,
+        "notes": row["notes"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.post("/api/genome/parse-upload")
+def parse_genome_upload(body: GenomeParseBody):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT kind, filename FROM uploads WHERE id = ?", (body.upload_id,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="upload not found")
+    if row["kind"] != "genome":
+        raise HTTPException(status_code=400, detail="upload is not a genome file")
+    path = (UPLOADS_DIR / row["filename"]).resolve()
+    if not str(path).startswith(str(UPLOADS_DIR.resolve())) or not path.is_file():
+        raise HTTPException(status_code=404, detail="file missing on disk")
+    try:
+        result = _parse_vcf(path)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"VCF parse error: {exc}")
+    return result
+
+
+@app.post("/api/genome-uploads")
+def create_genome_upload(body: GenomeUploadIn):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """INSERT INTO genome_uploads
+           (date, source_upload_id, variant_count, rs_count, chromosomes, notes, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (
+            body.date, body.source_upload_id, body.variant_count, body.rs_count,
+            json.dumps(body.chromosomes), body.notes, now,
+        ),
+    )
+    genome_id = cur.lastrowid
+    if body.source_upload_id is not None:
+        conn.execute(
+            "UPDATE uploads SET genome_upload_id = ? WHERE id = ? AND kind = 'genome'",
+            (genome_id, body.source_upload_id),
+        )
+    conn.commit()
+    row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
+    conn.close()
+    return _row_to_genome_upload(row)
+
+
+@app.get("/api/genome-uploads")
+def list_genome_uploads(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM genome_uploads WHERE date >= ? AND date <= ? ORDER BY date DESC, id DESC",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [_row_to_genome_upload(r) for r in rows]
+
+
+@app.get("/api/genome-uploads/{genome_id}")
+def get_genome_upload(genome_id: int):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    return _row_to_genome_upload(row)
+
+
+@app.delete("/api/genome-uploads/{genome_id}")
+def delete_genome_upload(genome_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    conn.execute(
+        "UPDATE uploads SET genome_upload_id = NULL WHERE genome_upload_id = ?", (genome_id,)
+    )
+    conn.execute("DELETE FROM genome_uploads WHERE id = ?", (genome_id,))
     conn.commit()
     conn.close()
     return {"status": "ok"}

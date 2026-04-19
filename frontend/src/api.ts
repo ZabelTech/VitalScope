@@ -5,6 +5,9 @@ import type {
   BodyCompositionEstimate,
   BodyCompositionEstimateInput,
   FormCheckAnalysisResult,
+  GenomeParseResult,
+  GenomeUpload,
+  GenomeUploadInput,
   JournalEntry,
   Meal,
   MealAnalysisResult,
@@ -413,6 +416,43 @@ export async function getBloodworkPanel(id: number): Promise<BloodworkPanel> {
 
 export async function deleteBloodworkPanel(id: number): Promise<void> {
   const res = await apiFetch(`/api/bloodwork-panels/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Genome uploads ---
+
+export async function parseGenomeUpload(upload_id: number): Promise<GenomeParseResult> {
+  const res = await apiFetch("/api/genome/parse-upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ upload_id }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function createGenomeUpload(body: GenomeUploadInput): Promise<GenomeUpload> {
+  const res = await apiFetch("/api/genome-uploads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function listGenomeUploads(start: string, end: string): Promise<GenomeUpload[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/genome-uploads?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteGenomeUpload(id: number): Promise<void> {
+  const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 

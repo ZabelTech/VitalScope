@@ -1477,6 +1477,41 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   margin-bottom: 12px;
 }
 
+.genome-parse-stats {
+  display: flex;
+  gap: 16px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+
+.genome-parse-stat {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  background: #1e293b;
+  border-radius: 6px;
+  padding: 10px 16px;
+  min-width: 80px;
+}
+
+.genome-parse-stat-value {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #8b5cf6;
+}
+
+.genome-parse-stat-label {
+  font-size: 0.75rem;
+  color: #94a3b8;
+  margin-top: 2px;
+}
+
+.genome-chrom-list {
+  font-family: monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;
