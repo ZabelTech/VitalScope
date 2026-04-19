@@ -25,8 +25,8 @@ register(Plugin(
     default_interval_minutes=360,
     description="Heart rate, HRV, sleep, stress, body battery, steps.",
     param_schema=[
-        ParamSpec("email", "Email", "text", required=True),
-        ParamSpec("password", "Password", "secret", required=True),
+        ParamSpec("email", "Email", "text", required=True, env_var="GARMIN_EMAIL"),
+        ParamSpec("password", "Password", "secret", required=True, env_var="GARMIN_PASSWORD"),
         ParamSpec("days", "Days to sync (blank = incremental)", "int"),
         ParamSpec("full_sync", "Full resync", "bool", default=False),
     ],

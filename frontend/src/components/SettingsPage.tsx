@@ -72,6 +72,7 @@ function PluginCard({
   plugin: PluginConfig;
   onChanged: () => void;
 }) {
+  const [collapsed, setCollapsed] = useState(true);
   const [enabled, setEnabled] = useState(plugin.enabled);
   const [intervalMin, setIntervalMin] = useState(plugin.interval_minutes);
   const [params, setParams] = useState<Record<string, unknown>>(plugin.params);
@@ -188,16 +189,25 @@ function PluginCard({
 
   return (
     <section className={cardClass} style={{ padding: "1rem", margin: "1rem 0" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div>
-          <h3 style={{ margin: 0 }}>{plugin.label}</h3>
-          {plugin.description && (
-            <p style={{ margin: "0.25rem 0", opacity: 0.7, fontSize: "0.9em" }}>
-              {plugin.description}
-            </p>
-          )}
+      <header
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "0.8em", opacity: 0.6, lineHeight: 1 }}>{collapsed ? "▸" : "▾"}</span>
+          <div>
+            <h3 style={{ margin: 0 }}>{plugin.label}</h3>
+            {plugin.description && (
+              <p style={{ margin: "0.1rem 0 0", opacity: 0.7, fontSize: "0.9em" }}>
+                {plugin.description}
+              </p>
+            )}
+          </div>
         </div>
-        <label style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <label
+          style={{ display: "flex", gap: "0.5rem", alignItems: "center", cursor: "pointer" }}
+          onClick={(e) => e.stopPropagation()}
+        >
           <input
             type="checkbox"
             checked={enabled}
@@ -207,73 +217,77 @@ function PluginCard({
         </label>
       </header>
 
-      {activeRunId !== null && (
-        <div className="plugin-progress-bar">
-          <div className="plugin-progress-bar-inner" />
-        </div>
-      )}
-
-      <div style={{ display: "grid", gap: "0.75rem", margin: "1rem 0" }}>
-        <label style={{ display: "flex", flexDirection: "column" }}>
-          <span>Interval (minutes)</span>
-          <input
-            type="number"
-            min={1}
-            value={intervalMin}
-            onChange={(e) => setIntervalMin(parseInt(e.target.value || "0", 10))}
-          />
-        </label>
-        {plugin.param_schema.map((spec) => (
-          <ParamField
-            key={spec.key}
-            spec={spec}
-            value={params[spec.key]}
-            onChange={(v) => updateParam(spec.key, v)}
-          />
-        ))}
-      </div>
-
-      <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-        <button onClick={handleSave} disabled={saving || activeRunId !== null}>
-          {saving ? "Saving…" : "Save"}
-        </button>
-        <button onClick={handleRun} disabled={saving || activeRunId !== null}>
-          {activeRunId !== null ? "Running…" : "Run now"}
-        </button>
-        {activeRunId !== null && (
-          <span className="plugin-eta">{etaText()}</span>
-        )}
-        {saveMsg && activeRunId === null && (
-          <span style={{ opacity: 0.8 }}>{saveMsg}</span>
-        )}
-      </div>
-
-      <div style={{ marginTop: "0.75rem", fontSize: "0.85em", opacity: 0.8 }}>
-        <div>
-          Last run:{" "}
-          {plugin.last_run_at ? (
-            <>
-              {plugin.last_run_at} — <b>{plugin.last_status}</b>
-              {plugin.last_message ? ` — ${plugin.last_message}` : ""}
-            </>
-          ) : (
-            "never"
+      {!collapsed && (
+        <>
+          {activeRunId !== null && (
+            <div className="plugin-progress-bar">
+              <div className="plugin-progress-bar-inner" />
+            </div>
           )}
-        </div>
-        {runs.length > 0 && (
-          <details style={{ marginTop: "0.5rem" }}>
-            <summary>Recent runs ({runs.length})</summary>
-            <ul style={{ margin: "0.5rem 0", paddingLeft: "1.25rem" }}>
-              {runs.map((r) => (
-                <li key={r.id}>
-                  {r.started_at} → {r.status}
-                  {r.message ? ` — ${r.message}` : ""}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-      </div>
+
+          <div style={{ display: "grid", gap: "0.75rem", margin: "1rem 0" }}>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>Interval (minutes)</span>
+              <input
+                type="number"
+                min={1}
+                value={intervalMin}
+                onChange={(e) => setIntervalMin(parseInt(e.target.value || "0", 10))}
+              />
+            </label>
+            {plugin.param_schema.map((spec) => (
+              <ParamField
+                key={spec.key}
+                spec={spec}
+                value={params[spec.key]}
+                onChange={(v) => updateParam(spec.key, v)}
+              />
+            ))}
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <button onClick={handleSave} disabled={saving || activeRunId !== null}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            <button onClick={handleRun} disabled={saving || activeRunId !== null}>
+              {activeRunId !== null ? "Running…" : "Run now"}
+            </button>
+            {activeRunId !== null && (
+              <span className="plugin-eta">{etaText()}</span>
+            )}
+            {saveMsg && activeRunId === null && (
+              <span style={{ opacity: 0.8 }}>{saveMsg}</span>
+            )}
+          </div>
+
+          <div style={{ marginTop: "0.75rem", fontSize: "0.85em", opacity: 0.8 }}>
+            <div>
+              Last run:{" "}
+              {plugin.last_run_at ? (
+                <>
+                  {plugin.last_run_at} — <b>{plugin.last_status}</b>
+                  {plugin.last_message ? ` — ${plugin.last_message}` : ""}
+                </>
+              ) : (
+                "never"
+              )}
+            </div>
+            {runs.length > 0 && (
+              <details style={{ marginTop: "0.5rem" }}>
+                <summary>Recent runs ({runs.length})</summary>
+                <ul style={{ margin: "0.5rem 0", paddingLeft: "1.25rem" }}>
+                  {runs.map((r) => (
+                    <li key={r.id}>
+                      {r.started_at} → {r.status}
+                      {r.message ? ` — ${r.message}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </div>
+        </>
+      )}
     </section>
   );
 }

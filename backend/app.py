@@ -3210,6 +3210,39 @@ def ensure_plugin_tables() -> None:
             "VALUES (?, 0, ?, '{}')",
             (name, plugin.default_interval_minutes),
         )
+
+    # Backfill params from env vars for any param that has an env_var and is currently unset.
+    # Also enable the plugin if all required params are now populated.
+    for name, plugin in PLUGIN_REGISTRY.items():
+        row = conn.execute(
+            "SELECT enabled, params_json FROM plugin_configs WHERE name=?", (name,)
+        ).fetchone()
+        if row is None:
+            continue
+        params = json.loads(row["params_json"] or "{}")
+        changed = False
+        for spec in plugin.param_schema:
+            if spec.env_var and not params.get(spec.key):
+                val = os.environ.get(spec.env_var, "")
+                if val:
+                    params[spec.key] = val
+                    changed = True
+        if changed:
+            all_required_filled = all(
+                params.get(s.key) for s in plugin.param_schema if s.required
+            )
+            new_enabled = 1 if all_required_filled else row["enabled"]
+            conn.execute(
+                "UPDATE plugin_configs SET params_json=?, enabled=? WHERE name=?",
+                (json.dumps(params), new_enabled, name),
+            )
+
+    # Mark any plugin_runs that were still 'running' when the server last stopped.
+    conn.execute(
+        "UPDATE plugin_runs SET status='interrupted', finished_at=? WHERE status='running'",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+
     conn.commit()
     conn.close()
 
