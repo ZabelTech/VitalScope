@@ -294,6 +294,60 @@ export function HeroPage() {
         </div>
       </section>
 
+      <section className="hero-section hero-clinical">
+        <div className="hero-section-label">The Clinical Blind Spot</div>
+        <h2>Clinical care was built to treat symptoms. It was not designed to track the continuous system that produces them.</h2>
+        <p className="hero-section-body">
+          The gap between your biology and your healthcare is structural — a consequence of how clinical
+          infrastructure was architected, not a failure of any individual practitioner. Understanding
+          that gap is the first step to filling it yourself.
+        </p>
+        <div className="hero-clinical-grid">
+          <div className="hero-clinical-card">
+            <div className="hero-clinical-card-title">Episodic by Design</div>
+            <p>A GP appointment is 10 minutes, once a year. That is a single data point on a continuous
+            time-series. The entire clinical infrastructure — referral pathways, diagnostic thresholds,
+            treatment protocols — was built around episodic intervention after symptoms emerge, not
+            continuous monitoring of the system that generates them. By the time a pattern is visible
+            in an annual snapshot, it has often been running for months.</p>
+          </div>
+          <div className="hero-clinical-card">
+            <div className="hero-clinical-card-title">Curricula Written for a Different Era</div>
+            <p>Medical training frameworks are generalist by design and move slowly by necessity.
+            Precision nutrition, HRV-guided periodization, chronobiology, and pharmacogenomics are
+            disciplines that have matured faster than multi-decade curricula can track. The domains
+            most relevant to proactive optimisation are precisely the ones least represented in
+            standard clinical training — not by design, but by institutional inertia.</p>
+          </div>
+          <div className="hero-clinical-card">
+            <div className="hero-clinical-card-title">You Are Not the Population Average</div>
+            <p>The reference ranges on your lab report were derived from population cohort studies —
+            calibrated on a statistical distribution, not on your genetics, your training history,
+            or your individual inflammatory phenotype. "Normal" means you are not a significant
+            statistical outlier from a heterogeneous sample. It says nothing about whether
+            your result is optimal for <em>you specifically</em>.</p>
+          </div>
+          <div className="hero-clinical-card">
+            <div className="hero-clinical-card-title">The Knowledge Update Rate Problem</div>
+            <p>Biomedical research publishes tens of thousands of papers per year across immunology,
+            endocrinology, exercise physiology, pharmacogenomics, and nutritional biochemistry.
+            No individual practitioner can maintain currency across all of them simultaneously —
+            it is a physical impossibility of attention. AI systems trained on the current body
+            of literature have no such constraint. They surface connections across disciplines
+            that no single domain expert would encounter in a normal practice week.</p>
+          </div>
+        </div>
+        <div className="hero-clinical-callout">
+          <p>
+            VitalScope is not a substitute for clinical expertise — it is what happens in the gap
+            between appointments. Between the annual bloodwork panel and next year's review.
+            Between the population reference range and your individual baseline. Between the
+            discipline boundaries that clinical training draws and the cross-domain correlations
+            your biology ignores entirely.
+          </p>
+        </div>
+      </section>
+
       <section className="hero-section hero-responsibility">
         <div className="hero-section-label">Greater Power, Greater Responsibility</div>
         <h2>Unified biometric data is powerful. Handle it accordingly.</h2>
