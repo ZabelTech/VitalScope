@@ -160,6 +160,11 @@ function AiConfigCard({ demo }: { demo: boolean }) {
 
       {!collapsed && (
         <div style={{ marginTop: "1rem" }}>
+          {demo && (
+            <p style={{ fontSize: "0.85em", color: "#94a3b8", background: "#0f172a", borderRadius: "6px", padding: "0.5rem 0.75rem", marginBottom: "0.75rem" }}>
+              AI configuration is locked in demo mode.
+            </p>
+          )}
           <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
             <label style={{ display: "flex", flexDirection: "column" }}>
               <span>Provider</span>
