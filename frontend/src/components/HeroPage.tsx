@@ -316,28 +316,24 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </div>
       </section>
 
-      <section className="hero-section hero-responsibility">
-        <div className="hero-section-label">Handle With Care</div>
-        <h2>One dataset in VitalScope cannot be taken back.</h2>
-        <p className="hero-section-body">
-          Most biometric data ages out — last month's HRV is context, not liability. Your genome
-          is the exception. It doesn't change, and it doesn't only describe you.
-        </p>
-        <div className="hero-responsibility-grid">
-          <div className="hero-responsibility-item">
-            <div className="hero-responsibility-heading">DNA Sequencing Is Permanent</div>
-            <p>Your genome can't be rotated, revoked, or anonymised. Uploading it has lifelong implications — for insurance, employment, and the family members who share your variants. Know what you're storing and who can reach it before the file lands.</p>
-          </div>
-        </div>
-      </section>
-
       <section className="hero-section hero-privacy">
         <div className="hero-section-label">Data Sovereignty</div>
-        <h2>Your most intimate data belongs to exactly one person.</h2>
+        <h2>No single stream is sensitive. Combined, they're a high-resolution portrait of you.</h2>
         <p className="hero-section-body">
-          When you self-host VitalScope, your biometric profile never leaves your hardware.
-          No cloud ingestion. No analytics pipeline. No data broker handshake.
-          No terms-of-service update that retroactively licenses your health history to an insurance consortium.
+          An HRV number on its own is noise. A page of lab ranges is noise. Your sleep curve,
+          training log, body composition, and genome — each one is inert in isolation. Layer
+          them on top of each other over months and years and the combined record becomes
+          something else entirely: a longitudinal readout of your physiology, your habits, and
+          your predisposition. The kind of asset insurers, employers, data brokers, and
+          tomorrow's AI systems would pay real money to own.
+        </p>
+        <p className="hero-section-body">
+          Most of that record ages out — last month's HRV is context, not liability. Your
+          genome is the exception: it doesn't change, and it doesn't only describe you. Which
+          is exactly why the only sane place to hold any of it is hardware you control.
+          Self-hosted, your biometric profile never leaves your network. No cloud ingestion.
+          No analytics pipeline. No data broker handshake. No terms-of-service update that
+          retroactively licenses your health history to somebody else's roadmap.
         </p>
         <div className="hero-privacy-grid">
           <div className="hero-privacy-card hero-privacy-card--highlight">
