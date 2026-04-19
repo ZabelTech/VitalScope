@@ -119,6 +119,7 @@ Every sync script must:
 - **Backend's `strftime('%Y-%W', ...)`** must be escaped as `'%%Y-%%W'` inside an f-string or Python `%` formatting will eat the percents.
 - **FastAPI path routing order matters**: `/api/workouts/{workout_id}` must be registered *after* `/api/workouts/stats`, `/api/workouts/weekly-volume`, etc., or the more specific routes get matched by the `{workout_id}` variable.
 - **Plugins re-enter the legacy sync scripts**: `_script_runner.py` patches `sys.argv` and credential env vars around `main()`. If a sync script reads globals at import time (not in `main()`), those globals get captured *once* at first import and won't reflect later runs with different credentials. Keep auth setup inside `main()`.
+- **Sync scripts must honor `VITALSCOPE_DB`.** The backend reads `DB_PATH = Path(os.environ.get("VITALSCOPE_DB", <repo>/vitalscope.db))`; every `sync_*.py` must mirror that same env-var lookup at module scope. The Docker image sets `VITALSCOPE_DB=/data/vitalscope.db` so the DB lives on the persistent volume; any script that hardcodes `Path(__file__).parent / "vitalscope.db"` writes to ephemeral `/app/vitalscope.db` that the backend never reads, and the plugin run silently looks successful.
 
 ## Credentials
 

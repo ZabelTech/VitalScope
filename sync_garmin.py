@@ -17,7 +17,7 @@ from garminconnect import (
 )
 
 TOKEN_DIR = Path("~/.garminconnect").expanduser()
-DB_PATH = Path(__file__).parent / "vitalscope.db"
+DB_PATH = Path(os.environ.get("VITALSCOPE_DB") or Path(__file__).parent / "vitalscope.db")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS heart_rate_daily (
