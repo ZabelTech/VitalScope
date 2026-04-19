@@ -69,6 +69,7 @@ Every sync script must:
 5. **Use `python3 -u` / `print(..., flush=True)`** if the script has long-running phases — stdout buffering will hide progress.
 6. **Expose a `main()`** that parses `sys.argv` and reads env vars — `backend/plugins/_script_runner.py` calls `main()` after patching argv+env, so any flag the CLI accepts has to work when passed through `cli_args`.
 7. **Register a plugin wrapper** in `backend/plugins/<name>.py`. The wrapper maps plugin params → `cli_args` + env, then calls `run_script_main(...)` and returns a `RunResult`. The APScheduler in `backend/app.py` runs these on configured intervals and records every run in the `plugin_runs` table.
+8. **Branch on demo mode at the wrapper layer.** Call `run_if_demo(generate_<source>, full=...)` from `backend/plugins/_demo_generators.py` before `run_script_main`. The generators reuse the per-source helpers in `seed_demo.py` to refresh the last 7 days in-place; if you add a new sync plugin, add a matching `generate_<source>` that calls those helpers so demo mode keeps working end to end.
 
 `sync_garmin.py` specifically **always re-fetches the last 2 days** regardless of incremental state, because today's HR/stress/battery update throughout the day and last night's sleep isn't finalized until morning. Don't break this.
 
@@ -150,6 +151,8 @@ When adding a new AI endpoint that doesn't need an image, use `_call_ai_text_too
 ### Orient AI analysis (`POST /api/orient/analyze`)
 
 Aggregates the last 14 days (configurable via `window_days`, 7–30) of wearable and workout data from the DB — heart rate, HRV, sleep, stress, body battery, steps, weight, recent workouts, and the latest bloodwork panel's flagged results — then calls the configured AI provider via `analyze_text_with_tool` to produce a structured report split into four topics: `health`, `performance`, `recovery`, `body_composition`. Each topic includes `insights`, `alerts`, and `recommendations`. Frontend component: `OrientAiAnalysis.tsx` in the Orient → AI Analysis section.
+
+When `VITALSCOPE_DEMO=1`, `_get_ai_provider()` short-circuits to `DemoProvider` (also in `backend/app.py`) — no API key is consulted, the three analyse endpoints all succeed, and the returned `model` / `ai_provider` strings are both `"demo"`. `DemoProvider.analyze_with_tool` dispatches on `tool["name"]` to a hand-written payload per endpoint (`_demo_meal_payload`, `_demo_form_check_payload`, `_demo_bloodwork_payload`); if you add a new analyse endpoint, add a matching case there too or the demo build will 500 on an empty dict.
 
 ## Before reporting a task done
 

@@ -1,10 +1,16 @@
-from .base import ParamSpec, Plugin, RunResult, register
+from ._demo_generators import generate_garmin_health, run_if_demo
 from ._script_runner import run_script_main
+from .base import ParamSpec, Plugin, RunResult, register
 
 
 def _run(params: dict) -> RunResult:
+    full = bool(params.get("full_sync"))
+    n = run_if_demo(generate_garmin_health, full=full)
+    if n is not None:
+        return RunResult(ok=True, message=f"Demo sync: {n} rows", rows_written=n)
+
     cli: list[str] = []
-    if params.get("full_sync"):
+    if full:
         cli.append("--full")
     elif params.get("days"):
         cli += ["--days", str(int(params["days"]))]

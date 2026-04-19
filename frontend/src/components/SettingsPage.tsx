@@ -28,29 +28,6 @@ export function SettingsPage() {
     reload();
   }, []);
 
-  if (runtime?.demo) {
-    return (
-      <div className="journal-page">
-        <div className="trends-header">
-          <h2>Settings — Sync Plugins</h2>
-        </div>
-        <section className="overview-card" style={{ margin: "1rem 0" }}>
-          <h3>Demo preview</h3>
-          <div className="overview-card-body">
-            <p>
-              Sync plugin configuration is disabled in demo mode — this environment
-              runs against a synthetic database and cannot reach Garmin Connect,
-              Strong, or EufyLife.
-            </p>
-            <p style={{ opacity: 0.7, fontSize: "0.9em", marginTop: "0.75rem" }}>
-              Run locally to configure real sync credentials.
-            </p>
-          </div>
-        </section>
-      </div>
-    );
-  }
-
   return (
     <div className="journal-page">
       <div className="trends-header">
@@ -59,7 +36,7 @@ export function SettingsPage() {
       {status === "loading" && <p>Loading…</p>}
       {status === "error" && <p className="journal-err">Failed to load plugins</p>}
       {plugins.map((p) => (
-        <PluginCard key={p.name} plugin={p} onChanged={reload} />
+        <PluginCard key={p.name} plugin={p} demo={runtime?.demo ?? false} onChanged={reload} />
       ))}
     </div>
   );
@@ -67,9 +44,11 @@ export function SettingsPage() {
 
 function PluginCard({
   plugin,
+  demo,
   onChanged,
 }: {
   plugin: PluginConfig;
+  demo: boolean;
   onChanged: () => void;
 }) {
   const [collapsed, setCollapsed] = useState(true);
@@ -246,7 +225,7 @@ function PluginCard({
           </div>
 
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
-            <button onClick={handleSave} disabled={saving || activeRunId !== null}>
+            <button onClick={handleSave} disabled={demo || saving || activeRunId !== null}>
               {saving ? "Saving…" : "Save"}
             </button>
             <button onClick={handleRun} disabled={saving || activeRunId !== null}>

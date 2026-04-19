@@ -68,10 +68,10 @@ _AI_KEY_BY_PROVIDER = {
     "openai": OPENAI_API_KEY,
     "openrouter": OPENROUTER_API_KEY,
 }
-# AI is available whenever the selected provider's key is set, regardless of
-# demo mode. Demo-mode preview apps that want to exercise the analyser can opt
-# in by setting the matching key as a Fly secret on the per-PR app.
-AI_AVAILABLE = bool(_AI_KEY_BY_PROVIDER[AI_PROVIDER])
+# AI is available whenever the selected provider's key is set OR when demo
+# mode is on (in which case the in-process DemoProvider returns canned
+# tool-call payloads, so the analyse endpoints work without any API key).
+AI_AVAILABLE = DEMO_MODE or bool(_AI_KEY_BY_PROVIDER[AI_PROVIDER])
 
 # --- Auth (single shared password) ---
 AUTH_PASSWORD = "JohnBoyd"
@@ -167,8 +167,8 @@ def runtime_info():
         "env": ENV_NAME,
         "commit": BUILD_SHA,
         "ai_available": AI_AVAILABLE,
-        "ai_provider": AI_PROVIDER if AI_AVAILABLE else None,
-        "ai_model": AI_MODEL if AI_AVAILABLE else None,
+        "ai_provider": ("demo" if DEMO_MODE else AI_PROVIDER) if AI_AVAILABLE else None,
+        "ai_model": ("demo" if DEMO_MODE else AI_MODEL) if AI_AVAILABLE else None,
     }
 
 
@@ -2067,13 +2067,112 @@ class OpenAIProvider(AIProvider):
             raise HTTPException(status_code=502, detail=f"{self.name} returned invalid tool-call JSON")
 
 
+class DemoProvider(AIProvider):
+    """In-process provider used when VITALSCOPE_DEMO=1. Returns canned
+    tool-call payloads matching each endpoint's schema so the UI works end
+    to end without any external API. Adds a short sleep to mimic latency."""
+
+    name = "demo"
+    model = "demo"
+
+    async def analyze_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        media_b64: str,
+        mime: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        await asyncio.sleep(0.4)
+        tool_name = tool.get("name")
+        if tool_name == "record_meal_estimate":
+            return _demo_meal_payload(tool)
+        if tool_name == "record_form_check":
+            return _demo_form_check_payload()
+        if tool_name == "record_bloodwork_panel":
+            return _demo_bloodwork_payload()
+        return {}
+
+
+def _demo_meal_payload(tool: dict) -> dict:
+    nutrient_keys = list(
+        tool.get("input_schema", {})
+            .get("properties", {})
+            .get("nutrients", {})
+            .get("properties", {})
+            .keys()
+    )
+    known = {
+        "calories_kcal": 480,
+        "protein_g": 32,
+        "carbs_g": 55,
+        "fat_g": 16,
+        "fiber_g": 7,
+        "saturated_fat_g": 4,
+        "sodium_mg": 620,
+        "sugar_g": 9,
+    }
+    nutrients = {k: known.get(k) for k in nutrient_keys}
+    return {
+        "suggested_name": "Demo grilled chicken bowl",
+        "suggested_notes": "Mocked meal estimate — no external AI was called.",
+        "confidence": "medium",
+        "nutrients": nutrients,
+    }
+
+
+def _demo_form_check_payload() -> dict:
+    return {
+        "confidence": "medium",
+        "notes": "Mocked form-check — no external AI was called.",
+        "body_fat_pct": 18.0,
+        "muscle_mass_category": "moderate",
+        "water_retention": "mild",
+        "visible_definition": "moderate",
+        "fatigue_signs": "none",
+        "hydration_signs": "neutral",
+        "posture_note": "Relaxed stance, slight forward lean.",
+        "symmetry_note": "Largely symmetric across upper body.",
+        "general_vigor_note": "Appears well-rested.",
+    }
+
+
+def _demo_bloodwork_payload() -> dict:
+    return {
+        "collection_date": date.today().isoformat(),
+        "lab_name": "Demo Labs",
+        "confidence": "high",
+        "notes": "Mocked panel — no external AI was called. One flagged result (LDL).",
+        "results": [
+            {"analyte": "Hemoglobin", "value": 14.8, "value_text": None, "unit": "g/dL",
+             "reference_low": 13.5, "reference_high": 17.5, "reference_text": None, "flag": "normal"},
+            {"analyte": "LDL Cholesterol", "value": 135, "value_text": None, "unit": "mg/dL",
+             "reference_low": 0, "reference_high": 100, "reference_text": None, "flag": "high"},
+            {"analyte": "HDL Cholesterol", "value": 58, "value_text": None, "unit": "mg/dL",
+             "reference_low": 40, "reference_high": None, "reference_text": None, "flag": "normal"},
+            {"analyte": "Fasting Glucose", "value": 92, "value_text": None, "unit": "mg/dL",
+             "reference_low": 70, "reference_high": 99, "reference_text": None, "flag": "normal"},
+            {"analyte": "TSH", "value": 2.1, "value_text": None, "unit": "mIU/L",
+             "reference_low": 0.4, "reference_high": 4.0, "reference_text": None, "flag": "normal"},
+            {"analyte": "Vitamin D, 25-OH", "value": 28, "value_text": None, "unit": "ng/mL",
+             "reference_low": 30, "reference_high": 100, "reference_text": None, "flag": "low"},
+            {"analyte": "Ferritin", "value": 120, "value_text": None, "unit": "ng/mL",
+             "reference_low": 30, "reference_high": 400, "reference_text": None, "flag": "normal"},
+        ],
+    }
+
+
 _ai_provider: Optional[AIProvider] = None
 
 
 def _get_ai_provider() -> AIProvider:
     global _ai_provider
     if _ai_provider is None:
-        if AI_PROVIDER == "anthropic":
+        if DEMO_MODE:
+            _ai_provider = DemoProvider()
+        elif AI_PROVIDER == "anthropic":
             _ai_provider = AnthropicProvider(api_key=ANTHROPIC_API_KEY, model=AI_MODEL)
         elif AI_PROVIDER == "openai":
             _ai_provider = OpenAIProvider(
@@ -2257,7 +2356,7 @@ async def analyze_meal_image(body: AnalyzeImageBody):
                 unknown_keys.append(key)
 
     return {
-        "model": AI_MODEL,
+        "model": _get_ai_provider().model,
         "suggested_name": payload.get("suggested_name") or "Meal",
         "suggested_notes": payload.get("suggested_notes") or "",
         "confidence": payload.get("confidence") or "medium",
@@ -2383,7 +2482,7 @@ async def analyze_form_check_image(body: AnalyzeImageBody):
 
     unknown_keys: list[str] = []
     result: dict[str, Any] = {
-        "model": AI_MODEL,
+        "model": _get_ai_provider().model,
         "confidence": payload.get("confidence") or "medium",
         "notes": payload.get("notes") or "",
     }
@@ -2506,7 +2605,7 @@ async def analyze_bloodwork_upload(body: AnalyzeImageBody):
         })
 
     return {
-        "model": AI_MODEL,
+        "model": _get_ai_provider().model,
         "confidence": payload.get("confidence") or "medium",
         "collection_date": payload.get("collection_date") or None,
         "lab_name": payload.get("lab_name") or None,
@@ -3458,8 +3557,6 @@ def update_plugin(name: str, body: PluginUpdateBody):
 
 @app.post("/api/plugins/{name}/run")
 async def run_plugin_now(name: str):
-    if DEMO_MODE:
-        raise HTTPException(status_code=503, detail="demo mode: plugin runs disabled")
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
