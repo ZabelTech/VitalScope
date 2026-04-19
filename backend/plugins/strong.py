@@ -1,9 +1,15 @@
-from .base import ParamSpec, Plugin, RunResult, register
+from ._demo_generators import generate_strong, run_if_demo
 from ._script_runner import run_script_main
+from .base import ParamSpec, Plugin, RunResult, register
 
 
 def _run(params: dict) -> RunResult:
-    cli = ["--full"] if params.get("full_sync") else []
+    full = bool(params.get("full_sync"))
+    n = run_if_demo(generate_strong, full=full)
+    if n is not None:
+        return RunResult(ok=True, message=f"Demo sync: {n} rows", rows_written=n)
+
+    cli = ["--full"] if full else []
     run_script_main(
         "sync_strong",
         env={

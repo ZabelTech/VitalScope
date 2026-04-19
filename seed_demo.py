@@ -3,6 +3,10 @@
 Run with `python3 seed_demo.py`. Idempotent — skips if the DB already has
 daily rows. Uses a fixed random seed so the demo looks the same across
 deploys.
+
+The per-source seed functions (`seed_heart_rate`, etc.) accept an explicit
+date range and RNG so `backend/plugins/_demo_generators.py` can reuse them
+to fake "Run now" behavior in demo mode.
 """
 
 import os
@@ -11,7 +15,6 @@ import sqlite3
 import sys
 import uuid
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 
 os.environ.setdefault("VITALSCOPE_ENV", "prod")
 
@@ -19,7 +22,7 @@ import backend.app  # noqa: F401  — creates the schema via its module-load sid
 
 DB_PATH = backend.app.DB_PATH
 DAYS = 90
-RNG = random.Random(42)
+DEMO_SEED = 42
 
 
 def _already_seeded(conn: sqlite3.Connection) -> bool:
@@ -27,31 +30,32 @@ def _already_seeded(conn: sqlite3.Connection) -> bool:
     return n > 0
 
 
-def _dates() -> list[date]:
-    today = date.today()
-    return [today - timedelta(days=i) for i in range(DAYS - 1, -1, -1)]
+def date_range(days: int, end: date | None = None) -> list[date]:
+    end = end or date.today()
+    return [end - timedelta(days=i) for i in range(days - 1, -1, -1)]
 
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%S")
 
 
-def seed_heart_rate(conn: sqlite3.Connection) -> None:
-    for d in _dates():
-        resting = 52 + RNG.randint(-3, 4)
-        lo = resting - RNG.randint(2, 6)
-        hi = 140 + RNG.randint(-20, 30)
+def seed_heart_rate(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    for d in dates:
+        resting = 52 + rng.randint(-3, 4)
+        lo = resting - rng.randint(2, 6)
+        hi = 140 + rng.randint(-20, 30)
         conn.execute(
             "INSERT OR REPLACE INTO heart_rate_daily "
             "(date, resting_hr, min_hr, max_hr, avg_7d_resting_hr) VALUES (?,?,?,?,?)",
             (d.isoformat(), resting, lo, hi, resting),
         )
+    return len(dates)
 
 
-def seed_hrv(conn: sqlite3.Connection) -> None:
+def seed_hrv(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
     baseline = 58
-    for d in _dates():
-        last = baseline + RNG.randint(-8, 8)
+    for d in dates:
+        last = baseline + rng.randint(-8, 8)
         conn.execute(
             "INSERT OR REPLACE INTO hrv_daily "
             "(date, weekly_avg, last_night_avg, last_night_5min_high, "
@@ -59,26 +63,28 @@ def seed_hrv(conn: sqlite3.Connection) -> None:
             "VALUES (?,?,?,?,?,?,?)",
             (d.isoformat(), baseline, last, last + 12, baseline - 10, baseline - 5, baseline + 5),
         )
+    return len(dates)
 
 
-def seed_body_battery(conn: sqlite3.Connection) -> None:
-    for d in _dates():
+def seed_body_battery(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    for d in dates:
         conn.execute(
             "INSERT OR REPLACE INTO body_battery_daily (date, charged, drained) VALUES (?,?,?)",
-            (d.isoformat(), 60 + RNG.randint(-15, 20), 55 + RNG.randint(-15, 25)),
+            (d.isoformat(), 60 + rng.randint(-15, 20), 55 + rng.randint(-15, 25)),
         )
+    return len(dates)
 
 
-def seed_sleep(conn: sqlite3.Connection) -> None:
-    for d in _dates():
-        total = 7 * 3600 + RNG.randint(-3600, 3600)
-        deep = int(total * (0.14 + RNG.random() * 0.06))
-        rem = int(total * (0.18 + RNG.random() * 0.06))
-        awake = RNG.randint(5, 30) * 60
+def seed_sleep(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    for d in dates:
+        total = 7 * 3600 + rng.randint(-3600, 3600)
+        deep = int(total * (0.14 + rng.random() * 0.06))
+        rem = int(total * (0.18 + rng.random() * 0.06))
+        awake = rng.randint(5, 30) * 60
         light = max(0, total - deep - rem - awake)
-        start = datetime.combine(d - timedelta(days=1), time(23, RNG.randint(0, 45)))
+        start = datetime.combine(d - timedelta(days=1), time(23, rng.randint(0, 45)))
         end = start + timedelta(seconds=total + awake)
-        score = 70 + RNG.randint(-15, 20)
+        score = 70 + rng.randint(-15, 20)
         quality = "good" if score >= 80 else "fair" if score >= 60 else "poor"
         conn.execute(
             "INSERT OR REPLACE INTO sleep_daily "
@@ -89,36 +95,42 @@ def seed_sleep(conn: sqlite3.Connection) -> None:
             (
                 d.isoformat(), total, deep, light, rem, awake,
                 _iso(start), _iso(end),
-                96 + RNG.random() * 2, 14 + RNG.random() * 2, 20 + RNG.random() * 10,
-                score, quality, 52 + RNG.randint(-3, 4),
+                96 + rng.random() * 2, 14 + rng.random() * 2, 20 + rng.random() * 10,
+                score, quality, 52 + rng.randint(-3, 4),
             ),
         )
+    return len(dates)
 
 
-def seed_stress(conn: sqlite3.Connection) -> None:
-    for d in _dates():
+def seed_stress(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    for d in dates:
         conn.execute(
             "INSERT OR REPLACE INTO stress_daily (date, avg_stress, max_stress) VALUES (?,?,?)",
-            (d.isoformat(), 28 + RNG.randint(-10, 25), 70 + RNG.randint(-10, 25)),
+            (d.isoformat(), 28 + rng.randint(-10, 25), 70 + rng.randint(-10, 25)),
         )
+    return len(dates)
 
 
-def seed_steps(conn: sqlite3.Connection) -> None:
-    for d in _dates():
-        total = 8000 + RNG.randint(-5000, 7000)
+def seed_steps(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    for d in dates:
+        total = 8000 + rng.randint(-5000, 7000)
         conn.execute(
             "INSERT OR REPLACE INTO steps_daily "
             "(date, total_steps, total_distance_m, step_goal) VALUES (?,?,?,?)",
             (d.isoformat(), max(0, total), int(total * 0.78), 10000),
         )
+    return len(dates)
 
 
-def seed_weight(conn: sqlite3.Connection) -> None:
+def seed_weight(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    # Skip every other date (ordinal-based so the same calendar day is
+    # always either a weigh-in or a skip, regardless of range length).
+    count = 0
     weight = 78.0
-    for i, d in enumerate(_dates()):
-        if i % 2 == 0:  # skip some days so it's not daily
+    for d in dates:
+        if d.toordinal() % 2 == 0:
             continue
-        weight += RNG.uniform(-0.2, 0.2)
+        weight += rng.uniform(-0.2, 0.2)
         conn.execute(
             "INSERT OR REPLACE INTO weight_daily "
             "(date, weight_kg, body_fat_pct, muscle_mass_kg, bone_mass_kg, water_pct, "
@@ -126,24 +138,27 @@ def seed_weight(conn: sqlite3.Connection) -> None:
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
                 d.isoformat(), round(weight, 2),
-                18 + RNG.random() * 2, round(weight * 0.45, 2), round(weight * 0.04, 2),
-                55 + RNG.random() * 3, round(weight / (1.78 ** 2), 1),
-                8 + RNG.random(), int(1600 + weight * 5),
-                18 + RNG.random(), round(weight * 0.82, 2), 30, 58,
+                18 + rng.random() * 2, round(weight * 0.45, 2), round(weight * 0.04, 2),
+                55 + rng.random() * 3, round(weight / (1.78 ** 2), 1),
+                8 + rng.random(), int(1600 + weight * 5),
+                18 + rng.random(), round(weight * 0.82, 2), 30, 58,
             ),
         )
+        count += 1
+    return count
 
 
-def seed_activities(conn: sqlite3.Connection) -> None:
+def seed_activities(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
     types = [("running", "Run"), ("cycling", "Ride"), ("strength_training", "Strength"), ("yoga", "Yoga")]
-    for i, d in enumerate(_dates()):
-        if i % 4 != 0:  # ~every 4th day
+    count = 0
+    for d in dates:
+        if d.toordinal() % 4 != 0:
             continue
-        sport, label = RNG.choice(types)
-        start = datetime.combine(d, time(7 + RNG.randint(0, 12), RNG.randint(0, 59)))
-        dur = 40 * 60 + RNG.randint(-15, 45) * 60
+        sport, label = rng.choice(types)
+        start = datetime.combine(d, time(7 + rng.randint(0, 12), rng.randint(0, 59)))
+        dur = 40 * 60 + rng.randint(-15, 45) * 60
         end = start + timedelta(seconds=dur)
-        dist = 8000 + RNG.randint(-4000, 12000) if sport in ("running", "cycling") else 0
+        dist = 8000 + rng.randint(-4000, 12000) if sport in ("running", "cycling") else 0
         conn.execute(
             "INSERT OR REPLACE INTO garmin_activities "
             "(activity_id, date, start_time, end_time, name, sport_type, activity_type, "
@@ -151,40 +166,43 @@ def seed_activities(conn: sqlite3.Connection) -> None:
             " avg_speed_mps, calories, avg_power_w, training_effect, anaerobic_te, raw_json) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (
-                10_000_000 + i, d.isoformat(), _iso(start), _iso(end),
+                10_000_000 + d.toordinal(), d.isoformat(), _iso(start), _iso(end),
                 f"{label} {d.isoformat()}", sport, sport,
                 float(dur), float(dur - 30), float(dist),
-                float(RNG.randint(0, 300)) if sport == "cycling" else float(RNG.randint(20, 150)),
-                140 + RNG.randint(-15, 25), 165 + RNG.randint(-10, 20),
-                (dist / dur) if dist else 0.0, 350 + RNG.randint(-100, 300),
+                float(rng.randint(0, 300)) if sport == "cycling" else float(rng.randint(20, 150)),
+                140 + rng.randint(-15, 25), 165 + rng.randint(-10, 20),
+                (dist / dur) if dist else 0.0, 350 + rng.randint(-100, 300),
                 180.0 if sport == "cycling" else 0.0,
-                2.5 + RNG.random(), 0.5 + RNG.random(), "{}",
+                2.5 + rng.random(), 0.5 + rng.random(), "{}",
             ),
         )
+        count += 1
+    return count
 
 
-def seed_workouts(conn: sqlite3.Connection) -> None:
+def seed_workouts(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
     exercises = ["Squat", "Bench Press", "Deadlift", "Overhead Press", "Barbell Row", "Pull Up"]
-    for i, d in enumerate(_dates()):
-        if i % 7 != 0:
+    count = 0
+    for d in dates:
+        if d.toordinal() % 7 != 0:
             continue
-        wid = str(uuid.UUID(int=i))
+        wid = str(uuid.UUID(int=d.toordinal()))
         start = datetime.combine(d, time(18, 0))
         end = start + timedelta(minutes=55)
         conn.execute(
             "INSERT OR REPLACE INTO workouts (id, date, end_date, name, duration_sec, notes) VALUES (?,?,?,?,?,?)",
-            (wid, _iso(start), _iso(end), RNG.choice(["Push", "Pull", "Legs", "Full Body"]), 55 * 60, ""),
+            (wid, _iso(start), _iso(end), rng.choice(["Push", "Pull", "Legs", "Full Body"]), 55 * 60, ""),
         )
         order = 0
-        for ex in RNG.sample(exercises, 4):
-            base_weight = RNG.choice([40, 60, 80, 100])
+        for ex in rng.sample(exercises, 4):
+            base_weight = rng.choice([40, 60, 80, 100])
             for _set in range(3):
                 order += 1
                 conn.execute(
                     "INSERT OR REPLACE INTO workout_sets "
                     "(workout_id, exercise, set_order, set_type, weight_kg, reps, seconds, distance_m, is_pr, rpe) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    (wid, ex, order, "working", float(base_weight), RNG.randint(5, 10), None, None, 0, 7.5),
+                    (wid, ex, order, "working", float(base_weight), rng.randint(5, 10), None, None, 0, 7.5),
                 )
                 order += 1
                 conn.execute(
@@ -193,6 +211,8 @@ def seed_workouts(conn: sqlite3.Connection) -> None:
                     "VALUES (?,?,?,?,?,?,?,?,?,?)",
                     (wid, ex, order, "rest", None, None, 90, None, 0, None),
                 )
+        count += 1
+    return count
 
 
 def seed_nutrition_goals(conn: sqlite3.Connection) -> None:
@@ -294,15 +314,17 @@ def main() -> None:
             print(f"seed_demo: {DB_PATH} already populated, skipping", flush=True)
             return
         print(f"seed_demo: writing {DAYS} days of synthetic data to {DB_PATH}", flush=True)
-        seed_heart_rate(conn)
-        seed_hrv(conn)
-        seed_body_battery(conn)
-        seed_sleep(conn)
-        seed_stress(conn)
-        seed_steps(conn)
-        seed_weight(conn)
-        seed_activities(conn)
-        seed_workouts(conn)
+        dates = date_range(DAYS)
+        rng = random.Random(DEMO_SEED)
+        seed_heart_rate(conn, dates, rng)
+        seed_hrv(conn, dates, rng)
+        seed_body_battery(conn, dates, rng)
+        seed_sleep(conn, dates, rng)
+        seed_stress(conn, dates, rng)
+        seed_steps(conn, dates, rng)
+        seed_weight(conn, dates, rng)
+        seed_activities(conn, dates, rng)
+        seed_workouts(conn, dates, rng)
         seed_supplements(conn)
         seed_meals_and_water(conn)
         seed_nutrition_goals(conn)

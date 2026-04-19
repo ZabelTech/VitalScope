@@ -231,6 +231,8 @@ python3 sync_eufy.py
 
 Every pull request gets an ephemeral Fly.io app at `https://vitalscope-pr-<N>.fly.dev`, provisioned by `.github/workflows/preview-deploy.yml` and torn down when the PR closes. Previews run with `VITALSCOPE_DEMO=1` — the scheduler is off, plugin credentials are inaccessible, and the SQLite file is reseeded from `seed_demo.py` on every boot so no real health data ever leaves this machine.
 
+Inside demo mode every external dependency is mocked in-process: clicking **Run now** on any sync plugin calls the matching generator in `backend/plugins/_demo_generators.py` (reusing the per-source seeders from `seed_demo.py`) and writes fresh rows for the last 7 days without touching Garmin / Strong / EufyLife. The AI analyse endpoints (meal, form check, bloodwork) go through `DemoProvider` in `backend/app.py`, which returns canned tool-call payloads matching each endpoint's schema — no API key needed, nothing leaves the container. `/api/runtime` reports `ai_provider: "demo"` in this mode.
+
 ## Automatic merge-conflict resolution
 
 When `main` moves, `.github/workflows/claude-resolve-conflicts.yml` scans open PRs, finds any whose GitHub `mergeable` status is `CONFLICTING`, and dispatches Claude Code to merge `main` in and resolve the conflicts. Claude pushes the merge commit back to the PR branch and comments on the PR summarising which files it touched. Fork PRs are skipped (no write access); ambiguous conflicts are left alone with a comment explaining what a human needs to decide. Trigger it manually for a single PR with `workflow_dispatch`.
