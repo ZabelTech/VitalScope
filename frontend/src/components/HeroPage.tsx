@@ -30,48 +30,40 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
 
       <section id="problem" className="hero-section hero-problem">
         <div className="hero-section-label">The Broken Ecosystem</div>
-        <h2>Your health data is fragmented, monetized, and stuck in the past.</h2>
+        <h2>Your health data is fragmented, monetised, and already out of date by the time you see it.</h2>
         <p className="hero-section-body">
-          You wear a fitness wearable. You log your lifts in a gym tracker. You weigh yourself every morning. You track what you eat.
-          But your wearable doesn't talk to your gym tracker. Your gym tracker doesn't talk to your food tracker or your smart scale.
-          Your scale phones home to a server in Shenzhen. None of it gives you a
-          complete picture — and none of it actually belongs to you.
+          A wearable on your wrist. A gym tracker on your phone. A smart scale on the bathroom
+          floor. A food log, a lab portal, a DNA report you haven't opened in a year. None of it
+          talks. None of it adds up. And every byte of it lives on somebody else's server,
+          answering to somebody else's roadmap.
         </p>
         <div className="hero-problem-grid">
           <div className="hero-problem-item">
             <div className="hero-problem-heading">Data Fragmentation</div>
-            <p>Heart rate in one app. PRs in another. Body composition somewhere else. Bloodwork in a separate portal. DNA data siloed in yet another system. Insight nowhere.</p>
+            <p>Heart rate in one app. PRs in another. Body comp, bloodwork, DNA — each in its own silo. Signal everywhere. Insight nowhere.</p>
           </div>
           <div className="hero-problem-item">
-            <div className="hero-problem-heading">Rigid, Inflexible Analysis</div>
-            <p>Pre-baked charts for pre-baked questions. Can't ask your own. Can't correlate across domains. Can't query what the product managers didn't predict.</p>
+            <div className="hero-problem-heading">Pre-Baked Analysis</div>
+            <p>Fixed charts for fixed questions. No way to correlate across domains. No way to ask anything a product manager didn't already ship.</p>
           </div>
           <div className="hero-problem-item">
             <div className="hero-problem-heading">No Holistic View</div>
             <p>Sleep, stress, training load, nutrition, bloodwork — never in the same room at the same time. The full picture is invisible by design.</p>
           </div>
           <div className="hero-problem-item">
-            <div className="hero-problem-heading">Static Plans, No Feedback Loop</div>
-            <p>A program designed for a generic human, with zero feedback from your actual physiology. You adapt. Your plan doesn't. That gap is costing you results.</p>
-          </div>
-          <div className="hero-problem-item">
             <div className="hero-problem-heading">You Are the Product</div>
-            <p>Fitness wearables, gym trackers, food trackers, smart scales. Your most intimate biological data — sold, licensed, and aggregated by corporations you'll never audit and can't hold accountable.</p>
-          </div>
-          <div className="hero-problem-item">
-            <div className="hero-problem-heading">Walled Gardens</div>
-            <p>Export features are an afterthought. Your longitudinal health record is held hostage by monthly subscriptions, proprietary formats, and deletion clauses buried in ToS updates.</p>
+            <p>Your most intimate biological data — sold, licensed, aggregated, and walled behind subscriptions you stop paying the moment you want to export it.</p>
           </div>
         </div>
       </section>
 
       <section className="hero-section hero-deadreckoning">
         <div className="hero-section-label">Why Stale Data Kills</div>
-        <h2>Dead reckoning works in open ocean. In a fighter jet dogfight — or inside your own biology — it gets you killed.</h2>
+        <h2>Dead reckoning got ships across oceans. In a dogfight — or inside your own biology — it gets you killed.</h2>
         <p className="hero-section-body">
-          Dead reckoning is the practice of estimating your current position from a last known fix,
-          advancing it using assumed speed and heading. For centuries it was the best sailors had.
-          For a fighter pilot in a beyond-visual-range engagement, it is a death sentence.
+          Dead reckoning is navigation by assumption: a last known position, projected forward on
+          guessed speed and heading. It kept sailors alive for centuries. It gets a fighter pilot
+          locked onto before they finish the calculation.
         </p>
         <div className="hero-dr-scenario">
           <div className="hero-dr-column hero-dr-column--danger">
@@ -110,24 +102,28 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </div>
         <div className="hero-dr-callout">
           <p>
-            Colonel John Boyd flew against every student at Nellis in under forty seconds — not
-            because he was faster, but because he could cycle his situational model faster than
-            his opponent could maintain theirs. Boyd's insight was not that you need more data — it was that you need to cycle your
-            observation and orientation faster than the environment changes. In the air, that is
-            measured in seconds. In your biology, it is measured in days and weeks. The principle
-            is identical: the pilot — or the athlete, or the person managing their own health —
-            who holds a more current and more accurate model of reality wins every time.
+            Colonel John Boyd beat every student at Nellis Air Force Base in under forty seconds
+            — not because he was faster, but because he could cycle his model of the fight faster
+            than his opponent could maintain theirs.
+          </p>
+          <p>
+            His insight wasn't that you need more data. It's that you need to cycle your
+            observation and orientation faster than the world around you changes. In the cockpit
+            that's measured in seconds. In your biology it's days and weeks. The principle is
+            the same either way: whoever holds the more current, more accurate model of reality
+            wins.
           </p>
         </div>
       </section>
 
       <section className="hero-section hero-ooda">
         <div className="hero-section-label">The Framework</div>
-        <h2>The OODA Loop: a cognitive framework built for adversarial environments — repurposed for the relentless optimization of you.</h2>
+        <h2>Observe. Orient. Decide. Act. Boyd's loop — turned inward.</h2>
         <p className="hero-section-body">
-          Developed by fighter pilot Colonel John Boyd, the OODA loop — Observe, Orient, Decide, Act —
-          is the fastest decision-making framework ever conceived under uncertainty.
-          Your physiology is a dynamic, adversarial system with no pause button. You need the same edge.
+          The OODA loop is the fastest decision cycle ever built for moving, adversarial systems.
+          Your physiology is exactly that kind of system: it never stops, it never stabilises, and
+          every intervention arrives into a state that's already different from the one it was
+          designed for. VitalScope rebuilds the loop around you.
         </p>
         <div className="hero-ooda-grid">
           <div className="hero-ooda-node">
@@ -267,19 +263,11 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
           <div className="hero-genomics-card">
             <div className="hero-genomics-card-title">Performance Genetics + Training Load</div>
-            <p>ACTN3 R577X determines your ratio of fast-twitch to slow-twitch fibre expression — the genetic underpinning of whether your body is wired for power or endurance. Cross that against your actual training volume and HRV trends to stop programming against your own biology and start working with it.</p>
-          </div>
-          <div className="hero-genomics-card">
-            <div className="hero-genomics-card-title">Inflammation &amp; Recovery Genetics</div>
-            <p>CRP and IL-6 variants raise your baseline inflammatory tone — so a "normal" CRP reading for you may still be elevated relative to your own genetic floor. When your HRV dips after a hard week, knowing whether you carry high-inflammation genotypes tells you whether that's adaptation or a warning sign requiring a longer recovery window.</p>
-          </div>
-          <div className="hero-genomics-card">
-            <div className="hero-genomics-card-title">Chronotype &amp; Sleep Architecture</div>
-            <p>PER3 and CLOCK gene variants directly shape circadian period length and sleep pressure dynamics — the genetic reasons why your HRV and sleep stage data look different from the population charts. Stop optimising for an average chronotype when your genome encodes a specific one.</p>
+            <p>ACTN3 R577X determines your fast-twitch to slow-twitch fibre ratio — the genetic underpinning of whether you're wired for power or endurance. Cross it against your actual training volume and HRV trends and stop programming against your own biology.</p>
           </div>
           <div className="hero-genomics-card">
             <div className="hero-genomics-card-title">Pharmacogenomics &amp; Supplements</div>
-            <p>CYP450 enzyme variants determine how rapidly you metabolise caffeine, certain supplements, and medications — the difference between a therapeutic dose and an adverse reaction. When your supplement stack and your drug metabolism profile are in the same system, you stop dosing blind.</p>
+            <p>CYP450 variants decide how fast you metabolise caffeine, supplements, and medications — the difference between a therapeutic dose and an adverse reaction. When your stack and your metabolism profile live in the same system, you stop dosing blind.</p>
           </div>
         </div>
         <div className="hero-genomics-synthesis">
@@ -301,36 +289,19 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-clinical-grid">
           <div className="hero-clinical-card">
             <div className="hero-clinical-card-title">Episodic by Design</div>
-            <p>A GP appointment is 10 minutes, once a year. That is a single data point on a continuous
-            time-series. The entire clinical infrastructure — referral pathways, diagnostic thresholds,
-            treatment protocols — was built around episodic intervention after symptoms emerge, not
-            continuous monitoring of the system that generates them. By the time a pattern is visible
-            in an annual snapshot, it has often been running for months.</p>
+            <p>Ten minutes, once a year. That's one data point on a continuous time-series. Referral pathways, diagnostic thresholds, treatment protocols — all built around intervening after symptoms surface, not watching the system that produces them. By the time a pattern shows up on an annual snapshot, it's been running for months.</p>
           </div>
           <div className="hero-clinical-card">
             <div className="hero-clinical-card-title">Curricula Written for a Different Era</div>
-            <p>Medical training frameworks are generalist by design and move slowly by necessity.
-            Precision nutrition, HRV-guided periodization, chronobiology, and pharmacogenomics are
-            disciplines that have matured faster than multi-decade curricula can track. The domains
-            most relevant to proactive optimisation are precisely the ones least represented in
-            standard clinical training — not by design, but by institutional inertia.</p>
+            <p>Precision nutrition, HRV-guided periodisation, chronobiology, pharmacogenomics — the disciplines most relevant to proactive optimisation have matured faster than multi-decade curricula can absorb them. Not a failure of any practitioner. A structural lag in how the field trains.</p>
           </div>
           <div className="hero-clinical-card">
             <div className="hero-clinical-card-title">You Are Not the Population Average</div>
-            <p>The reference ranges on your lab report were derived from population cohort studies —
-            calibrated on a statistical distribution, not on your genetics, your training history,
-            or your individual inflammatory phenotype. "Normal" means you are not a significant
-            statistical outlier from a heterogeneous sample. It says nothing about whether
-            your result is optimal for <em>you specifically</em>.</p>
+            <p>The reference ranges on your lab report are statistical distributions across a heterogeneous sample — not a calibration against your genetics, your training history, or your baseline. "Normal" means you're not an outlier. It says nothing about whether the result is optimal for <em>you</em>.</p>
           </div>
           <div className="hero-clinical-card">
             <div className="hero-clinical-card-title">The Knowledge Update Rate Problem</div>
-            <p>Biomedical research publishes tens of thousands of papers per year across immunology,
-            endocrinology, exercise physiology, pharmacogenomics, and nutritional biochemistry.
-            No individual practitioner can maintain currency across all of them simultaneously —
-            it is a physical impossibility of attention. AI systems trained on the current body
-            of literature have no such constraint. They surface connections across disciplines
-            that no single domain expert would encounter in a normal practice week.</p>
+            <p>Tens of thousands of biomedical papers publish every year across immunology, endocrinology, exercise physiology, and nutritional biochemistry. No human can stay current across all of them. An AI trained on the literature can — and surfaces cross-disciplinary connections no single specialist would stumble onto in a practice week.</p>
           </div>
         </div>
         <div className="hero-clinical-callout">
@@ -345,17 +316,16 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-responsibility">
-        <div className="hero-section-label">Great Power, Greater Responsibility</div>
-        <h2>Unified biometric data is powerful. Handle it accordingly.</h2>
+        <div className="hero-section-label">Handle With Care</div>
+        <h2>One dataset in VitalScope cannot be taken back.</h2>
         <p className="hero-section-body">
-          Combining heart rate variability, body composition, sleep architecture, bloodwork panels, and
-          multi-year training history creates a profile of extraordinary sensitivity.
-          This data, in the wrong hands or misread by the wrong mind, causes real harm.
+          Most biometric data ages out — last month's HRV is context, not liability. Your genome
+          is the exception. It doesn't change, and it doesn't only describe you.
         </p>
         <div className="hero-responsibility-grid">
           <div className="hero-responsibility-item">
             <div className="hero-responsibility-heading">DNA Sequencing Is Permanent</div>
-            <p>Your genome cannot be changed. Uploading and analysing DNA data is an irreversible act with lifelong implications — for insurance, employment, and family members who share your variants. Understand what you are storing and who can access it before you upload.</p>
+            <p>Your genome can't be rotated, revoked, or anonymised. Uploading it has lifelong implications — for insurance, employment, and the family members who share your variants. Know what you're storing and who can reach it before the file lands.</p>
           </div>
         </div>
       </section>
@@ -389,11 +359,12 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-final-cta">
-        <h2>The loop is waiting.</h2>
+        <h2>Close the loop.</h2>
         <p className="hero-section-body">
-          Your physiology generates signal every second. Most of it is lost to fragmented apps,
-          siloed dashboards, and quarterly software updates nobody asked for.
-          VitalScope captures it, connects it, and puts you back in command.
+          Your physiology is generating signal every second. Right now most of it is lost to
+          fragmented apps, siloed dashboards, and quarterly product updates nobody asked for.
+          VitalScope captures it, connects it, and hands the picture back to the one person it
+          belongs to.
         </p>
         <div className="hero-actions">
           {onLoginClick ? (
