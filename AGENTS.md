@@ -124,7 +124,7 @@ Stored in the user's environment or the user will paste them when asked. **Never
 
 ## AI analyser provider
 
-The image-analysis endpoints (`/api/meals/analyze-image`, `/api/form-checks/analyze-image`) go through a provider adapter selected at boot by `VITALSCOPE_AI_PROVIDER`. Defaults to `anthropic`.
+The AI analysis endpoints go through a provider adapter selected at boot by `VITALSCOPE_AI_PROVIDER`. Defaults to `anthropic`.
 
 | Provider | Env var for key | Default model |
 |---|---|---|
@@ -132,7 +132,24 @@ The image-analysis endpoints (`/api/meals/analyze-image`, `/api/form-checks/anal
 | `openai` | `OPENAI_API_KEY` | `gpt-4o` |
 | `openrouter` | `OPENROUTER_API_KEY` | `anthropic/claude-sonnet-4.6` |
 
-Override the model with `VITALSCOPE_AI_MODEL` (applies to whichever provider is active). `VITALSCOPE_AI_TIMEOUT_SEC` defaults to 20. `/api/runtime` reports `ai_provider` and `ai_model` when a key is set. OpenRouter and OpenAI share a single adapter class (`OpenAIProvider` in `backend/app.py`); OpenRouter is just the OpenAI SDK pointed at `https://openrouter.ai/api/v1`.
+Override the model with `VITALSCOPE_AI_MODEL` (applies to whichever provider is active). `/api/runtime` reports `ai_provider` and `ai_model` when a key is set. OpenRouter and OpenAI share a single adapter class (`OpenAIProvider` in `backend/app.py`); OpenRouter is just the OpenAI SDK pointed at `https://openrouter.ai/api/v1`.
+
+Timeout env vars (all default shown):
+- `VITALSCOPE_AI_TIMEOUT_SEC=20` — image/form-check analysis
+- `BLOODWORK_AI_TIMEOUT_SEC=60` — bloodwork PDF/image extraction
+- `ORIENT_AI_TIMEOUT_SEC=90` — orient-phase text analysis (more tokens)
+
+### AI provider interface
+
+Both `AnthropicProvider` and `OpenAIProvider` implement two methods:
+- `analyze_with_tool(system, user_text, media_b64, mime, tool, timeout_sec)` — vision input (image/PDF). Only Anthropic accepts PDFs.
+- `analyze_text_with_tool(system, user_text, tool, timeout_sec)` — text-only input; no media. Used by the orient analysis endpoint.
+
+When adding a new AI endpoint that doesn't need an image, use `_call_ai_text_tool(...)` instead of `_call_ai_tool(...)`.
+
+### Orient AI analysis (`POST /api/orient/analyze`)
+
+Aggregates the last 14 days (configurable via `window_days`, 7–30) of wearable and workout data from the DB — heart rate, HRV, sleep, stress, body battery, steps, weight, recent workouts, and the latest bloodwork panel's flagged results — then calls the configured AI provider via `analyze_text_with_tool` to produce a structured report split into four topics: `health`, `performance`, `recovery`, `body_composition`. Each topic includes `insights`, `alerts`, and `recommendations`. Frontend component: `OrientAiAnalysis.tsx` in the Orient → AI Analysis section.
 
 ## Before reporting a task done
 

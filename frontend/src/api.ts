@@ -12,6 +12,7 @@ import type {
   NutrientCategory,
   NutrientGoals,
   NutritionDailyTotals,
+  OrientAnalysis,
   PlannedActivity,
   Supplement,
   SupplementIntake,
@@ -416,6 +417,21 @@ export async function deleteBloodworkPanel(id: number): Promise<void> {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
+// --- Orient AI analysis ---
+
+export async function analyzeOrient(window_days = 14): Promise<OrientAnalysis> {
+  const res = await apiFetch("/api/orient/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ window_days }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
 // --- Plugins ---
 
 export type PluginParamType = "text" | "secret" | "int" | "bool";
@@ -440,6 +456,7 @@ export interface PluginConfig {
   last_run_at: string | null;
   last_status: string | null;
   last_message: string | null;
+  avg_duration_seconds: number | null;
 }
 
 export interface PluginRun {
@@ -471,9 +488,10 @@ export async function updatePlugin(
   return res.json();
 }
 
-export async function runPluginNow(name: string): Promise<void> {
+export async function runPluginNow(name: string): Promise<{ status: string; name: string; run_id: number }> {
   const res = await apiFetch(`/api/plugins/${name}/run`, { method: "POST" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {

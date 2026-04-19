@@ -60,6 +60,7 @@ AI_MODEL = os.environ.get(
 )
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
+ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
 
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
@@ -1777,6 +1778,16 @@ class AIProvider:
     ) -> dict:
         raise NotImplementedError
 
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        raise NotImplementedError
+
 
 class AnthropicProvider(AIProvider):
     name = "anthropic"
@@ -1821,6 +1832,45 @@ class AnthropicProvider(AIProvider):
                             {"type": "text", "text": user_text},
                         ],
                     }],
+                ),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail=f"Claude timed out after {timeout_sec}s")
+        except anthropic.APIStatusError as e:
+            _ai_logger.warning("Claude API error %s: %s", e.status_code, e.message)
+            raise HTTPException(status_code=502, detail=f"Claude API error: {e.message}")
+        except anthropic.APIConnectionError as e:
+            _ai_logger.warning("Claude connection error: %s", e)
+            raise HTTPException(status_code=502, detail="Claude connection error")
+
+        tool_block = next(
+            (b for b in response.content if getattr(b, "type", None) == "tool_use" and b.name == tool_name),
+            None,
+        )
+        if tool_block is None:
+            _ai_logger.warning("No tool_use block in Claude response: %s", response.content)
+            raise HTTPException(status_code=502, detail="Claude did not return a tool_use block")
+        return tool_block.input or {}
+
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        tool_name = tool["name"]
+        try:
+            response = await asyncio.wait_for(
+                self._client.messages.create(
+                    model=self.model,
+                    max_tokens=4096,
+                    system=system,
+                    tools=[tool],
+                    tool_choice={"type": "tool", "name": tool_name},
+                    messages=[{"role": "user", "content": user_text}],
                 ),
                 timeout=timeout_sec,
             )
@@ -1893,6 +1943,59 @@ class OpenAIProvider(AIProvider):
                     },
                 ],
             },
+        ]
+        try:
+            response = await asyncio.wait_for(
+                self._client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    tools=[openai_tool],
+                    tool_choice={"type": "function", "function": {"name": tool_name}},
+                    parallel_tool_calls=False,
+                    max_tokens=4096,
+                ),
+                timeout=timeout_sec,
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(status_code=408, detail=f"{self.name} timed out after {timeout_sec}s")
+        except self._openai.APIStatusError as e:
+            _ai_logger.warning("%s API error %s: %s", self.name, e.status_code, e.message)
+            raise HTTPException(status_code=502, detail=f"{self.name} API error: {e.message}")
+        except self._openai.APIConnectionError as e:
+            _ai_logger.warning("%s connection error: %s", self.name, e)
+            raise HTTPException(status_code=502, detail=f"{self.name} connection error")
+
+        tool_calls = (response.choices[0].message.tool_calls or []) if response.choices else []
+        call = next((c for c in tool_calls if c.function and c.function.name == tool_name), None)
+        if call is None:
+            _ai_logger.warning("No matching tool_call in %s response: %s", self.name, response)
+            raise HTTPException(status_code=502, detail=f"{self.name} did not return a tool call")
+        try:
+            return json.loads(call.function.arguments or "{}")
+        except json.JSONDecodeError as e:
+            _ai_logger.warning("Bad JSON in %s tool_call: %s", self.name, e)
+            raise HTTPException(status_code=502, detail=f"{self.name} returned invalid tool-call JSON")
+
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        tool_name = tool["name"]
+        openai_tool = {
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "description": tool.get("description", ""),
+                "parameters": tool["input_schema"],
+            },
+        }
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_text},
         ]
         try:
             response = await asyncio.wait_for(
@@ -2041,6 +2144,23 @@ async def _call_ai_tool(
         user_text=user_text,
         media_b64=media_b64,
         mime=mime,
+        tool=tool,
+        timeout_sec=timeout_sec if timeout_sec is not None else AI_TIMEOUT_SEC,
+    )
+
+
+async def _call_ai_text_tool(
+    *,
+    system: str,
+    user_text: str,
+    tool: dict,
+    timeout_sec: Optional[int] = None,
+) -> dict:
+    """Run a text-only tool-use call via the configured provider (no image/PDF)."""
+    provider = _get_ai_provider()
+    return await provider.analyze_text_with_tool(
+        system=system,
+        user_text=user_text,
         tool=tool,
         timeout_sec=timeout_sec if timeout_sec is not None else AI_TIMEOUT_SEC,
     )
@@ -2365,6 +2485,235 @@ def _as_float_or_none(v: Any) -> Optional[float]:
         return float(v)
     except (TypeError, ValueError):
         return None
+
+
+# --- Orient phase AI analysis ---
+
+_ORIENT_ANALYSIS_TOOL = {
+    "name": "record_health_orientation",
+    "description": (
+        "Record a structured health orientation summary split into topic areas. "
+        "Each topic should include key insights with evidence context, any alerts "
+        "or concerns, and actionable recommendations."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "overall_summary": {
+                "type": "string",
+                "description": "2-3 sentence big-picture read on current health state.",
+            },
+            "topics": {
+                "type": "array",
+                "description": "Analysis split by health domain.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "enum": ["health", "performance", "recovery", "body_composition"],
+                            "description": "Topic identifier.",
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": "Human-readable topic name.",
+                        },
+                        "summary": {
+                            "type": "string",
+                            "description": "1-2 sentence summary for this topic.",
+                        },
+                        "insights": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Key observations referencing actual data values. Include relevant evidence-based context where applicable.",
+                        },
+                        "alerts": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Genuine concerns that warrant attention. Leave empty if nothing is alarming.",
+                        },
+                        "recommendations": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Specific, actionable next steps based on the data.",
+                        },
+                    },
+                    "required": ["id", "label", "summary", "insights", "alerts", "recommendations"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["overall_summary", "topics"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> dict:
+    today = date.today()
+    end_date = today.isoformat()
+    start_date = (today - timedelta(days=window_days)).isoformat()
+    prev_start = (today - timedelta(days=window_days * 2)).isoformat()
+
+    def rows_to_list(rows: list) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    hr = rows_to_list(conn.execute(
+        "SELECT date, resting_hr, avg_7d_resting_hr FROM heart_rate_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    hrv = rows_to_list(conn.execute(
+        "SELECT date, weekly_avg, last_night_avg, "
+        "baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    sleep = rows_to_list(conn.execute(
+        "SELECT date, sleep_score, sleep_score_quality, "
+        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
+        "avg_spo2, avg_sleep_stress "
+        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    stress = rows_to_list(conn.execute(
+        "SELECT date, avg_stress, max_stress FROM stress_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    body_battery = rows_to_list(conn.execute(
+        "SELECT date, charged, drained FROM body_battery_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    steps = rows_to_list(conn.execute(
+        "SELECT date, total_steps, step_goal FROM steps_daily "
+        "WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start_date, end_date),
+    ).fetchall())
+
+    weight = rows_to_list(conn.execute(
+        "SELECT date, weight_kg, body_fat_pct, muscle_mass_kg, bmi "
+        "FROM weight_daily WHERE date BETWEEN ? AND ? "
+        "AND weight_kg IS NOT NULL ORDER BY date",
+        (prev_start, end_date),
+    ).fetchall())
+
+    workouts = rows_to_list(conn.execute(
+        "SELECT w.date, w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date DESC LIMIT 10",
+        (prev_start, end_date),
+    ).fetchall())
+
+    bp = conn.execute(
+        "SELECT id, date, notes FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    bloodwork = None
+    if bp:
+        flagged = rows_to_list(conn.execute(
+            "SELECT analyte, value, value_text, unit, reference_low, reference_high, flag "
+            "FROM bloodwork_results WHERE panel_id = ? AND flag IS NOT NULL AND flag != 'normal' "
+            "ORDER BY sort_order LIMIT 20",
+            (bp["id"],),
+        ).fetchall())
+        bloodwork = {
+            "date": bp["date"],
+            "notes": bp["notes"],
+            "flagged_results": flagged,
+        }
+
+    return {
+        "analysis_date": end_date,
+        "window_days": window_days,
+        "heart_rate": hr,
+        "hrv": hrv,
+        "sleep": sleep,
+        "stress": stress,
+        "body_battery": body_battery,
+        "steps": steps,
+        "weight": weight,
+        "recent_workouts": workouts,
+        "bloodwork": bloodwork,
+    }
+
+
+class OrientAnalyzeBody(BaseModel):
+    window_days: int = 14
+
+
+@app.post("/api/orient/analyze")
+async def orient_analyze(body: OrientAnalyzeBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    conn = get_db()
+    try:
+        metrics = _gather_orient_metrics(conn, window_days=max(7, min(30, body.window_days)))
+    finally:
+        conn.close()
+
+    metrics_json = json.dumps(metrics, indent=2, default=str)
+
+    system_prompt = (
+        "You are a personal health analyst with expertise in cardiovascular physiology, "
+        "sports science, sleep science, and strength training. Interpret the user's "
+        "wearable data and workout logs. Identify meaningful trends and anomalies, "
+        "and provide evidence-based insights — where relevant, cite known research "
+        "findings from your training data (e.g. studies on HRV, sleep stages, training load). "
+        "Be specific: reference actual values from the data rather than giving generic advice. "
+        "Alerts should flag genuine concerns only, not normal day-to-day variation. "
+        "Recommendations must be actionable and grounded in the numbers shown. "
+        "Compare the first half of the window to the second half where this is informative."
+    )
+
+    user_text = (
+        f"Analyse my health data for the {metrics['window_days']}-day window "
+        f"ending {metrics['analysis_date']}. Identify trends, compare recent values "
+        "to earlier in the window, flag anything concerning, and give evidence-based "
+        f"recommendations.\n\nData (JSON):\n{metrics_json}"
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
+        tool=_ORIENT_ANALYSIS_TOOL,
+        timeout_sec=ORIENT_AI_TIMEOUT_SEC,
+    )
+
+    topics = []
+    for t in (payload.get("topics") or []):
+        if not isinstance(t, dict) or not t.get("id"):
+            continue
+        topics.append({
+            "id": str(t.get("id") or ""),
+            "label": str(t.get("label") or t.get("id") or ""),
+            "summary": str(t.get("summary") or ""),
+            "insights": [str(i) for i in (t.get("insights") or []) if i],
+            "alerts": [str(a) for a in (t.get("alerts") or []) if a],
+            "recommendations": [str(r) for r in (t.get("recommendations") or []) if r],
+        })
+
+    return {
+        "model": AI_MODEL,
+        "analysis_date": metrics["analysis_date"],
+        "window_days": metrics["window_days"],
+        "overall_summary": str(payload.get("overall_summary") or ""),
+        "topics": topics,
+    }
 
 
 # --- Bloodwork panels (CRUD) ---
@@ -2694,6 +3043,20 @@ def _plugin_config_row(name: str) -> Optional[dict]:
     }
 
 
+def _avg_duration_seconds(name: str) -> Optional[float]:
+    conn = get_db()
+    row = conn.execute(
+        "SELECT AVG(CAST(strftime('%s', finished_at) AS REAL) - CAST(strftime('%s', started_at) AS REAL)) "
+        "FROM (SELECT started_at, finished_at FROM plugin_runs "
+        "      WHERE name=? AND status='ok' AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 10)",
+        (name,),
+    ).fetchone()
+    conn.close()
+    if row and row[0] is not None:
+        return round(row[0], 1)
+    return None
+
+
 def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
     masked = dict(cfg["params"])
     for spec in plugin.param_schema:
@@ -2715,6 +3078,7 @@ def _plugin_view(plugin: Plugin, cfg: dict) -> dict:
         "last_run_at": cfg["last_run_at"],
         "last_status": cfg["last_status"],
         "last_message": cfg["last_message"],
+        "avg_duration_seconds": _avg_duration_seconds(plugin.name),
     }
 
 
@@ -2728,7 +3092,7 @@ def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _run_plugin_sync(name: str) -> None:
+def _run_plugin_sync(name: str, run_id: Optional[int] = None) -> None:
     """Execute a plugin synchronously and record the run. Called from a threadpool."""
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
@@ -2736,14 +3100,15 @@ def _run_plugin_sync(name: str) -> None:
     cfg = _plugin_config_row(name) or {"params": {}}
     params = cfg["params"]
 
-    conn = get_db()
-    cur = conn.execute(
-        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
-        (name, _utcnow()),
-    )
-    run_id = cur.lastrowid
-    conn.commit()
-    conn.close()
+    if run_id is None:
+        conn = get_db()
+        cur = conn.execute(
+            "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+            (name, _utcnow()),
+        )
+        run_id = cur.lastrowid
+        conn.commit()
+        conn.close()
 
     ok, message, rows = True, "", None
     try:
@@ -2774,9 +3139,9 @@ def _run_plugin_sync(name: str) -> None:
 _scheduler: Optional[AsyncIOScheduler] = None
 
 
-async def _run_plugin_async(name: str) -> None:
+async def _run_plugin_async(name: str, run_id: Optional[int] = None) -> None:
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, _run_plugin_sync, name)
+    await loop.run_in_executor(None, _run_plugin_sync, name, run_id)
 
 
 def _reload_job(name: str) -> None:
@@ -2874,8 +3239,16 @@ async def run_plugin_now(name: str):
     plugin = PLUGIN_REGISTRY.get(name)
     if plugin is None:
         raise HTTPException(status_code=404, detail="plugin not found")
-    asyncio.create_task(_run_plugin_async(name))
-    return {"status": "started", "name": name}
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO plugin_runs (name, started_at, status) VALUES (?, ?, 'running')",
+        (name, _utcnow()),
+    )
+    run_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    asyncio.create_task(_run_plugin_async(name, run_id))
+    return {"status": "started", "name": name, "run_id": run_id}
 
 
 @app.get("/api/plugins/{name}/runs")
