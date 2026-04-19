@@ -111,7 +111,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             observation and orientation faster than the world around you changes. In the cockpit
             that's measured in seconds. In your biology it's days and weeks. The principle is
             the same either way: whoever holds the more current, more accurate model of reality
-            wins.
+            wins — every.single.time.
           </p>
         </div>
       </section>
