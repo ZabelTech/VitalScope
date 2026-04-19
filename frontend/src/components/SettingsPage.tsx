@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  getAiSettings,
   listPlugins,
   listPluginRuns,
   runPluginNow,
+  updateAiSettings,
   updatePlugin,
   type PluginConfig,
   type PluginParamSpec,
   type PluginRun,
 } from "../api";
-import { useRuntime } from "../hooks/useRuntime";
+import { refreshRuntime, useRuntime } from "../hooks/useRuntime";
+import type { AiProvider, AiSettings } from "../types";
 
 export function SettingsPage() {
   const runtime = useRuntime();
@@ -31,14 +34,190 @@ export function SettingsPage() {
   return (
     <div className="journal-page">
       <div className="trends-header">
-        <h2>Settings — Sync Plugins</h2>
+        <h2>Settings</h2>
       </div>
+      <AiConfigCard demo={runtime?.demo ?? false} />
       {status === "loading" && <p>Loading…</p>}
       {status === "error" && <p className="journal-err">Failed to load plugins</p>}
       {plugins.map((p) => (
         <PluginCard key={p.name} plugin={p} demo={runtime?.demo ?? false} onChanged={reload} />
       ))}
     </div>
+  );
+}
+
+const PROVIDER_DEFAULTS: Record<AiProvider, string> = {
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-4o",
+  openrouter: "anthropic/claude-sonnet-4.6",
+};
+
+function AiConfigCard({ demo }: { demo: boolean }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [settings, setSettings] = useState<AiSettings | null>(null);
+  const [provider, setProvider] = useState<AiProvider>("anthropic");
+  const [model, setModel] = useState("");
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [openaiKey, setOpenaiKey] = useState("");
+  const [openrouterKey, setOpenrouterKey] = useState("");
+  const [anthropicKeyClear, setAnthropicKeyClear] = useState(false);
+  const [openaiKeyClear, setOpenaiKeyClear] = useState(false);
+  const [openrouterKeyClear, setOpenrouterKeyClear] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAiSettings().then((s) => {
+      setSettings(s);
+      setProvider(s.provider);
+      setModel(s.model);
+    }).catch(() => {});
+  }, []);
+
+  function handleProviderChange(p: AiProvider) {
+    setProvider(p);
+    if (!model || model === PROVIDER_DEFAULTS[provider]) {
+      setModel(PROVIDER_DEFAULTS[p]);
+    }
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveMsg(null);
+    try {
+      const updated = await updateAiSettings({
+        provider,
+        model,
+        anthropic_api_key: anthropicKeyClear ? "" : (anthropicKey || null),
+        openai_api_key: openaiKeyClear ? "" : (openaiKey || null),
+        openrouter_api_key: openrouterKeyClear ? "" : (openrouterKey || null),
+      });
+      setSettings(updated);
+      setAnthropicKey(""); setAnthropicKeyClear(false);
+      setOpenaiKey(""); setOpenaiKeyClear(false);
+      setOpenrouterKey(""); setOpenrouterKeyClear(false);
+      setSaveMsg("Saved");
+      refreshRuntime();
+    } catch (e) {
+      setSaveMsg(`Error: ${e}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function keyPlaceholder(hint: string | null): string {
+    return hint ? "unchanged" : "not set";
+  }
+
+  return (
+    <section className="card" style={{ padding: "1rem", margin: "1rem 0" }}>
+      <header
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "0.8em", opacity: 0.6, lineHeight: 1 }}>{collapsed ? "▸" : "▾"}</span>
+          <div>
+            <h3 style={{ margin: 0 }}>AI Configuration</h3>
+            <p style={{ margin: "0.1rem 0 0", opacity: 0.7, fontSize: "0.9em" }}>
+              Provider, model, and API keys for AI analysis features
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {!collapsed && (
+        <div style={{ marginTop: "1rem" }}>
+          <div style={{ display: "grid", gap: "0.75rem", marginBottom: "1rem" }}>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>Provider</span>
+              <select
+                value={provider}
+                onChange={(e) => handleProviderChange(e.target.value as AiProvider)}
+                disabled={demo}
+              >
+                <option value="anthropic">anthropic</option>
+                <option value="openai">openai</option>
+                <option value="openrouter">openrouter</option>
+              </select>
+            </label>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>Model</span>
+              <input
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                disabled={demo}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>Anthropic API Key</span>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="password"
+                  value={anthropicKey}
+                  placeholder={keyPlaceholder(settings?.anthropic_key_hint ?? null)}
+                  onChange={(e) => setAnthropicKey(e.target.value)}
+                  disabled={demo}
+                  style={{ flex: 1 }}
+                />
+                {settings?.anthropic_key_hint && !anthropicKeyClear && (
+                  <button
+                    onClick={() => { setAnthropicKey(""); setAnthropicKeyClear(true); }}
+                    disabled={demo}
+                    style={{ whiteSpace: "nowrap" }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              {settings?.anthropic_key_hint && (
+                <span style={{ fontSize: "0.8em", opacity: 0.6, marginTop: "0.2rem" }}>
+                  Current: {settings.anthropic_key_hint}
+                </span>
+              )}
+            </label>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>OpenAI API Key</span>
+              <input
+                type="password"
+                value={openaiKey}
+                placeholder={keyPlaceholder(settings?.openai_key_hint ?? null)}
+                onChange={(e) => setOpenaiKey(e.target.value)}
+                disabled={demo}
+              />
+              {settings?.openai_key_hint && (
+                <span style={{ fontSize: "0.8em", opacity: 0.6, marginTop: "0.2rem" }}>
+                  Current: {settings.openai_key_hint}
+                </span>
+              )}
+            </label>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span>OpenRouter API Key</span>
+              <input
+                type="password"
+                value={openrouterKey}
+                placeholder={keyPlaceholder(settings?.openrouter_key_hint ?? null)}
+                onChange={(e) => setOpenrouterKey(e.target.value)}
+                disabled={demo}
+              />
+              {settings?.openrouter_key_hint && (
+                <span style={{ fontSize: "0.8em", opacity: 0.6, marginTop: "0.2rem" }}>
+                  Current: {settings.openrouter_key_hint}
+                </span>
+              )}
+            </label>
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <button onClick={handleSave} disabled={demo || saving}>
+              {saving ? "Saving…" : "Save"}
+            </button>
+            {saveMsg && <span style={{ opacity: 0.8 }}>{saveMsg}</span>}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
