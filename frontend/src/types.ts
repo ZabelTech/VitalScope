@@ -367,6 +367,23 @@ export interface BloodworkPanelInput {
   results: BloodworkResult[];
 }
 
+export interface OrientTopic {
+  id: "health" | "performance" | "recovery" | "body_composition";
+  label: string;
+  summary: string;
+  insights: string[];
+  alerts: string[];
+  recommendations: string[];
+}
+
+export interface OrientAnalysis {
+  model: string;
+  analysis_date: string;
+  window_days: number;
+  overall_summary: string;
+  topics: OrientTopic[];
+}
+
 export interface GenomeParseResult {
   variant_count: number;
   rs_count: number;

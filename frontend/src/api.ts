@@ -9,6 +9,7 @@ import type {
   GenomeUpload,
   GenomeUploadInput,
   JournalEntry,
+  OrientAnalysis,
   Meal,
   MealAnalysisResult,
   NutrientDef,
@@ -454,6 +455,21 @@ export async function listGenomeUploads(start: string, end: string): Promise<Gen
 export async function deleteGenomeUpload(id: number): Promise<void> {
   const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Orient AI analysis ---
+
+export async function analyzeOrient(window_days = 14): Promise<OrientAnalysis> {
+  const res = await apiFetch("/api/orient/analyze", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ window_days }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
 }
 
 // --- Plugins ---
