@@ -100,7 +100,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             </p>
           </div>
         </div>
-        <div className="hero-dr-callout">
+        <div className="hero-clinical-callout">
           <p>
             Colonel John Boyd beat every student at Nellis Air Force Base in under forty seconds
             — not because he was faster, but because he could cycle his model of the fight faster
