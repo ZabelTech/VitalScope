@@ -223,7 +223,7 @@ export interface DateRange {
   latest: string;
 }
 
-export type UploadKind = "meal" | "form";
+export type UploadKind = "meal" | "form" | "bloodwork";
 
 export interface Upload {
   id: number;
@@ -235,6 +235,7 @@ export interface Upload {
   created_at: string;
   meal_id: number | null;
   body_composition_estimate_id: number | null;
+  bloodwork_panel_id: number | null;
 }
 
 export interface MealAnalysisResult {
@@ -317,3 +318,50 @@ export interface PlannedActivity {
 }
 
 export type NutrientGoals = Record<string, number>;
+
+export type BloodworkFlag = "low" | "normal" | "high" | "critical";
+
+export interface BloodworkResult {
+  id?: number;
+  analyte: string;
+  value: number | null;
+  value_text: string | null;
+  unit: string | null;
+  reference_low: number | null;
+  reference_high: number | null;
+  reference_text: string | null;
+  flag: BloodworkFlag | null;
+  sort_order?: number;
+}
+
+export interface BloodworkAnalysisResult {
+  model: string;
+  confidence: "low" | "medium" | "high";
+  collection_date: string | null;
+  lab_name: string | null;
+  notes: string;
+  results: BloodworkResult[];
+}
+
+export interface BloodworkPanel {
+  id: number;
+  date: string;
+  source: "bloodwork-ai" | "bloodwork-manual";
+  source_upload_id: number | null;
+  lab_name: string | null;
+  notes: string | null;
+  confidence: "low" | "medium" | "high" | null;
+  created_at: string;
+  result_count?: number;
+  results?: BloodworkResult[];
+}
+
+export interface BloodworkPanelInput {
+  date: string;
+  source?: "bloodwork-ai" | "bloodwork-manual";
+  source_upload_id?: number | null;
+  lab_name?: string | null;
+  notes?: string | null;
+  confidence?: "low" | "medium" | "high" | null;
+  results: BloodworkResult[];
+}

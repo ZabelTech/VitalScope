@@ -368,7 +368,7 @@ def ensure_daily_landing_tables() -> None:
         """
         CREATE TABLE IF NOT EXISTS uploads (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind       TEXT NOT NULL CHECK (kind IN ('meal','form')),
+            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork')),
             date       TEXT NOT NULL,
             filename   TEXT NOT NULL,
             mime       TEXT NOT NULL,
@@ -378,12 +378,40 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
+    # Migrate pre-bloodwork databases: SQLite can't ALTER a CHECK, so rebuild
+    # the table when the stored schema still has the old kind whitelist.
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='uploads'").fetchone()
+    if row and "'bloodwork'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
+        conn.executescript(
+            """
+            PRAGMA foreign_keys = OFF;
+            CREATE TABLE uploads_new (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork')),
+                date       TEXT NOT NULL,
+                filename   TEXT NOT NULL,
+                mime       TEXT NOT NULL,
+                bytes      INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                meal_id                       INTEGER,
+                body_composition_estimate_id  INTEGER
+            );
+            INSERT INTO uploads_new (id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id)
+                SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id FROM uploads;
+            DROP TABLE uploads;
+            ALTER TABLE uploads_new RENAME TO uploads;
+            CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date);
+            PRAGMA foreign_keys = ON;
+            """
+        )
     # Idempotent ALTERs for DBs that predate these columns.
     existing = {r[1] for r in conn.execute("PRAGMA table_info(uploads)")}
     if "meal_id" not in existing:
         conn.execute("ALTER TABLE uploads ADD COLUMN meal_id INTEGER")
     if "body_composition_estimate_id" not in existing:
         conn.execute("ALTER TABLE uploads ADD COLUMN body_composition_estimate_id INTEGER")
+    if "bloodwork_panel_id" not in existing:
+        conn.execute("ALTER TABLE uploads ADD COLUMN bloodwork_panel_id INTEGER")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS body_composition_estimates (
@@ -409,6 +437,46 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_body_comp_est_date ON body_composition_estimates(date)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bloodwork_panels (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            date              TEXT NOT NULL,
+            source            TEXT NOT NULL CHECK (source IN ('bloodwork-ai','bloodwork-manual')),
+            source_upload_id  INTEGER,
+            lab_name          TEXT,
+            notes             TEXT,
+            confidence        TEXT,
+            created_at        TEXT NOT NULL,
+            FOREIGN KEY (source_upload_id) REFERENCES uploads(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_bloodwork_panels_date ON bloodwork_panels(date)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS bloodwork_results (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            panel_id        INTEGER NOT NULL,
+            analyte         TEXT NOT NULL,
+            value           REAL,
+            value_text      TEXT,
+            unit            TEXT,
+            reference_low   REAL,
+            reference_high  REAL,
+            reference_text  TEXT,
+            flag            TEXT,
+            sort_order      INTEGER DEFAULT 0,
+            FOREIGN KEY (panel_id) REFERENCES bloodwork_panels(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bloodwork_results_panel ON bloodwork_results(panel_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bloodwork_results_analyte ON bloodwork_results(analyte)"
     )
     conn.commit()
     conn.close()
@@ -1585,23 +1653,31 @@ def list_planned(start: Optional[str] = None, end: Optional[str] = None):
     return [dict(r) for r in rows]
 
 
-# --- Uploads (meal + form-check images) ---
+# --- Uploads (meal + form-check images + bloodwork PDFs/images) ---
 
-MAX_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_UPLOAD_BYTES_IMAGE = 5 * 1024 * 1024
+MAX_UPLOAD_BYTES_BLOODWORK = 10 * 1024 * 1024
 
 
 @app.post("/api/uploads")
 async def upload_file(
-    kind: Literal["meal", "form"] = Form(...),
+    kind: Literal["meal", "form", "bloodwork"] = Form(...),
     date: str = Form(...),
     file: UploadFile = File(...),
 ):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="image/* required")
+    ct = file.content_type or ""
+    if kind == "bloodwork":
+        if not (ct.startswith("image/") or ct == "application/pdf"):
+            raise HTTPException(status_code=400, detail="image/* or application/pdf required")
+        size_limit = MAX_UPLOAD_BYTES_BLOODWORK
+    else:
+        if not ct.startswith("image/"):
+            raise HTTPException(status_code=400, detail="image/* required")
+        size_limit = MAX_UPLOAD_BYTES_IMAGE
     data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail="file too large (max 5 MB)")
-    ext = mimetypes.guess_extension(file.content_type) or ".bin"
+    if len(data) > size_limit:
+        raise HTTPException(status_code=413, detail=f"file too large (max {size_limit // (1024*1024)} MB)")
+    ext = mimetypes.guess_extension(ct) or ".bin"
     year, month = date[:4], date[5:7]
     target_dir = UPLOADS_DIR / year / month
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -1612,16 +1688,20 @@ async def upload_file(
     conn = get_db()
     cur = conn.execute(
         "INSERT INTO uploads (kind, date, filename, mime, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (kind, date, rel, file.content_type, len(data), now),
+        (kind, date, rel, ct, len(data), now),
     )
     upload_id = cur.lastrowid
     conn.commit()
     conn.close()
-    return {"id": upload_id, "kind": kind, "date": date, "filename": rel, "mime": file.content_type, "bytes": len(data), "created_at": now, "meal_id": None, "body_composition_estimate_id": None}
+    return {
+        "id": upload_id, "kind": kind, "date": date, "filename": rel,
+        "mime": ct, "bytes": len(data), "created_at": now,
+        "meal_id": None, "body_composition_estimate_id": None, "bloodwork_panel_id": None,
+    }
 
 
 @app.get("/api/uploads")
-def list_uploads(kind: Optional[Literal["meal", "form"]] = None, date: Optional[str] = None):
+def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork"]] = None, date: Optional[str] = None):
     conn = get_db()
     clauses, params = [], []
     if kind:
@@ -1632,7 +1712,7 @@ def list_uploads(kind: Optional[Literal["meal", "form"]] = None, date: Optional[
         params.append(date)
     where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
     rows = conn.execute(
-        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id FROM uploads{where} ORDER BY id DESC",
+        f"SELECT id, kind, date, filename, mime, bytes, created_at, meal_id, body_composition_estimate_id, bloodwork_panel_id FROM uploads{where} ORDER BY id DESC",
         params,
     ).fetchall()
     conn.close()
@@ -1689,7 +1769,7 @@ class AIProvider:
         *,
         system: str,
         user_text: str,
-        image_b64: str,
+        media_b64: str,
         mime: str,
         tool: dict,
         timeout_sec: int,
@@ -1709,12 +1789,22 @@ class AnthropicProvider(AIProvider):
         *,
         system: str,
         user_text: str,
-        image_b64: str,
+        media_b64: str,
         mime: str,
         tool: dict,
         timeout_sec: int,
     ) -> dict:
         tool_name = tool["name"]
+        if mime == "application/pdf":
+            media_block = {
+                "type": "document",
+                "source": {"type": "base64", "media_type": "application/pdf", "data": media_b64},
+            }
+        else:
+            media_block = {
+                "type": "image",
+                "source": {"type": "base64", "media_type": mime, "data": media_b64},
+            }
         try:
             response = await asyncio.wait_for(
                 self._client.messages.create(
@@ -1726,10 +1816,7 @@ class AnthropicProvider(AIProvider):
                     messages=[{
                         "role": "user",
                         "content": [
-                            {
-                                "type": "image",
-                                "source": {"type": "base64", "media_type": mime, "data": image_b64},
-                            },
+                            media_block,
                             {"type": "text", "text": user_text},
                         ],
                     }],
@@ -1774,12 +1861,17 @@ class OpenAIProvider(AIProvider):
         *,
         system: str,
         user_text: str,
-        image_b64: str,
+        media_b64: str,
         mime: str,
         tool: dict,
         timeout_sec: int,
     ) -> dict:
         tool_name = tool["name"]
+        if mime == "application/pdf":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{self.name} provider does not accept PDFs; upload an image or switch to Anthropic",
+            )
         openai_tool = {
             "type": "function",
             "function": {
@@ -1796,7 +1888,7 @@ class OpenAIProvider(AIProvider):
                     {"type": "text", "text": user_text},
                     {
                         "type": "image_url",
-                        "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+                        "image_url": {"url": f"data:{mime};base64,{media_b64}"},
                     },
                 ],
             },
@@ -1911,7 +2003,7 @@ def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
     }
 
 
-def _load_upload_image(
+def _load_upload_media(
     conn: sqlite3.Connection, upload_id: int, expected_kind: str
 ) -> tuple[str, str]:
     """Look up an upload row, verify kind + existence on disk, return
@@ -1936,7 +2028,7 @@ async def _call_ai_tool(
     *,
     system: str,
     user_text: str,
-    image_b64: str,
+    media_b64: str,
     mime: str,
     tool: dict,
 ) -> dict:
@@ -1945,7 +2037,7 @@ async def _call_ai_tool(
     return await provider.analyze_with_tool(
         system=system,
         user_text=user_text,
-        image_b64=image_b64,
+        media_b64=media_b64,
         mime=mime,
         tool=tool,
         timeout_sec=AI_TIMEOUT_SEC,
@@ -1969,7 +2061,7 @@ async def analyze_meal_image(body: AnalyzeImageBody):
 
     conn = get_db()
     try:
-        img_b64, mime = _load_upload_image(conn, body.upload_id, "meal")
+        img_b64, mime = _load_upload_media(conn, body.upload_id, "meal")
         tool = _build_analyze_tool_schema(conn)
     finally:
         conn.close()
@@ -1988,7 +2080,7 @@ async def analyze_meal_image(body: AnalyzeImageBody):
     payload = await _call_ai_tool(
         system=system_prompt,
         user_text=user_text,
-        image_b64=img_b64,
+        media_b64=img_b64,
         mime=mime,
         tool=tool,
     )
@@ -2105,7 +2197,7 @@ async def analyze_form_check_image(body: AnalyzeImageBody):
 
     conn = get_db()
     try:
-        img_b64, mime = _load_upload_image(conn, body.upload_id, "form")
+        img_b64, mime = _load_upload_media(conn, body.upload_id, "form")
     finally:
         conn.close()
 
@@ -2125,7 +2217,7 @@ async def analyze_form_check_image(body: AnalyzeImageBody):
     payload = await _call_ai_tool(
         system=system_prompt,
         user_text=user_text,
-        image_b64=img_b64,
+        media_b64=img_b64,
         mime=mime,
         tool=_FORM_CHECK_TOOL,
     )
@@ -2145,6 +2237,267 @@ async def analyze_form_check_image(body: AnalyzeImageBody):
             result[key] = value
     result["unknown_keys"] = sorted(unknown_keys)
     return result
+
+
+# --- Bloodwork analysis ---
+
+_BLOODWORK_TOOL = {
+    "name": "record_bloodwork_panel",
+    "description": (
+        "Record analytes from a blood-panel lab report. Copy analyte names exactly "
+        "as they appear. Use value for numeric results, value_text for qualitative "
+        "results like 'Negative'. Prefer null over guessing."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "collection_date": {
+                "type": ["string", "null"],
+                "description": "Lab draw date as YYYY-MM-DD, or null if unclear.",
+            },
+            "lab_name": {
+                "type": ["string", "null"],
+                "description": "Clinic or laboratory name as shown on the report.",
+            },
+            "confidence": {
+                "type": "string",
+                "enum": ["low", "medium", "high"],
+                "description": "Overall confidence in extraction quality.",
+            },
+            "results": {
+                "type": "array",
+                "description": "One entry per analyte on the report.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "analyte": {"type": "string"},
+                        "value": {"type": ["number", "null"]},
+                        "value_text": {"type": ["string", "null"]},
+                        "unit": {"type": ["string", "null"]},
+                        "reference_low": {"type": ["number", "null"]},
+                        "reference_high": {"type": ["number", "null"]},
+                        "reference_text": {"type": ["string", "null"]},
+                        "flag": {
+                            "type": ["string", "null"],
+                            "enum": ["low", "normal", "high", "critical", None],
+                        },
+                    },
+                    "required": ["analyte"],
+                    "additionalProperties": False,
+                },
+            },
+            "notes": {
+                "type": "string",
+                "description": "Short summary of the panel — highlights anything notable.",
+            },
+        },
+        "required": ["confidence", "results", "notes"],
+        "additionalProperties": False,
+    },
+}
+
+
+@app.post("/api/bloodwork/analyze-upload")
+async def analyze_bloodwork_upload(body: AnalyzeImageBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+    conn = get_db()
+    try:
+        media_b64, mime = _load_upload_media(conn, body.upload_id, "bloodwork")
+    finally:
+        conn.close()
+
+    system_prompt = (
+        "You are extracting structured lab results from a blood panel report. "
+        "Copy analyte names exactly as they appear. Use value for numeric results, "
+        "value_text for qualitative ones. Use null for any reference bound not shown. "
+        "Set flag based on how value compares to the reference range. "
+        "Do not invent analytes that aren't on the page."
+    )
+    user_text = _append_user_context(
+        "Extract every analyte on this lab report into the results array.", body.user_notes
+    )
+
+    payload = await _call_ai_tool(
+        system=system_prompt,
+        user_text=user_text,
+        media_b64=media_b64,
+        mime=mime,
+        tool=_BLOODWORK_TOOL,
+    )
+
+    raw_results = payload.get("results") or []
+    results: list[dict] = []
+    for r in raw_results:
+        if not isinstance(r, dict) or not r.get("analyte"):
+            continue
+        results.append({
+            "analyte": str(r.get("analyte") or "").strip(),
+            "value": _as_float_or_none(r.get("value")),
+            "value_text": r.get("value_text") or None,
+            "unit": r.get("unit") or None,
+            "reference_low": _as_float_or_none(r.get("reference_low")),
+            "reference_high": _as_float_or_none(r.get("reference_high")),
+            "reference_text": r.get("reference_text") or None,
+            "flag": r.get("flag") or None,
+        })
+
+    return {
+        "model": AI_MODEL,
+        "confidence": payload.get("confidence") or "medium",
+        "collection_date": payload.get("collection_date") or None,
+        "lab_name": payload.get("lab_name") or None,
+        "notes": payload.get("notes") or "",
+        "results": results,
+    }
+
+
+def _as_float_or_none(v: Any) -> Optional[float]:
+    if v is None or v == "":
+        return None
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+# --- Bloodwork panels (CRUD) ---
+
+class BloodworkResultIn(BaseModel):
+    analyte: str
+    value: Optional[float] = None
+    value_text: Optional[str] = None
+    unit: Optional[str] = None
+    reference_low: Optional[float] = None
+    reference_high: Optional[float] = None
+    reference_text: Optional[str] = None
+    flag: Optional[str] = None
+
+
+class BloodworkPanelIn(BaseModel):
+    date: str
+    source: Literal["bloodwork-ai", "bloodwork-manual"] = "bloodwork-ai"
+    source_upload_id: Optional[int] = None
+    lab_name: Optional[str] = None
+    notes: Optional[str] = None
+    confidence: Optional[str] = None
+    results: list[BloodworkResultIn] = []
+
+
+def _row_to_panel(row: sqlite3.Row, results: Optional[list[sqlite3.Row]] = None) -> dict:
+    out = {
+        "id": row["id"],
+        "date": row["date"],
+        "source": row["source"],
+        "source_upload_id": row["source_upload_id"],
+        "lab_name": row["lab_name"],
+        "notes": row["notes"],
+        "confidence": row["confidence"],
+        "created_at": row["created_at"],
+    }
+    if results is not None:
+        out["results"] = [dict(r) for r in results]
+    return out
+
+
+@app.post("/api/bloodwork-panels")
+def create_bloodwork_panel(body: BloodworkPanelIn):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO bloodwork_panels
+               (date, source, source_upload_id, lab_name, notes, confidence, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                body.date, body.source, body.source_upload_id,
+                body.lab_name, body.notes, body.confidence, now,
+            ),
+        )
+        panel_id = cur.lastrowid
+        for idx, r in enumerate(body.results):
+            conn.execute(
+                """INSERT INTO bloodwork_results
+                   (panel_id, analyte, value, value_text, unit,
+                    reference_low, reference_high, reference_text, flag, sort_order)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    panel_id, r.analyte, r.value, r.value_text, r.unit,
+                    r.reference_low, r.reference_high, r.reference_text, r.flag, idx,
+                ),
+            )
+        if body.source_upload_id is not None:
+            conn.execute(
+                "UPDATE uploads SET bloodwork_panel_id = ? WHERE id = ? AND kind = 'bloodwork'",
+                (panel_id, body.source_upload_id),
+            )
+        conn.commit()
+        panel_row = conn.execute(
+            "SELECT * FROM bloodwork_panels WHERE id = ?", (panel_id,)
+        ).fetchone()
+        result_rows = conn.execute(
+            "SELECT * FROM bloodwork_results WHERE panel_id = ? ORDER BY sort_order, id",
+            (panel_id,),
+        ).fetchall()
+    finally:
+        conn.close()
+    return _row_to_panel(panel_row, result_rows)
+
+
+@app.get("/api/bloodwork-panels")
+def list_bloodwork_panels(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    panels = conn.execute(
+        """SELECT p.*, COUNT(r.id) AS result_count
+           FROM bloodwork_panels p
+           LEFT JOIN bloodwork_results r ON r.panel_id = p.id
+           WHERE p.date >= ? AND p.date <= ?
+           GROUP BY p.id
+           ORDER BY p.date DESC, p.id DESC""",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [{**dict(row), "result_count": row["result_count"]} for row in panels]
+
+
+@app.get("/api/bloodwork-panels/{panel_id}")
+def get_bloodwork_panel(panel_id: int):
+    conn = get_db()
+    panel = conn.execute(
+        "SELECT * FROM bloodwork_panels WHERE id = ?", (panel_id,)
+    ).fetchone()
+    if not panel:
+        conn.close()
+        raise HTTPException(status_code=404, detail="panel not found")
+    results = conn.execute(
+        "SELECT * FROM bloodwork_results WHERE panel_id = ? ORDER BY sort_order, id",
+        (panel_id,),
+    ).fetchall()
+    conn.close()
+    return _row_to_panel(panel, results)
+
+
+@app.delete("/api/bloodwork-panels/{panel_id}")
+def delete_bloodwork_panel(panel_id: int):
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM bloodwork_panels WHERE id = ?", (panel_id,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="panel not found")
+    conn.execute(
+        "UPDATE uploads SET bloodwork_panel_id = NULL WHERE bloodwork_panel_id = ?",
+        (panel_id,),
+    )
+    conn.execute("DELETE FROM bloodwork_panels WHERE id = ?", (panel_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
 
 
 # --- Body composition estimates (CRUD) ---

@@ -1143,6 +1143,14 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   border-color: #3b82f6;
   color: #fff;
 }
+.chip-danger {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+}
+.chip-danger:hover {
+  background: rgba(239, 68, 68, 0.1);
+  color: #fecaca;
+}
 
 /* Daily landing — progress bars (water, nutrition, steps) */
 .progress-bar {
@@ -1342,6 +1350,132 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   background: #334155;
 }
 .image-upload-button--secondary:hover { background: #475569; }
+
+.image-upload-pdf-tile {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 88px;
+  height: 88px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  color: #94a3b8;
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.image-upload-pdf-tile:hover { background: #273449; color: #e2e8f0; }
+.image-upload-pdf-icon { font-size: 0.9rem; }
+
+.meal-analysis-preflight-pdf {
+  display: inline-block;
+  padding: 10px 14px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  text-decoration: none;
+  align-self: flex-start;
+}
+
+.bloodwork-draft-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.bloodwork-draft-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+  min-width: 540px;
+}
+
+.bloodwork-draft-table th {
+  text-align: left;
+  padding: 6px 8px;
+  color: #94a3b8;
+  font-weight: 600;
+  border-bottom: 1px solid #334155;
+}
+
+.bloodwork-draft-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.bloodwork-draft-table input,
+.bloodwork-draft-table select {
+  width: 100%;
+  min-width: 60px;
+  padding: 6px 8px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.bloodwork-draft-table--readonly td {
+  padding: 6px 8px;
+  color: #e2e8f0;
+}
+
+.bloodwork-flag-low > td,
+.bloodwork-flag-critical > td {
+  background: rgba(239, 68, 68, 0.08);
+}
+.bloodwork-flag-high > td {
+  background: rgba(251, 191, 36, 0.08);
+}
+.bloodwork-flag-normal > td {
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.bloodwork-panels-list {
+  margin-top: 16px;
+}
+
+.bloodwork-panels-ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+
+.bloodwork-panel-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  background: #1e293b;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  color: #e2e8f0;
+  text-align: left;
+  font-size: 0.9rem;
+  cursor: pointer;
+  margin-bottom: 6px;
+}
+.bloodwork-panel-row:hover { border-color: #334155; }
+
+.bloodwork-panel-date {
+  font-weight: 600;
+}
+
+.bloodwork-panel-meta {
+  color: #94a3b8;
+  font-size: 0.85rem;
+}
+
+.bloodwork-panel-detail {
+  padding: 12px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 6px;
+  margin-bottom: 12px;
+}
 
 .visually-hidden {
   position: absolute;

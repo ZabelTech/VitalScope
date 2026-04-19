@@ -1,3 +1,4 @@
+import { BloodworkSection } from "./BloodworkSection";
 import { IntakeLog } from "./IntakeLog";
 import { NutritionPage } from "./NutritionPage";
 import { OodaPage } from "./OodaPage";
@@ -10,6 +11,7 @@ export function ActPage() {
         { id: "today", label: "Today", content: <TodayDashboard /> },
         { id: "log", label: "Supplements & alcohol", content: <IntakeLog /> },
         { id: "intake", label: "Meals & water", content: <NutritionPage /> },
+        { id: "bloodwork", label: "Bloodwork", content: <BloodworkSection /> },
       ]}
     />
   );

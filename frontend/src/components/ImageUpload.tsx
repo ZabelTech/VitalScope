@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  analyzeBloodworkUpload,
   analyzeFormCheckImage,
   analyzeMealImage,
   deleteUpload,
@@ -9,6 +10,7 @@ import {
   uploadImageUrl,
 } from "../api";
 import type {
+  BloodworkAnalysisResult,
   FormCheckAnalysisResult,
   MealAnalysisResult,
   NutrientCategory,
@@ -17,6 +19,7 @@ import type {
   UploadKind,
 } from "../types";
 import { useRuntime } from "../hooks/useRuntime";
+import { BloodworkAnalysisDraft } from "./BloodworkAnalysisDraft";
 import { FormCheckAnalysisDraft } from "./FormCheckAnalysisDraft";
 import { MealAnalysisDraft } from "./MealAnalysisDraft";
 
@@ -25,13 +28,27 @@ interface Props {
   date: string;
   label: string;
   hint?: string;
+  onSaved?: () => void;
 }
 
 type Draft =
   | { kind: "meal"; result: MealAnalysisResult; uploadId: number }
-  | { kind: "form"; result: FormCheckAnalysisResult; uploadId: number };
+  | { kind: "form"; result: FormCheckAnalysisResult; uploadId: number }
+  | { kind: "bloodwork"; result: BloodworkAnalysisResult; uploadId: number };
 
-export function ImageUpload({ kind, date, label, hint }: Props) {
+const SIZE_LIMITS: Record<UploadKind, number> = {
+  meal: 5 * 1024 * 1024,
+  form: 5 * 1024 * 1024,
+  bloodwork: 10 * 1024 * 1024,
+};
+
+function isAcceptedFile(kind: UploadKind, mime: string): boolean {
+  if (mime.startsWith("image/")) return true;
+  if (kind === "bloodwork" && mime === "application/pdf") return true;
+  return false;
+}
+
+export function ImageUpload({ kind, date, label, hint, onSaved }: Props) {
   const runtime = useRuntime();
   const [items, setItems] = useState<Upload[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -42,8 +59,6 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
   const [analysingId, setAnalysingId] = useState<number | null>(null);
   const [analyseError, setAnalyseError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  /** Preflight state — user clicked Analyse on a thumbnail and is about to
-   *  add optional context before firing the Claude call. */
   const [pending, setPending] = useState<{ uploadId: number; note: string } | null>(null);
 
   const [nutrientDefs, setNutrientDefs] = useState<NutrientDef[]>([]);
@@ -65,6 +80,9 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
   }, [nutrientDefs]);
 
   const canAnalyse = runtime?.ai_available === true;
+  const acceptString = kind === "bloodwork" ? "image/*,application/pdf" : "image/*";
+  const sizeLimit = SIZE_LIMITS[kind];
+  const sizeLimitMb = Math.round(sizeLimit / (1024 * 1024));
 
   const reload = useCallback(async () => {
     try {
@@ -84,12 +102,12 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
     setUploading(true);
     try {
       for (const f of Array.from(files)) {
-        if (!f.type.startsWith("image/")) {
-          setError(`${f.name} is not an image`);
+        if (!isAcceptedFile(kind, f.type)) {
+          setError(`${f.name} is not an accepted file type`);
           continue;
         }
-        if (f.size > 5 * 1024 * 1024) {
-          setError(`${f.name} exceeds 5 MB`);
+        if (f.size > sizeLimit) {
+          setError(`${f.name} exceeds ${sizeLimitMb} MB`);
           continue;
         }
         await uploadImage(kind, date, f);
@@ -126,9 +144,12 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       if (kind === "meal") {
         const result = await analyzeMealImage(uploadId, note);
         setDraft({ kind: "meal", result, uploadId });
-      } else {
+      } else if (kind === "form") {
         const result = await analyzeFormCheckImage(uploadId, note);
         setDraft({ kind: "form", result, uploadId });
+      } else {
+        const result = await analyzeBloodworkUpload(uploadId, note);
+        setDraft({ kind: "bloodwork", result, uploadId });
       }
       setPending(null);
     } catch (e) {
@@ -141,12 +162,71 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
   async function onDraftSaved() {
     setDraft(null);
     await reload();
+    onSaved?.();
   }
 
   const preflightPlaceholder =
     kind === "meal"
       ? "e.g. ~200g salmon, 150g jasmine rice, olive oil, no sauce"
-      : "e.g. morning, fasted, post-12-week cut, harsh overhead light";
+      : kind === "form"
+      ? "e.g. morning, fasted, post-12-week cut, harsh overhead light"
+      : "e.g. fasting 14h, morning draw, on medication X";
+
+  const emptyHint =
+    kind === "meal"
+      ? "No meal photos yet."
+      : kind === "form"
+      ? "No form photos yet."
+      : "No bloodwork uploads yet.";
+
+  function getLinkedId(u: Upload): number | null {
+    if (kind === "meal") return u.meal_id;
+    if (kind === "form") return u.body_composition_estimate_id;
+    return u.bloodwork_panel_id;
+  }
+
+  function renderThumb(u: Upload) {
+    if (u.mime === "application/pdf") {
+      return (
+        <a
+          className="image-upload-pdf-tile"
+          href={uploadImageUrl(u.id)}
+          target="_blank"
+          rel="noreferrer"
+          title={u.filename}
+        >
+          <span className="image-upload-pdf-icon">PDF</span>
+        </a>
+      );
+    }
+    return <img src={uploadImageUrl(u.id)} alt="" loading="lazy" />;
+  }
+
+  function renderPreflightPreview(uploadId: number) {
+    const u = items.find((i) => i.id === uploadId);
+    if (u?.mime === "application/pdf") {
+      return (
+        <a
+          className="meal-analysis-preflight-pdf"
+          href={uploadImageUrl(uploadId)}
+          target="_blank"
+          rel="noreferrer"
+        >
+          Open PDF ↗
+        </a>
+      );
+    }
+    return (
+      <img
+        className="meal-analysis-preflight-img"
+        src={uploadImageUrl(uploadId)}
+        alt=""
+      />
+    );
+  }
+
+  const takeLabel = kind === "bloodwork" ? "Scan document" : "Take photo";
+  const libraryLabel = kind === "bloodwork" ? "Pick file" : "From library";
 
   return (
     <div className="image-upload">
@@ -155,11 +235,11 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       </div>
       <div className="image-upload-actions">
         <label className="image-upload-button">
-          Take photo
+          {takeLabel}
           <input
             ref={cameraInputRef}
             type="file"
-            accept="image/*"
+            accept={acceptString}
             multiple
             capture="environment"
             onChange={(e) => onFiles(e.target.files)}
@@ -167,11 +247,11 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
           />
         </label>
         <label className="image-upload-button image-upload-button--secondary">
-          From library
+          {libraryLabel}
           <input
             ref={libraryInputRef}
             type="file"
-            accept="image/*"
+            accept={acceptString}
             multiple
             onChange={(e) => onFiles(e.target.files)}
             className="visually-hidden"
@@ -183,21 +263,20 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       {error && <p className="journal-err">{error}</p>}
       {analyseError && <p className="journal-err">{analyseError}</p>}
       {items.length === 0 ? (
-        <p className="journal-hint">No {kind === "meal" ? "meal" : "form"} photos yet.</p>
+        <p className="journal-hint">{emptyHint}</p>
       ) : (
         <ul className="image-upload-list">
           {items.map((u) => {
-            const linked =
-              (kind === "meal" ? u.meal_id : u.body_composition_estimate_id) != null;
+            const linked = getLinkedId(u) != null;
             const showAnalyse = canAnalyse && !linked;
             const busy = analysingId === u.id;
             return (
               <li key={u.id}>
-                <img src={uploadImageUrl(u.id)} alt="" loading="lazy" />
+                {renderThumb(u)}
                 <button
                   type="button"
                   className="supplement-delete"
-                  aria-label="Delete image"
+                  aria-label="Delete upload"
                   onClick={() => onDelete(u.id)}
                 >
                   ×
@@ -220,11 +299,7 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
       )}
       {pending && (
         <div className="meal-analysis-preflight">
-          <img
-            className="meal-analysis-preflight-img"
-            src={uploadImageUrl(pending.uploadId)}
-            alt=""
-          />
+          {renderPreflightPreview(pending.uploadId)}
           <label className="journal-field">
             <span className="stat-label">Context for the AI (optional)</span>
             <textarea
@@ -271,6 +346,15 @@ export function ImageUpload({ kind, date, label, hint }: Props) {
           result={draft.result}
           uploadId={draft.uploadId}
           date={date}
+          onSaved={onDraftSaved}
+          onCancel={() => setDraft(null)}
+        />
+      )}
+      {draft?.kind === "bloodwork" && (
+        <BloodworkAnalysisDraft
+          result={draft.result}
+          uploadId={draft.uploadId}
+          fallbackDate={date}
           onSaved={onDraftSaved}
           onCancel={() => setDraft(null)}
         />

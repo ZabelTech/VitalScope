@@ -1,4 +1,7 @@
 import type {
+  BloodworkAnalysisResult,
+  BloodworkPanel,
+  BloodworkPanelInput,
   BodyCompositionEstimate,
   BodyCompositionEstimateInput,
   FormCheckAnalysisResult,
@@ -320,6 +323,13 @@ export async function analyzeFormCheckImage(
   return postAnalyze("/api/form-checks/analyze-image", upload_id, user_notes);
 }
 
+export async function analyzeBloodworkUpload(
+  upload_id: number,
+  user_notes?: string,
+): Promise<BloodworkAnalysisResult> {
+  return postAnalyze("/api/bloodwork/analyze-upload", upload_id, user_notes);
+}
+
 async function postAnalyze<T>(
   path: string,
   upload_id: number,
@@ -368,6 +378,41 @@ export async function deleteBodyCompositionEstimate(id: number): Promise<void> {
   const res = await apiFetch(`/api/body-composition-estimates/${id}`, {
     method: "DELETE",
   });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Bloodwork panels ---
+
+export async function createBloodworkPanel(
+  body: BloodworkPanelInput,
+): Promise<BloodworkPanel> {
+  const res = await apiFetch("/api/bloodwork-panels", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function listBloodworkPanels(
+  start: string,
+  end: string,
+): Promise<BloodworkPanel[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/bloodwork-panels?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function getBloodworkPanel(id: number): Promise<BloodworkPanel> {
+  const res = await apiFetch(`/api/bloodwork-panels/${id}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteBloodworkPanel(id: number): Promise<void> {
+  const res = await apiFetch(`/api/bloodwork-panels/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
