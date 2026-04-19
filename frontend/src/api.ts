@@ -11,6 +11,8 @@ import type {
   GenomeUpload,
   GenomeUploadInput,
   JournalEntry,
+  JournalQuestion,
+  JournalQuestionResponse,
   Meal,
   MealAnalysisResult,
   NutrientDef,
@@ -139,6 +141,55 @@ export async function submitJournalSupplements(
   items: { supplement_id: number; taken: boolean }[]
 ): Promise<void> {
   const res = await apiFetch(`/api/journal/${date}/supplements`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function listJournalQuestions(): Promise<JournalQuestion[]> {
+  const res = await apiFetch("/api/journal/questions");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createJournalQuestion(question: string, sort_order = 0): Promise<JournalQuestion> {
+  const res = await apiFetch("/api/journal/questions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, sort_order }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateJournalQuestion(id: number, question: string, sort_order = 0): Promise<JournalQuestion> {
+  const res = await apiFetch(`/api/journal/questions/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, sort_order }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteJournalQuestion(id: number): Promise<void> {
+  const res = await apiFetch(`/api/journal/questions/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchJournalResponses(date: string): Promise<JournalQuestionResponse[]> {
+  const res = await apiFetch(`/api/journal/${date}/responses`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function submitJournalResponses(
+  date: string,
+  items: { question_id: number; response: string }[]
+): Promise<void> {
+  const res = await apiFetch(`/api/journal/${date}/responses`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ items }),

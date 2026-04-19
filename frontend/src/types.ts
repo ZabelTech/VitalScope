@@ -410,6 +410,19 @@ export interface GenomeUploadInput {
   notes?: string | null;
 }
 
+export interface JournalQuestion {
+  id: number;
+  question: string;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface JournalQuestionResponse {
+  question_id: number;
+  question: string;
+  response: string;
+}
+
 export type AiProvider = "anthropic" | "openai" | "openrouter";
 export type AiEffort = "low" | "medium" | "high";
 

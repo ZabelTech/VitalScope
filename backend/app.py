@@ -270,6 +270,36 @@ def ensure_journal_table() -> None:
 ensure_journal_table()
 
 
+def ensure_journal_questions_tables() -> None:
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS journal_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question TEXT NOT NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS journal_question_responses (
+            date TEXT NOT NULL,
+            question_id INTEGER NOT NULL,
+            response TEXT NOT NULL,
+            PRIMARY KEY (date, question_id),
+            FOREIGN KEY (question_id) REFERENCES journal_questions(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+ensure_journal_questions_tables()
+
+
 def ensure_supplement_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -1077,6 +1107,71 @@ def _row_to_journal(row: sqlite3.Row) -> dict:
     }
 
 
+class JournalQuestionIn(BaseModel):
+    question: str
+    sort_order: int = 0
+
+
+def _row_to_question(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "question": row["question"],
+        "sort_order": row["sort_order"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.get("/api/journal/questions")
+def list_journal_questions():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM journal_questions ORDER BY sort_order, id"
+    ).fetchall()
+    conn.close()
+    return [_row_to_question(r) for r in rows]
+
+
+@app.post("/api/journal/questions")
+def create_journal_question(body: JournalQuestionIn):
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO journal_questions (question, sort_order, created_at) VALUES (?, ?, ?)",
+        (body.question.strip(), body.sort_order, datetime.utcnow().isoformat(timespec="seconds")),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM journal_questions WHERE id = ?", (new_id,)).fetchone()
+    conn.close()
+    return _row_to_question(row)
+
+
+@app.put("/api/journal/questions/{q_id}")
+def update_journal_question(q_id: int, body: JournalQuestionIn):
+    conn = get_db()
+    cur = conn.execute(
+        "UPDATE journal_questions SET question = ?, sort_order = ? WHERE id = ?",
+        (body.question.strip(), body.sort_order, q_id),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Question not found")
+    conn.commit()
+    row = conn.execute("SELECT * FROM journal_questions WHERE id = ?", (q_id,)).fetchone()
+    conn.close()
+    return _row_to_question(row)
+
+
+@app.delete("/api/journal/questions/{q_id}")
+def delete_journal_question(q_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM journal_questions WHERE id = ?", (q_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return {"status": "ok"}
+
+
 @app.get("/api/journal/{entry_date}")
 def get_journal(entry_date: str):
     conn = get_db()
@@ -1237,6 +1332,55 @@ def save_journal_supplements(entry_date: str, body: IntakeBody):
             """,
             (entry_date, item.supplement_id, int(item.taken)),
         )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", "date": entry_date, "count": len(body.items)}
+
+
+class JournalResponseItem(BaseModel):
+    question_id: int
+    response: str
+
+
+class JournalResponsesBody(BaseModel):
+    items: list[JournalResponseItem]
+
+
+@app.get("/api/journal/{entry_date}/responses")
+def get_journal_responses(entry_date: str):
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT q.id AS question_id, q.question, COALESCE(r.response, '') AS response
+        FROM journal_questions q
+        LEFT JOIN journal_question_responses r
+            ON r.question_id = q.id AND r.date = ?
+        ORDER BY q.sort_order, q.id
+        """,
+        (entry_date,),
+    ).fetchall()
+    conn.close()
+    return [{"question_id": r["question_id"], "question": r["question"], "response": r["response"]} for r in rows]
+
+
+@app.post("/api/journal/{entry_date}/responses")
+def save_journal_responses(entry_date: str, body: JournalResponsesBody):
+    conn = get_db()
+    for item in body.items:
+        if item.response.strip():
+            conn.execute(
+                """
+                INSERT INTO journal_question_responses (date, question_id, response)
+                VALUES (?, ?, ?)
+                ON CONFLICT(date, question_id) DO UPDATE SET response = excluded.response
+                """,
+                (entry_date, item.question_id, item.response.strip()),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM journal_question_responses WHERE date = ? AND question_id = ?",
+                (entry_date, item.question_id),
+            )
     conn.commit()
     conn.close()
     return {"status": "ok", "date": entry_date, "count": len(body.items)}
