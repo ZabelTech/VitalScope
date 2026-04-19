@@ -57,6 +57,64 @@ export function HeroPage() {
         </div>
       </section>
 
+      <section className="hero-section hero-deadreckoning">
+        <div className="hero-section-label">Why Stale Data Kills</div>
+        <h2>Dead reckoning works in open ocean. In a dogfight — or inside your own biology — it gets you killed.</h2>
+        <p className="hero-section-body">
+          Dead reckoning is the practice of estimating your current position from a last known fix,
+          advancing it using assumed speed and heading. For centuries it was the best sailors had.
+          For a fighter pilot in a beyond-visual-range engagement, it is a death sentence.
+        </p>
+        <div className="hero-dr-scenario">
+          <div className="hero-dr-column hero-dr-column--danger">
+            <div className="hero-dr-column-label">Dead Reckoning in a Dogfight</div>
+            <p>
+              Two aircraft are engaged at a combined closing speed above 1,000 mph.
+              The enemy's position from three seconds ago is irrelevant — they've already altered
+              heading, bled energy, and rolled out of your firing cone. If you shoot at where
+              your mental model says they <em>should</em> be, you miss clean. The 1–2 seconds
+              it takes to correct that model is the window they need to lock a firing solution
+              on you. You don't get a second chance to update the picture.
+            </p>
+            <p>
+              Colonel John Boyd flew against every student at Nellis in under forty seconds — not
+              because he was faster, but because he could cycle his situational model faster than
+              his opponent could maintain theirs. The pilot flying on stale data wasn't just
+              inaccurate; they were acting on a world that had already ceased to exist.
+            </p>
+          </div>
+          <div className="hero-dr-column hero-dr-column--body">
+            <div className="hero-dr-column-label">Dead Reckoning in Your Biology</div>
+            <p>
+              Your physiology is the same adversarial, non-linear system — with no pause button and
+              no static state. Inflammation cascades in minutes. Hormonal feedback loops shift
+              across hours. Autonomic nervous system tone changes breath to breath. The systems
+              you are trying to optimise do not hold still while you deliberate.
+            </p>
+            <p>
+              A training intensity block that ignores today's HRV because "the programme says so"
+              is dead reckoning. A supplement stack built on a bloodwork panel from six months
+              ago is dead reckoning. Nutrition targets derived from a population average rather
+              than your own longitudinal response is dead reckoning. You are flying a
+              high-performance system through an environment that updates constantly — using
+              instruments that were read yesterday and maps drawn last quarter.
+            </p>
+            <p>
+              That is not optimization. That is hope dressed up as a plan.
+            </p>
+          </div>
+        </div>
+        <div className="hero-dr-callout">
+          <p>
+            Boyd's insight was not that you need more data — it was that you need to cycle your
+            observation and orientation faster than the environment changes. In the air, that is
+            measured in seconds. In your biology, it is measured in days and weeks. The principle
+            is identical: the pilot — or the athlete, or the person managing their own health —
+            who holds a more current and more accurate model of reality wins every time.
+          </p>
+        </div>
+      </section>
+
       <section className="hero-section hero-ooda">
         <div className="hero-section-label">The Framework</div>
         <h2>The OODA Loop: a cognitive framework built for adversarial environments — repurposed for the relentless optimization of you.</h2>
