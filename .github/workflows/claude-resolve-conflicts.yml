@@ -1,0 +1,91 @@
+name: Claude Resolve Merge Conflicts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, reopened]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: 'PR number (leave blank to scan all open PRs)'
+        required: false
+        type: string
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      prs: ${{ steps.find.outputs.prs }}
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Find PRs with merge conflicts
+        id: find
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SINGLE_PR: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+        run: |
+          # GitHub computes `mergeable` lazily after a push; poll until it
+          # settles so we don't miss newly-conflicting PRs.
+          for _ in 1 2 3 4 5 6; do
+            unknown=$(gh pr list --repo "$REPO" --state open --json mergeable \
+              --jq '[.[] | select(.mergeable == "UNKNOWN")] | length')
+            [ "$unknown" = "0" ] && break
+            sleep 10
+          done
+
+          if [ -n "$SINGLE_PR" ]; then
+            state=$(gh pr view "$SINGLE_PR" --repo "$REPO" --json mergeable --jq '.mergeable')
+            if [ "$state" = "CONFLICTING" ]; then
+              prs="[$SINGLE_PR]"
+            else
+              prs="[]"
+            fi
+          else
+            prs=$(gh pr list --repo "$REPO" --state open --json number,mergeable \
+              --jq '[.[] | select(.mergeable == "CONFLICTING") | .number]' | tr -d '\n')
+          fi
+          echo "prs=$prs" >> "$GITHUB_OUTPUT"
+
+  resolve:
+    needs: detect
+    if: needs.detect.outputs.prs != '[]' && needs.detect.outputs.prs != ''
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pr: ${{ fromJson(needs.detect.outputs.prs) }}
+      fail-fast: false
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run Claude to resolve conflicts
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          additional_permissions: |
+            actions: read
+          prompt: |
+            PR #${{ matrix.pr }} in ${{ github.repository }} has merge conflicts with `main`. Resolve them.
+
+            Steps:
+            1. Look up the PR head branch: `gh pr view ${{ matrix.pr }} --json headRefName,headRepositoryOwner --jq '.headRefName'`. If the PR comes from a fork (`headRepositoryOwner.login` != `${{ github.repository_owner }}`), stop — post a PR comment explaining you can't push to forks and exit successfully.
+            2. Fetch and check out the PR branch locally.
+            3. Merge `origin/main` into it (do NOT rebase — the branch is public and rebasing would rewrite history someone else may have pulled).
+            4. Resolve every conflict by understanding the intent on both sides. Never discard work to make a conflict go away. If a hunk is genuinely ambiguous (two incompatible designs, not just textual overlap), abort the merge, leave a PR comment describing what a human needs to decide, and exit successfully without pushing.
+            5. If frontend files were touched, run `cd frontend && npx tsc --noEmit` and make it pass before committing.
+            6. Commit with message `Merge main into <branch>, resolve conflicts` and push back to the PR branch.
+            7. Leave a short PR comment summarising which files had conflicts and how you resolved each.
+
+            Follow the repo conventions in `CLAUDE.md` / `AGENTS.md` — no new comments, no emojis, keep the resolution minimal.
