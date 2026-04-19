@@ -75,8 +75,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
               your mental model says they <em>should</em> be, you miss clean.
             </p>
             <p>
-              The pilot flying on stale data wasn't just
-              inaccurate; they were acting on a world that had already ceased to exist.
+              The pilot flying on stale data isn't just
+              inaccurate; they're acting on a world that has already ceased to exist.
             </p>
           </div>
           <div className="hero-dr-column hero-dr-column--body">
