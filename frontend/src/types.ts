@@ -411,10 +411,12 @@ export interface GenomeUploadInput {
 }
 
 export type AiProvider = "anthropic" | "openai" | "openrouter";
+export type AiEffort = "low" | "medium" | "high";
 
 export interface AiSettings {
   provider: AiProvider;
   model: string;
+  effort: AiEffort;
   anthropic_key_hint: string | null;
   openai_key_hint: string | null;
   openrouter_key_hint: string | null;
@@ -423,6 +425,7 @@ export interface AiSettings {
 export interface AiSettingsUpdate {
   provider: AiProvider;
   model: string;
+  effort?: AiEffort;
   anthropic_api_key?: string | null;
   openai_api_key?: string | null;
   openrouter_api_key?: string | null;

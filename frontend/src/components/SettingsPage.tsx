@@ -11,7 +11,7 @@ import {
   type PluginRun,
 } from "../api";
 import { refreshRuntime, useRuntime } from "../hooks/useRuntime";
-import type { AiProvider, AiSettings } from "../types";
+import type { AiEffort, AiProvider, AiSettings } from "../types";
 
 export function SettingsPage() {
   const runtime = useRuntime();
@@ -52,17 +52,46 @@ const PROVIDER_DEFAULTS: Record<AiProvider, string> = {
   openrouter: "anthropic/claude-sonnet-4.6",
 };
 
+const PROVIDER_MODELS: Record<AiProvider, string[]> = {
+  anthropic: [
+    "claude-opus-4-7",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5-20251001",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-haiku-20240307",
+  ],
+  openai: [
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o1-preview",
+    "o1-mini",
+    "gpt-4-turbo",
+  ],
+  openrouter: [
+    "anthropic/claude-sonnet-4.6",
+    "anthropic/claude-opus-4.7",
+    "openai/gpt-4o",
+    "openai/gpt-4o-mini",
+    "meta-llama/llama-3.1-70b-instruct",
+    "google/gemini-pro-1.5",
+  ],
+};
+
+function activeKeyHint(settings: AiSettings | null, provider: AiProvider): string | null {
+  if (!settings) return null;
+  if (provider === "anthropic") return settings.anthropic_key_hint;
+  if (provider === "openai") return settings.openai_key_hint;
+  return settings.openrouter_key_hint;
+}
+
 function AiConfigCard({ demo }: { demo: boolean }) {
   const [collapsed, setCollapsed] = useState(true);
   const [settings, setSettings] = useState<AiSettings | null>(null);
   const [provider, setProvider] = useState<AiProvider>("anthropic");
   const [model, setModel] = useState("");
-  const [anthropicKey, setAnthropicKey] = useState("");
-  const [openaiKey, setOpenaiKey] = useState("");
-  const [openrouterKey, setOpenrouterKey] = useState("");
-  const [anthropicKeyClear, setAnthropicKeyClear] = useState(false);
-  const [openaiKeyClear, setOpenaiKeyClear] = useState(false);
-  const [openrouterKeyClear, setOpenrouterKeyClear] = useState(false);
+  const [effort, setEffort] = useState<AiEffort>("medium");
+  const [apiKey, setApiKey] = useState("");
+  const [apiKeyClear, setApiKeyClear] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
 
@@ -71,11 +100,14 @@ function AiConfigCard({ demo }: { demo: boolean }) {
       setSettings(s);
       setProvider(s.provider);
       setModel(s.model);
+      setEffort(s.effort ?? "medium");
     }).catch(() => {});
   }, []);
 
   function handleProviderChange(p: AiProvider) {
     setProvider(p);
+    setApiKey("");
+    setApiKeyClear(false);
     if (!model || model === PROVIDER_DEFAULTS[provider]) {
       setModel(PROVIDER_DEFAULTS[p]);
     }
@@ -85,17 +117,18 @@ function AiConfigCard({ demo }: { demo: boolean }) {
     setSaving(true);
     setSaveMsg(null);
     try {
+      const keyVal = apiKeyClear ? "" : (apiKey || null);
       const updated = await updateAiSettings({
         provider,
         model,
-        anthropic_api_key: anthropicKeyClear ? "" : (anthropicKey || null),
-        openai_api_key: openaiKeyClear ? "" : (openaiKey || null),
-        openrouter_api_key: openrouterKeyClear ? "" : (openrouterKey || null),
+        effort,
+        anthropic_api_key: provider === "anthropic" ? keyVal : undefined,
+        openai_api_key: provider === "openai" ? keyVal : undefined,
+        openrouter_api_key: provider === "openrouter" ? keyVal : undefined,
       });
       setSettings(updated);
-      setAnthropicKey(""); setAnthropicKeyClear(false);
-      setOpenaiKey(""); setOpenaiKeyClear(false);
-      setOpenrouterKey(""); setOpenrouterKeyClear(false);
+      setApiKey("");
+      setApiKeyClear(false);
       setSaveMsg("Saved");
       refreshRuntime();
     } catch (e) {
@@ -105,9 +138,8 @@ function AiConfigCard({ demo }: { demo: boolean }) {
     }
   }
 
-  function keyPlaceholder(hint: string | null): string {
-    return hint ? "unchanged" : "not set";
-  }
+  const keyHint = activeKeyHint(settings, provider);
+  const modelListId = `model-list-${provider}`;
 
   return (
     <section className="card" style={{ padding: "1rem", margin: "1rem 0" }}>
@@ -136,34 +168,43 @@ function AiConfigCard({ demo }: { demo: boolean }) {
                 onChange={(e) => handleProviderChange(e.target.value as AiProvider)}
                 disabled={demo}
               >
-                <option value="anthropic">anthropic</option>
-                <option value="openai">openai</option>
-                <option value="openrouter">openrouter</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="openrouter">OpenRouter</option>
               </select>
             </label>
+
             <label style={{ display: "flex", flexDirection: "column" }}>
               <span>Model</span>
               <input
                 type="text"
+                list={modelListId}
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 disabled={demo}
+                placeholder={PROVIDER_DEFAULTS[provider]}
               />
+              <datalist id={modelListId}>
+                {PROVIDER_MODELS[provider].map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
             </label>
+
             <label style={{ display: "flex", flexDirection: "column" }}>
-              <span>Anthropic API Key</span>
+              <span>API Key</span>
               <div style={{ display: "flex", gap: "0.5rem" }}>
                 <input
                   type="password"
-                  value={anthropicKey}
-                  placeholder={keyPlaceholder(settings?.anthropic_key_hint ?? null)}
-                  onChange={(e) => setAnthropicKey(e.target.value)}
+                  value={apiKey}
+                  placeholder={keyHint ? "unchanged" : "not set"}
+                  onChange={(e) => setApiKey(e.target.value)}
                   disabled={demo}
                   style={{ flex: 1 }}
                 />
-                {settings?.anthropic_key_hint && !anthropicKeyClear && (
+                {keyHint && !apiKeyClear && (
                   <button
-                    onClick={() => { setAnthropicKey(""); setAnthropicKeyClear(true); }}
+                    onClick={() => { setApiKey(""); setApiKeyClear(true); }}
                     disabled={demo}
                     style={{ whiteSpace: "nowrap" }}
                   >
@@ -171,41 +212,24 @@ function AiConfigCard({ demo }: { demo: boolean }) {
                   </button>
                 )}
               </div>
-              {settings?.anthropic_key_hint && (
+              {keyHint && (
                 <span style={{ fontSize: "0.8em", opacity: 0.6, marginTop: "0.2rem" }}>
-                  Current: {settings.anthropic_key_hint}
+                  Current: {keyHint}
                 </span>
               )}
             </label>
+
             <label style={{ display: "flex", flexDirection: "column" }}>
-              <span>OpenAI API Key</span>
-              <input
-                type="password"
-                value={openaiKey}
-                placeholder={keyPlaceholder(settings?.openai_key_hint ?? null)}
-                onChange={(e) => setOpenaiKey(e.target.value)}
+              <span>Effort</span>
+              <select
+                value={effort}
+                onChange={(e) => setEffort(e.target.value as AiEffort)}
                 disabled={demo}
-              />
-              {settings?.openai_key_hint && (
-                <span style={{ fontSize: "0.8em", opacity: 0.6, marginTop: "0.2rem" }}>
-                  Current: {settings.openai_key_hint}
-                </span>
-              )}
-            </label>
-            <label style={{ display: "flex", flexDirection: "column" }}>
-              <span>OpenRouter API Key</span>
-              <input
-                type="password"
-                value={openrouterKey}
-                placeholder={keyPlaceholder(settings?.openrouter_key_hint ?? null)}
-                onChange={(e) => setOpenrouterKey(e.target.value)}
-                disabled={demo}
-              />
-              {settings?.openrouter_key_hint && (
-                <span style={{ fontSize: "0.8em", opacity: 0.6, marginTop: "0.2rem" }}>
-                  Current: {settings.openrouter_key_hint}
-                </span>
-              )}
+              >
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+              </select>
             </label>
           </div>
 

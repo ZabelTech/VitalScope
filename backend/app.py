@@ -59,6 +59,7 @@ _DEFAULT_MODEL_BY_PROVIDER = {
 AI_MODEL = os.environ.get(
     "VITALSCOPE_AI_MODEL", _DEFAULT_MODEL_BY_PROVIDER[AI_PROVIDER]
 )
+AI_EFFORT: str = os.environ.get("VITALSCOPE_AI_EFFORT", "medium")
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
@@ -185,6 +186,7 @@ def get_ai_settings(request: Request):
     return {
         "provider": AI_PROVIDER,
         "model": AI_MODEL,
+        "effort": AI_EFFORT,
         "anthropic_key_hint": _mask_key(ANTHROPIC_API_KEY),
         "openai_key_hint": _mask_key(OPENAI_API_KEY),
         "openrouter_key_hint": _mask_key(OPENROUTER_API_KEY),
@@ -194,6 +196,7 @@ def get_ai_settings(request: Request):
 class AiSettingsBody(BaseModel):
     provider: str
     model: str
+    effort: str = "medium"
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     openrouter_api_key: str | None = None
@@ -209,9 +212,12 @@ def update_ai_settings(body: AiSettingsBody, request: Request):
         raise HTTPException(status_code=422, detail=f"Invalid provider: {body.provider!r}")
     if not body.model.strip():
         raise HTTPException(status_code=422, detail="model must not be empty")
+    if body.effort not in ("low", "medium", "high"):
+        raise HTTPException(status_code=422, detail=f"Invalid effort: {body.effort!r}")
     conn = get_db()
     conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('provider', ?)", (body.provider,))
     conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('model', ?)", (body.model,))
+    conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('effort', ?)", (body.effort,))
     if body.anthropic_api_key is not None:
         conn.execute("INSERT OR REPLACE INTO ai_config (key, value) VALUES ('anthropic_api_key', ?)", (body.anthropic_api_key,))
     if body.openai_api_key is not None:
@@ -224,6 +230,7 @@ def update_ai_settings(body: AiSettingsBody, request: Request):
     return {
         "provider": AI_PROVIDER,
         "model": AI_MODEL,
+        "effort": AI_EFFORT,
         "anthropic_key_hint": _mask_key(ANTHROPIC_API_KEY),
         "openai_key_hint": _mask_key(OPENAI_API_KEY),
         "openrouter_key_hint": _mask_key(OPENROUTER_API_KEY),
@@ -584,7 +591,7 @@ ensure_daily_landing_tables()
 
 def _load_ai_config_from_db() -> None:
     """Override AI globals with DB-persisted values when env vars are absent."""
-    global AI_PROVIDER, AI_MODEL, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, AI_AVAILABLE, _ai_provider
+    global AI_PROVIDER, AI_MODEL, AI_EFFORT, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, AI_AVAILABLE, _ai_provider
     conn = get_db()
     rows = {r["key"]: r["value"] for r in conn.execute("SELECT key, value FROM ai_config").fetchall()}
     conn.close()
@@ -596,6 +603,10 @@ def _load_ai_config_from_db() -> None:
             AI_PROVIDER = raw
     if not os.environ.get("VITALSCOPE_AI_MODEL"):
         AI_MODEL = rows.get("model") or _DEFAULT_MODEL_BY_PROVIDER[AI_PROVIDER]
+    if not os.environ.get("VITALSCOPE_AI_EFFORT"):
+        raw_effort = rows.get("effort", AI_EFFORT)
+        if raw_effort in ("low", "medium", "high"):
+            AI_EFFORT = raw_effort
     if not os.environ.get("ANTHROPIC_API_KEY"):
         ANTHROPIC_API_KEY = rows.get("anthropic_api_key", ANTHROPIC_API_KEY)
     if not os.environ.get("OPENAI_API_KEY"):
