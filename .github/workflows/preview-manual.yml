@@ -1,0 +1,80 @@
+name: Preview deploy (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      slug:
+        description: "Preview slug — ends up at vitalscope-preview-<slug>.fly.dev (lowercase letters/digits/dashes, max 32)"
+        required: true
+        type: string
+      action:
+        description: "deploy or destroy"
+        required: true
+        default: "deploy"
+        type: choice
+        options:
+          - deploy
+          - destroy
+
+concurrency:
+  group: preview-manual-${{ inputs.slug }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      APP_NAME: vitalscope-preview-${{ inputs.slug }}
+    steps:
+      - name: Validate slug
+        run: |
+          if ! [[ "${{ inputs.slug }}" =~ ^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$ ]]; then
+            echo "::error::slug must be lowercase letters, digits or dashes (max 32, no leading/trailing dash)"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        if: inputs.action == 'deploy'
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Create app if missing
+        if: inputs.action == 'deploy'
+        run: |
+          if ! flyctl apps list --json | jq -e ".[] | select(.Name==\"$APP_NAME\")" > /dev/null; then
+            flyctl apps create "$APP_NAME" --org personal
+          fi
+
+      - name: Deploy
+        if: inputs.action == 'deploy'
+        run: |
+          flyctl deploy \
+            --app "$APP_NAME" \
+            --config fly.toml \
+            --remote-only \
+            --yes \
+            --env VITALSCOPE_SHA=${{ github.sha }}
+
+      - name: Write preview URL to job summary
+        if: inputs.action == 'deploy'
+        run: |
+          {
+            echo "## Preview deployed"
+            echo ""
+            echo "**URL**: https://$APP_NAME.fly.dev"
+            echo ""
+            echo "Ref: \`${{ github.ref_name }}\` @ \`${{ github.sha }}\`"
+            echo ""
+            echo "Demo mode — synthetic data, resets on every deploy. Run this workflow again with \`action=destroy\` and the same slug to tear it down."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Destroy app if it exists
+        if: inputs.action == 'destroy'
+        run: |
+          if flyctl apps list --json | jq -e ".[] | select(.Name==\"$APP_NAME\")" > /dev/null; then
+            flyctl apps destroy "$APP_NAME" --yes
+            echo "::notice::Destroyed $APP_NAME"
+          else
+            echo "::notice::$APP_NAME not found — nothing to destroy"
+          fi
