@@ -1,6 +1,6 @@
-# Template for per-PR demo deploys. The app name is set per-PR by the
-# preview-deploy workflow (vitalscope-pr-<N>), so there is no `app = ...`
-# field here. For a one-off manual deploy, run `flyctl launch --copy-config`.
+# Template for demo deploys. The app name is set at deploy time (per-PR by
+# preview-deploy.yml → vitalscope-pr-<N>, or by hand via preview-manual.yml →
+# vitalscope-preview-<slug>), so there is no `app = ...` field here.
 
 primary_region = "fra"
 

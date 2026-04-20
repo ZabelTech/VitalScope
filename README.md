@@ -231,6 +231,10 @@ python3 sync_eufy.py
 
 Every pull request gets an ephemeral Fly.io app at `https://vitalscope-pr-<N>.fly.dev`, provisioned by `.github/workflows/preview-deploy.yml` and torn down when the PR closes. Previews run with `VITALSCOPE_DEMO=1` — the scheduler is off, plugin credentials are inaccessible, and the SQLite file is reseeded from `seed_demo.py` on every boot so no real health data ever leaves this machine.
 
+### Manual preview deploys
+
+To share a preview without opening a PR (e.g. from a spike branch), run the **Preview deploy (manual)** workflow in the GitHub Actions UI: pick the branch, enter a `slug` (lowercase letters/digits/dashes), leave `action=deploy`, and click **Run workflow**. The app lands at `https://vitalscope-preview-<slug>.fly.dev` and the URL is printed to the workflow's job summary. Re-run the workflow with `action=destroy` and the same `slug` to tear it down — unlike per-PR previews, manual ones have no auto-cleanup.
+
 Inside demo mode every external dependency is mocked in-process: clicking **Run now** on any sync plugin calls the matching generator in `backend/plugins/_demo_generators.py` (reusing the per-source seeders from `seed_demo.py`) and writes fresh rows for the last 7 days without touching Garmin / Strong / EufyLife. The AI analyse endpoints (meal, form check, bloodwork) go through `DemoProvider` in `backend/app.py`, which returns canned tool-call payloads matching each endpoint's schema — no API key needed, nothing leaves the container. `/api/runtime` reports `ai_provider: "demo"` in this mode.
 
 ## Claude-on-issues automation
