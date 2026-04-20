@@ -222,7 +222,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <div className="hero-source-card">
             <div className="hero-source-name">Manual Inputs</div>
             <div className="hero-source-metrics">
-              Nutrition · Bloodwork · Supplements · Water intake · Daily journal · Form checks
+              Nutrition · Bloodwork · Supplements · Peptides · PED regimens · Water intake · Daily journal · Form checks
             </div>
             <p>The data your wearables can't capture: what you ate, what you took, how you felt, what you noticed. Logged once, available for correlation forever.</p>
           </div>
@@ -279,8 +279,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <p>ACTN3 R577X determines your fast-twitch to slow-twitch fibre ratio — the genetic underpinning of whether you're wired for power or endurance. Cross it against your actual training volume and HRV trends and stop programming against your own biology.</p>
           </div>
           <div className="hero-genomics-card">
-            <div className="hero-genomics-card-title">Pharmacogenomics &amp; Supplements</div>
-            <p>CYP450 variants decide how fast you metabolise caffeine, supplements, and medications — the difference between a therapeutic dose and an adverse reaction. When your stack and your metabolism profile live in the same system, you stop dosing blind.</p>
+            <div className="hero-genomics-card-title">Pharmacogenomics, Peptides &amp; PEDs</div>
+            <p>CYP450 variants decide how fast you metabolise caffeine, supplements, peptide protocols, PED regimens, and medications — the difference between a therapeutic dose and an adverse reaction. When your stack and your metabolism profile live in the same system, you stop dosing blind.</p>
           </div>
         </div>
         <div className="hero-genomics-synthesis">
