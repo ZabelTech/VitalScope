@@ -14,17 +14,15 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <span className="hero-headline-accent">every.single.time.</span>
         </h1>
         <p className="hero-lead">
-          In 1976, Colonel John Boyd beat every student at Nellis Air Force Base in under forty
-          seconds — not because he was faster, but because he cycled his model of the fight
-          faster than his opponent could maintain theirs. Fifty years later, that same insight
-          is being turned inward — on the only moving, adversarial, non-linear system you
-          genuinely can't afford to lose. Your physiology never pauses, never stabilises, and
-          never waits for your decisions to catch up — yet you are trying to optimise it with
-          readings from yesterday, bloodwork from six months ago, and reference ranges
-          calibrated against a population that isn't you. What you need is <strong>signal
-          depth</strong>: how much of your own biology you can resolve at any given moment,
-          and how fast your model of it is drifting out of date between readings. This is the
-          loop that builds it — and the system that keeps it yours.
+          Colonel John Boyd beat every student at Nellis Air Force Base in under forty seconds
+          — not by flying faster, but by cycling his model of the fight faster than his opponent
+          could hold one. That insight turns inward on the only moving, adversarial system you
+          can't afford to lose: yours. Your physiology never pauses, never stabilises, never
+          waits for your decisions to catch up — yet you optimise it with readings from
+          yesterday and reference ranges calibrated against a population that isn't you. What
+          you need is <strong>signal depth</strong>: how much of your own biology you can
+          resolve at any given moment, and how fast your model of it drifts out of date. This
+          is the loop that builds it — and keeps it yours.
         </p>
         <div className="hero-actions">
           {onLoginClick ? (
@@ -143,7 +141,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <div className="hero-ooda-node">
             <div className="hero-ooda-letter hero-ooda-letter--ai">O</div>
             <div className="hero-ooda-name">Orient</div>
-            <p>Context engine on. Cross-domain pattern recognition. AI correlates your HRV trend with training load and sleep debt — telling you what the data actually means for you specifically.</p>
+            <p>Orient engine on. Cross-domain pattern recognition. AI correlates your HRV trend with training load and sleep debt — telling you what the data actually means for you specifically.</p>
           </div>
           <div className="hero-ooda-arrow">→</div>
           <div className="hero-ooda-node">
@@ -210,7 +208,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-sources">
-        <div className="hero-section-label">Unified Data Pipeline</div>
+        <div className="hero-section-label">The Longitudinal Canvas</div>
         <h2>Every sensor. One canvas. Infinite correlation.</h2>
         <p className="hero-section-body">
           The more data streams you combine, the more the hidden patterns emerge.
@@ -380,7 +378,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-privacy">
-        <div className="hero-section-label">Great Power, Greater Responsibility: Data Sovereignty</div>
+        <div className="hero-section-label">Data Sovereignty</div>
         <h2>No single stream is sensitive. Combined, they're a high-resolution portrait of you.</h2>
         <p className="hero-section-body">
           An HRV number on its own is noise. A page of lab ranges is noise. Your sleep curve,
