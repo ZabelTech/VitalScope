@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { fetchJournalEntry, submitJournalEntry } from "../api";
-import type { JournalEntry, MorningFeeling } from "../types";
+import { fetchJournalEntry, fetchJournalResponses, submitJournalEntry, submitJournalResponses } from "../api";
+import type { JournalEntry, JournalQuestionResponse, MorningFeeling } from "../types";
 
 function yesterdayISO(): string {
   const d = new Date();
@@ -29,6 +29,7 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [followedSupplements, setFollowedSupplements] = useState(true);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [loadedExisting, setLoadedExisting] = useState(false);
+  const [customResponses, setCustomResponses] = useState<JournalQuestionResponse[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -53,10 +54,22 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
         }
       })
       .catch(() => {});
+    fetchJournalResponses(date)
+      .then((responses) => {
+        if (cancelled) return;
+        setCustomResponses(responses);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [date]);
+
+  function updateCustomResponse(questionId: number, response: string) {
+    setCustomResponses((prev) =>
+      prev.map((r) => r.question_id === questionId ? { ...r, response } : r)
+    );
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -73,6 +86,12 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
     };
     try {
       await submitJournalEntry(entry);
+      if (customResponses.length > 0) {
+        await submitJournalResponses(
+          date,
+          customResponses.map((r) => ({ question_id: r.question_id, response: r.response }))
+        );
+      }
       setStatus("saved");
       setLoadedExisting(true);
     } catch {
@@ -117,6 +136,18 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
             placeholder="Optional notes…"
           />
         </label>
+
+        {customResponses.map((r) => (
+          <label key={r.question_id} className="journal-field">
+            <span className="stat-label">{r.question}</span>
+            <textarea
+              rows={3}
+              value={r.response}
+              onChange={(e) => updateCustomResponse(r.question_id, e.target.value)}
+              placeholder="Your response…"
+            />
+          </label>
+        ))}
 
         <div className="journal-actions">
           <button type="submit" disabled={status === "saving"}>

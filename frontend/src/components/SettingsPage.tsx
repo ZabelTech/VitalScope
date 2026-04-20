@@ -1,17 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import {
+  createJournalQuestion,
+  deleteJournalQuestion,
   getAiSettings,
+  listJournalQuestions,
   listPlugins,
   listPluginRuns,
   runPluginNow,
   updateAiSettings,
+  updateJournalQuestion,
   updatePlugin,
   type PluginConfig,
   type PluginParamSpec,
   type PluginRun,
 } from "../api";
 import { refreshRuntime, useRuntime } from "../hooks/useRuntime";
-import type { AiEffort, AiProvider, AiSettings } from "../types";
+import type { AiEffort, AiProvider, AiSettings, JournalQuestion } from "../types";
 
 export function SettingsPage() {
   const runtime = useRuntime();
@@ -37,12 +41,128 @@ export function SettingsPage() {
         <h2>Settings</h2>
       </div>
       <AiConfigCard demo={runtime?.demo ?? false} />
+      <JournalConfigCard />
       {status === "loading" && <p>Loading…</p>}
       {status === "error" && <p className="journal-err">Failed to load plugins</p>}
       {plugins.map((p) => (
         <PluginCard key={p.name} plugin={p} demo={runtime?.demo ?? false} onChanged={reload} />
       ))}
     </div>
+  );
+}
+
+function JournalConfigCard() {
+  const [collapsed, setCollapsed] = useState(true);
+  const [questions, setQuestions] = useState<JournalQuestion[]>([]);
+  const [editTexts, setEditTexts] = useState<Record<number, string>>({});
+  const [newQuestion, setNewQuestion] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [savingId, setSavingId] = useState<number | null>(null);
+
+  async function reload() {
+    try {
+      const qs = await listJournalQuestions();
+      setQuestions(qs);
+      const texts: Record<number, string> = {};
+      qs.forEach((q) => { texts[q.id] = q.question; });
+      setEditTexts(texts);
+    } catch {
+      // ignore
+    }
+  }
+
+  useEffect(() => {
+    reload();
+  }, []);
+
+  async function handleAdd(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = newQuestion.trim();
+    if (!trimmed) return;
+    setAdding(true);
+    try {
+      await createJournalQuestion(trimmed, questions.length);
+      setNewQuestion("");
+      await reload();
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function handleSave(q: JournalQuestion) {
+    const text = editTexts[q.id]?.trim();
+    if (!text || text === q.question) return;
+    setSavingId(q.id);
+    try {
+      await updateJournalQuestion(q.id, text, q.sort_order);
+      await reload();
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  async function handleDelete(id: number) {
+    await deleteJournalQuestion(id);
+    await reload();
+  }
+
+  return (
+    <section className="card" style={{ padding: "1rem", margin: "1rem 0" }}>
+      <header
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer", userSelect: "none" }}
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "0.8em", opacity: 0.6, lineHeight: 1 }}>{collapsed ? "▸" : "▾"}</span>
+          <div>
+            <h3 style={{ margin: 0 }}>Journal Configuration</h3>
+            <p style={{ margin: "0.1rem 0 0", opacity: 0.7, fontSize: "0.9em" }}>
+              Custom questions shown in the daily journal
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {!collapsed && (
+        <div style={{ marginTop: "1rem" }}>
+          {questions.length === 0 && (
+            <p style={{ opacity: 0.6, fontSize: "0.9em", margin: "0 0 0.75rem" }}>No custom questions yet.</p>
+          )}
+          {questions.map((q) => (
+            <div key={q.id} style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", alignItems: "center" }}>
+              <input
+                type="text"
+                value={editTexts[q.id] ?? q.question}
+                onChange={(e) => setEditTexts((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                onBlur={() => handleSave(q)}
+                disabled={savingId === q.id}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                onClick={() => handleDelete(q.id)}
+                disabled={savingId === q.id}
+                style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          <form onSubmit={handleAdd} style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+            <input
+              type="text"
+              placeholder="New question…"
+              value={newQuestion}
+              onChange={(e) => setNewQuestion(e.target.value)}
+              style={{ flex: 1 }}
+            />
+            <button type="submit" disabled={adding || !newQuestion.trim()}>
+              Add
+            </button>
+          </form>
+        </div>
+      )}
+    </section>
   );
 }
 
