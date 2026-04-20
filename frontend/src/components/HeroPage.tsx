@@ -296,6 +296,38 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </div>
       </section>
 
+      <section className="hero-section hero-longevity">
+        <div className="hero-section-label">The Compounding Outcome</div>
+        <h2>Lifespan is a lagging indicator. Healthspan is the one you can actually move — and it compounds, silently, with every decision you make well or badly across every decade.</h2>
+        <p className="hero-section-body">
+          Longevity is not a feature on a dashboard. It is the cumulative result of every
+          training block, every sleep cycle, every supplement, every peptide, every fasted
+          window, and every inflammatory meal — integrated across decades. The question is
+          never "how long will I live?" It is: "how fast am I ageing right now, which levers
+          are actually decelerating that rate for <em>me</em>, and which ones am I pulling on
+          fashion rather than evidence?" VitalScope is the longitudinal canvas where those
+          answers accrete.
+        </p>
+        <div className="hero-longevity-grid">
+          <div className="hero-longevity-card hero-longevity-card--accent">
+            <div className="hero-longevity-card-title">Biological Age, Not Chronological</div>
+            <p>Epigenetic clocks (GrimAge, Horvath, PhenoAge, DunedinPACE), telomere length, ApoB, hs-CRP, fasting insulin, HOMA-IR, VO₂ max, grip strength. Log them as they come in from any lab and watch the trajectory — the number on your driver's license is a rounding error next to the number your methylation pattern is quietly writing.</p>
+          </div>
+          <div className="hero-longevity-card">
+            <div className="hero-longevity-card-title">Intervention Protocols</div>
+            <p>Rapamycin pulses. Metformin. NAD⁺ precursors. Senolytics. GLP-1 agonists. Hormetic stressors — heat, cold, hypoxia, Zone 2. Time-restricted eating. Protein cycling. Log dose, cadence, and window; correlate the protocol against the markers that actually moved. Stop running protocols on Twitter consensus.</p>
+          </div>
+          <div className="hero-longevity-card">
+            <div className="hero-longevity-card-title">The Rate of Ageing, Not the Age</div>
+            <p>DunedinPACE measures how many biological years you age per chronological year. A score below 1.0 is deceleration. The interventions that actually move that number are rare, individual, and dose-dependent — you find yours by measuring repeatedly against your own baseline, not by copying a podcast stack.</p>
+          </div>
+          <div className="hero-longevity-card">
+            <div className="hero-longevity-card-title">Compound Interest on Biology</div>
+            <p>Every sub-optimal night of sleep, every skipped Zone 2 session, every week of unresolved inflammation is a micro-payment on the ageing trajectory. Every well-executed one is a micro-deposit. The point isn't perfection — it's making the cumulative arithmetic visible so the curve, compounded across decades, is yours to shape.</p>
+          </div>
+        </div>
+      </section>
+
       <section className="hero-section hero-clinical">
         <div className="hero-section-label">The Clinical Blind Spot</div>
         <h2>Clinical care was built to treat symptoms. It was not designed to track the continuous system that produces them.</h2>
