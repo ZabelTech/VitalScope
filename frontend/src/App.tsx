@@ -8,6 +8,7 @@ import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
 import { DecidePage } from "./components/DecidePage";
 import { HeroPage } from "./components/HeroPage";
+import { MarketingPage } from "./components/MarketingPage";
 import { SettingsPage } from "./components/SettingsPage";
 import { useRuntime } from "./hooks/useRuntime";
 
@@ -46,7 +47,10 @@ function App() {
       <BrowserRouter>
         <div className="app">
           <DemoBanner />
-          <HeroPage onLoginClick={() => setShowLogin(true)} />
+          <Routes>
+            <Route path="/manifesto" element={<HeroPage onLoginClick={() => setShowLogin(true)} />} />
+            <Route path="*" element={<MarketingPage onLoginClick={() => setShowLogin(true)} />} />
+          </Routes>
         </div>
       </BrowserRouter>
     );
@@ -65,7 +69,8 @@ function App() {
             <Route path="/orient" element={<OrientPage />} />
             <Route path="/decide" element={<DecidePage />} />
             <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/hero" element={<HeroPage />} />
+            <Route path="/manifesto" element={<HeroPage />} />
+            <Route path="/marketing" element={<MarketingPage />} />
           </Routes>
         </main>
       </div>
