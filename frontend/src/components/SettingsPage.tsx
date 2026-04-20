@@ -357,6 +357,16 @@ function PluginCard({
     }
   }
 
+  async function handleFullResync() {
+    setSaveMsg(null);
+    try {
+      const result = await runPluginNow(plugin.name, true);
+      startTracking(result.run_id, null);
+    } catch (e) {
+      setSaveMsg(`Error: ${e}`);
+    }
+  }
+
   function updateParam(key: string, value: unknown) {
     setParams((prev) => ({ ...prev, [key]: value }));
   }
@@ -432,12 +442,19 @@ function PluginCard({
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
             <button onClick={handleSave} disabled={demo || saving || activeRunId !== null}>
               {saving ? "Saving…" : "Save"}
             </button>
             <button onClick={handleRun} disabled={saving || activeRunId !== null}>
               {activeRunId !== null ? "Running…" : "Run now"}
+            </button>
+            <button
+              onClick={handleFullResync}
+              disabled={saving || activeRunId !== null}
+              style={{ background: "#7c3aed" }}
+            >
+              {activeRunId !== null ? "Running…" : "Full resync"}
             </button>
             {activeRunId !== null && (
               <span className="plugin-eta">{etaText()}</span>

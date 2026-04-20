@@ -530,8 +530,9 @@ export async function updatePlugin(
   return res.json();
 }
 
-export async function runPluginNow(name: string): Promise<{ status: string; name: string; run_id: number }> {
-  const res = await apiFetch(`/api/plugins/${name}/run`, { method: "POST" });
+export async function runPluginNow(name: string, full = false): Promise<{ status: string; name: string; run_id: number }> {
+  const url = full ? `/api/plugins/${name}/run?full=true` : `/api/plugins/${name}/run`;
+  const res = await apiFetch(url, { method: "POST" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
