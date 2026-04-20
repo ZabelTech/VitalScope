@@ -11,7 +11,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-eyebrow">Signal depth · Self-hosted · AI-powered</div>
         <h1 className="hero-headline">
           The fastest loop wins.<br />
-          <span className="hero-headline-accent">Even inside you.</span>
+          <span className="hero-headline-accent">every.single.time.</span>
         </h1>
         <p className="hero-lead">
           In 1976, Colonel John Boyd beat every student at Nellis Air Force Base in under forty
