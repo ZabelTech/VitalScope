@@ -119,8 +119,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             His claim wasn't that you need more data. It's that you need to cycle your observation
             and orientation faster than the world around you changes. In the cockpit that's
             measured in seconds. In your biology it's days and weeks. The principle is the same
-            either way: whoever holds the more current, more accurate model of reality wins —
-            every.single.time.
+            either way: whoever holds the more current, more accurate model of reality wins.
           </p>
         </div>
       </section>
