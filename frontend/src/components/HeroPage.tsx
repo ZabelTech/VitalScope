@@ -243,8 +243,10 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-section-label">Extensible by Design</div>
         <h2>Nothing hardwired. Nothing locked. Nothing waiting for a product manager.</h2>
         <p className="hero-section-body">
-          VitalScope ships with connectors for the most popular health platforms,
-          and the rest is open to extension.
+          The connectors ship as small, independent modules — one per source, each doing one
+          job. What's included is obvious: wearables, gym trackers, scales, lab uploads. What's
+          missing is yours to write, fork, or adapt from someone else's. The architecture
+          doesn't decide what you're allowed to measure.
         </p>
         <div className="hero-plugins-grid">
           <div className="hero-plugin-card">
