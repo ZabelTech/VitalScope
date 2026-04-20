@@ -19,7 +19,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           could hold one. That insight turns inward on the only moving, adversarial system you
           can't afford to lose: yours. Your physiology never pauses, never stabilises, never
           waits for your decisions to catch up — yet you optimise it with readings from
-          yesterday and reference ranges calibrated against a population that isn't you. What
+          yesterday, bloodwork from six months ago, and reference ranges calibrated against a
+          population that isn't you. What
           you need is <strong>signal depth</strong>: how much of your own biology you can
           resolve at any given moment, and how fast your model of it drifts out of date. This
           is the loop that builds it — and keeps it yours.
