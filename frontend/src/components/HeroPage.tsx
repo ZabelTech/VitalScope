@@ -255,18 +255,17 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-genomics-synthesis">
           <div className="hero-genomics-synthesis-label">The TL;DR</div>
           <p>
-            This is the Linux ethic applied to your own health. Cathedral-model apps — one
-            vendor, one roadmap, one subscription, one permitted way of thinking — are
-            monopoly plays. The bazaar gets further, and it gets there faster: fork the code,
-            run your own instance, write the plugin before a product manager at a Big Health
-            vendor decides they want to. Self-host the whole stack on hardware that outlives
-            whatever platform gets acquired, bankrupted, or pivoted to B2B in the next funding
-            cycle. The people who build their own stay free when the vendors collapse; the
-            people who rent don't. This project exists for the first group — biohackers,
-            cypherpunks, longevity nerds, homelab kids, and anyone who read <em>"if you're not
-            paying, you're the product"</em> and decided to do something about it. Your
-            physiology is too interesting to outsource to doctors and academics working from
-            decades-old knowledge under arbitrary regulations.
+            Cathedral-model apps — one vendor, one roadmap, one subscription, one permitted
+            way of thinking — are monopoly plays. The bazaar gets further, and it gets there
+            faster: fork the code, run your own instance, write the plugin before a product
+            manager at a Big Health vendor decides they want to. Self-host the whole stack on
+            hardware that outlives whatever platform gets acquired, bankrupted, or pivoted to
+            B2B in the next funding cycle. The people who build their own stay free when the
+            vendors collapse; the people who rent don't. This project exists for the first
+            group — anyone who read <em>"if you're not paying, you're the product"</em> and
+            decided to do something about it. Your physiology is too interesting to outsource
+            to doctors and academics working from decades-old knowledge under arbitrary
+            regulations.
           </p>
         </div>
       </section>
