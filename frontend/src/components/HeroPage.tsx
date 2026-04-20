@@ -162,7 +162,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
 
       <section className="hero-section hero-ai">
         <div className="hero-section-label">AI-Powered Orient Phase</div>
-        <h2>The Orient phase is where champions are made. AI makes yours superhuman.</h2>
+        <h2>Observation is cheap. Orientation is where champions are made — and where AI earns its keep.</h2>
         <p className="hero-section-body">
           Most health apps stop at observation — they show you the data and leave interpretation to you.
           VitalScope goes further. The Orient phase is cognitive: it interprets, correlates, and
@@ -241,7 +241,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
 
       <section className="hero-section hero-plugins">
         <div className="hero-section-label">Extensible by Design</div>
-        <h2>Connect any data source. The system was built for it.</h2>
+        <h2>Nothing hardwired. Nothing locked. Nothing waiting for a product manager.</h2>
         <p className="hero-section-body">
           VitalScope ships with connectors for the most popular health platforms,
           and the rest is open to extension. Nothing hardwired. Nothing locked.
