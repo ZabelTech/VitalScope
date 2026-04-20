@@ -244,7 +244,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <h2>Nothing hardwired. Nothing locked. Nothing waiting for a product manager.</h2>
         <p className="hero-section-body">
           VitalScope ships with connectors for the most popular health platforms,
-          and the rest is open to extension. Nothing hardwired. Nothing locked.
+          and the rest is open to extension.
         </p>
         <div className="hero-plugins-grid">
           <div className="hero-plugin-card">
