@@ -2740,3 +2740,365 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.06em;
 }
+
+/* =========================================================================
+   Marketing page — condensed conversion surface (/ unauth route)
+   Complements HeroPage (/manifesto). Shares palette but tighter rhythm.
+   ========================================================================= */
+
+.marketing-page {
+  padding-bottom: 48px;
+  max-width: 960px;
+  margin: 0 auto;
+}
+
+.mkt-fold {
+  padding: 56px 0 48px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.mkt-eyebrow {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #3b82f6;
+  margin-bottom: 16px;
+}
+
+.mkt-headline {
+  font-size: clamp(2.25rem, 5vw + 0.5rem, 3.75rem);
+  font-weight: 700;
+  line-height: 1.05;
+  margin-bottom: 20px;
+  max-width: 760px;
+}
+
+.mkt-headline-accent {
+  color: #3b82f6;
+  font-weight: 700;
+}
+
+.mkt-subhead {
+  font-size: clamp(1rem, 0.5vw + 0.9rem, 1.15rem);
+  color: #cbd5e1;
+  line-height: 1.6;
+  margin-bottom: 32px;
+  max-width: 640px;
+}
+
+.mkt-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.mkt-cta-primary {
+  display: inline-flex;
+  align-items: center;
+  background: #3b82f6;
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 12px 24px;
+  border: 0;
+  border-radius: 8px;
+  text-decoration: none;
+  min-height: 44px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.mkt-cta-primary:hover { background: #2563eb; }
+
+.mkt-cta-secondary {
+  display: inline-flex;
+  align-items: center;
+  color: #94a3b8;
+  font-size: 0.9rem;
+  font-weight: 500;
+  padding: 12px 6px;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.mkt-cta-secondary:hover { color: #e2e8f0; }
+
+/* Contrast block (before/after) */
+
+.mkt-contrast {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  padding: 48px 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+@media (min-width: 720px) {
+  .mkt-contrast { grid-template-columns: 1fr 1fr; gap: 24px; }
+}
+
+.mkt-contrast-col {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 24px 28px;
+}
+
+.mkt-contrast-col--broken { border-left: 3px solid #ef4444; }
+.mkt-contrast-col--fixed  { border-left: 3px solid #22c55e; }
+
+.mkt-contrast-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #94a3b8;
+  margin-bottom: 14px;
+}
+
+.mkt-contrast-col--broken .mkt-contrast-label { color: #ef4444; }
+.mkt-contrast-col--fixed .mkt-contrast-label  { color: #22c55e; }
+
+.mkt-contrast-col ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mkt-contrast-col li {
+  color: #e2e8f0;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  padding: 6px 0;
+}
+
+/* OODA flow */
+
+.mkt-ooda {
+  padding: 48px 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+.mkt-section-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #3b82f6;
+  margin-bottom: 24px;
+}
+
+.mkt-ooda-flow {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  align-items: stretch;
+}
+
+@media (min-width: 900px) {
+  .mkt-ooda-flow {
+    grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr;
+    align-items: center;
+  }
+}
+
+.mkt-ooda-node {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 18px 20px;
+}
+
+.mkt-ooda-node--ai { border-color: #8b5cf6; }
+
+.mkt-ooda-letter {
+  display: inline-block;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: #3b82f6;
+  line-height: 1;
+  margin-bottom: 6px;
+}
+
+.mkt-ooda-node--ai .mkt-ooda-letter { color: #8b5cf6; }
+
+.mkt-ooda-name {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 4px;
+}
+
+.mkt-ooda-node p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.mkt-ooda-arrow {
+  display: none;
+  color: #475569;
+  font-size: 1.25rem;
+  text-align: center;
+}
+
+@media (min-width: 900px) {
+  .mkt-ooda-arrow { display: block; }
+}
+
+/* Differentiators */
+
+.mkt-diff {
+  padding: 48px 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+.mkt-diff-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+}
+
+@media (min-width: 720px) {
+  .mkt-diff-grid { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.mkt-diff-card {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-top: 2px solid #3b82f6;
+  border-radius: 10px;
+  padding: 22px 24px;
+}
+
+.mkt-diff-title {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  margin-bottom: 10px;
+  letter-spacing: 0.02em;
+}
+
+.mkt-diff-card p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #94a3b8;
+  line-height: 1.55;
+}
+
+/* Creed */
+
+.mkt-creed-section {
+  padding: 56px 0;
+  border-bottom: 1px solid #1e293b;
+  display: flex;
+  justify-content: center;
+}
+
+.mkt-creed {
+  max-width: 520px;
+  padding: 28px 32px;
+  background: linear-gradient(135deg, #0c1a2e 0%, #1e293b 100%);
+  border: 1px solid #334155;
+  border-left: 3px solid #3b82f6;
+  border-radius: 10px;
+}
+
+.mkt-creed-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #3b82f6;
+  margin-bottom: 20px;
+}
+
+.mkt-creed-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: mkt-creed;
+}
+
+.mkt-creed-list li {
+  counter-increment: mkt-creed;
+  font-size: 1.0625rem;
+  font-weight: 500;
+  color: #e2e8f0;
+  line-height: 1.45;
+  padding: 10px 0 10px 2.75rem;
+  position: relative;
+}
+
+.mkt-creed-list li::before {
+  content: counter(mkt-creed, decimal-leading-zero);
+  position: absolute;
+  left: 0;
+  top: 10px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: #3b82f6;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.06em;
+}
+
+/* Objections */
+
+.mkt-objections {
+  padding: 48px 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+.mkt-objections-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 16px;
+}
+
+.mkt-objection {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-left: 3px solid #f97316;
+  border-radius: 10px;
+  padding: 18px 22px;
+}
+
+.mkt-objection-q {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #e2e8f0;
+  font-style: italic;
+  margin-bottom: 6px;
+}
+
+.mkt-objection-a {
+  font-size: 0.9rem;
+  color: #94a3b8;
+  line-height: 1.55;
+}
+
+/* Final CTA */
+
+.mkt-final {
+  padding: 64px 0 40px;
+  text-align: center;
+}
+
+.mkt-final h2 {
+  font-size: clamp(1.75rem, 2.5vw + 0.5rem, 2.5rem);
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 0 0 12px;
+  color: #e2e8f0;
+}
+
+.mkt-final-tagline {
+  font-size: 1.0625rem;
+  color: #cbd5e1;
+  margin: 0 0 24px;
+}
+
+.mkt-final .mkt-actions { justify-content: center; }
