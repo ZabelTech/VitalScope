@@ -8,16 +8,23 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
   return (
     <div className="hero-page">
       <section className="hero-fold">
-        <div className="hero-eyebrow">Open-source · Self-hosted · AI-powered</div>
+        <div className="hero-eyebrow">Signal depth · Self-hosted · AI-powered</div>
         <h1 className="hero-headline">
-          Stop Optimizing Blind.<br />
-          <span className="hero-headline-accent">Know Yourself at Signal Depth.</span>
+          The fastest loop wins.<br />
+          <span className="hero-headline-accent">Even inside you.</span>
         </h1>
         <p className="hero-lead">
-          VitalScope unifies every biometric, every rep, every night of sleep into a single
-          command center — then runs it through the OODA loop so you always know where you
-          stand, what it means, and what to do next. Built for performance today, healthspan
-          tomorrow, and longevity across every decade after.
+          In 1976, Colonel John Boyd beat every student at Nellis Air Force Base in under forty
+          seconds — not because he was faster, but because he cycled his model of the fight
+          faster than his opponent could maintain theirs. Fifty years later, that same insight
+          is being turned inward — on the only moving, adversarial, non-linear system you
+          genuinely can't afford to lose. Your physiology never pauses, never stabilises, and
+          never waits for your decisions to catch up — yet you are trying to optimise it with
+          readings from yesterday, bloodwork from six months ago, and reference ranges
+          calibrated against a population that isn't you. What you need is <strong>signal
+          depth</strong>: how much of your own biology you can resolve at any given moment,
+          and how fast your model of it is drifting out of date between readings. This is the
+          loop that builds it — and the system that keeps it yours.
         </p>
         <div className="hero-actions">
           {onLoginClick ? (
@@ -103,12 +110,10 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </div>
         <div className="hero-clinical-callout">
           <p>
-            Colonel John Boyd beat every student at Nellis Air Force Base in under forty seconds
-            — not because he was faster, but because he could cycle his model of the fight faster
-            than his opponent could maintain theirs. He spent the next three decades formalising
-            that single insight into <em>Patterns of Conflict</em>, the briefing that reshaped how
-            the US military thought about adaptation rate, manoeuvre, and why the side that cycles
-            faster almost always wins.
+            Boyd spent the next three decades formalising that single insight into
+            <em> Patterns of Conflict</em> — the briefing that reshaped how the US military
+            thought about adaptation rate, manoeuvre, and why the side that cycles faster almost
+            always wins.
           </p>
           <p>
             His claim wasn't that you need more data. It's that you need to cycle your observation
