@@ -163,6 +163,16 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           this in real time. An AI can. It's connected to the sum of human knowledge, has an
           unlimited attention span, and never sleeps.
         </p>
+        <p className="hero-section-body">
+          <strong>And before any of that — pain-free manual data entry.</strong> Manual tracking is
+          why most quantified-self projects die on day eleven: nobody has the patience to transcribe
+          a five-page lab report, tag every macro on a plate, or hand-type variant IDs out of a
+          23andMe export. VitalScope inverts that entire loop. You snap, upload, or paste — and the
+          AI does the typing. Lab PDFs, meal photos, raw genome files, supplement labels, form-check
+          clips — ingested, structured, and filed into the right table without you keying a single
+          value. The friction that kills every other tracker is where VitalScope's AI earns its
+          keep first; the cards below are what it does <em>after</em> that friction is gone.
+        </p>
         <div className="hero-ai-grid">
           <div className="hero-ai-card">
             <div className="hero-ai-card-title">Bloodwork Intelligence</div>
