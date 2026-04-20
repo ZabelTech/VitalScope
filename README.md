@@ -62,8 +62,9 @@ All four sync sources are wrapped as **plugins** that the backend schedules and 
             ├── IntakeLog.tsx          # Act → Supplements & alcohol
             ├── NutritionPage.tsx      # Act → Meals & water
             ├── TodayMetrics.tsx       # Observe → Today's metrics
-            ├── JournalPage.tsx        # Observe → Journal
-            ├── BloodworkPlaceholder.tsx  # Observe/Orient → Bloodwork (placeholder)
+            ├── JournalPage.tsx        # embedded in DailyPage (yesterday's journal)
+            ├── BloodworkSection.tsx   # Act → Bloodwork
+            ├── GenomeSection.tsx      # Act → Genome
             ├── TrendsPage.tsx         # Orient → Trends
             ├── ActivityHistory.tsx    # Orient → Activity history
             ├── GoalsPage.tsx          # Decide → Goals
@@ -187,19 +188,19 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
 
 - **`/observe` Observe** — what is true right now?
   - **Today's metrics** — today's snapshot with age badges: Last Night's Sleep (score + stages + SpO2), HRV, Body Battery (current / today range / charged / drained), Stress, Body Composition, Steps, Heart Rate.
-  - **Journal** — daily journal entries: alcohol, morning feeling, free-text notes, and a per-supplement check-off grouped by morning / noon / evening. Supplements default to checked for a fresh date — you only uncheck the ones you missed.
-  - **Bloodwork** — placeholder.
 - **`/orient` Orient** — what does the pattern look like?
+  - **AI Analysis** — 14-day rollup of wearable + workout + latest-bloodwork data run through the configured AI provider, grouped into health / performance / recovery / body composition.
   - **Trends** — historical charts with a date range picker (30d / 90d / 6mo / 1yr / All). Each metric has a row of Min / Max / Avg / Median / Volatility cards above its chart. Training chart is merged: stacked bars of weekly Garmin sessions + Strong sessions with a distance line overlay. Calories + water chart at the bottom.
   - **Activity history** — merged Garmin + Strong card list with click-to-expand details.
-  - **Bloodwork** — placeholder.
 - **`/decide` Decide** — what is the plan?
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).
   - **Plan** — tabs for Supplements (the master list grouped Morning/Noon/Evening, drives the Journal check-off), Food (placeholder), Activity (placeholder).
-- **`/` Act** — what to do today?
+- **`/act` Act** — what to do today?
   - **Today** — `TodayDashboard`: quick snapshot + recent activity card.
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
   - **Meals & water** — `NutritionPage`: log meals for a date with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). Water is logged as separate per-drink entries with a running daily total.
+  - **Bloodwork** — upload a lab PDF/image and have the AI extract panels into `bloodwork_panels` / `bloodwork_results`.
+  - **Genome** — upload a raw genotype file and have the AI parse summary info.
 - **`/settings` Settings** — sync plugins. One card per plugin (Garmin Health, Garmin Activities, Strong, Eufy) with Enabled toggle, interval, credential fields, Save, Run now, last-run status, and recent-runs log.
 
 ### Running the frontend
