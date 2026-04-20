@@ -69,10 +69,10 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <div className="hero-dr-column hero-dr-column--danger">
             <div className="hero-dr-column-label">Dead Reckoning in a Dogfight</div>
             <p>
-              Two aircraft are engaged at a combined closing speed above 1,000 mph.
-              The enemy's position from three seconds ago is irrelevant — they've already altered
-              heading, bled energy, and rolled out of your firing cone. If you shoot at where
-              your mental model says they <em>should</em> be, you miss clean.
+              Two aircraft locked into a high-stakes death dance at a combined closing speed above
+              1,000 mph. The enemy's position from three seconds ago is irrelevant — they've
+              already altered heading, bled energy, and rolled out of your firing cone. If you
+              shoot at where your mental model says they <em>should</em> be, you miss clean.
             </p>
             <p>
               The pilot flying on stale data isn't just
