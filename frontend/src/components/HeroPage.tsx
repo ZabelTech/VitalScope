@@ -180,6 +180,10 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <p>Upload your raw genome file. AI maps your variants against performance, nutrition, recovery, and metabolic pathways — translating genetic data into context that makes every other metric in your dashboard make sense.</p>
           </div>
           <div className="hero-ai-card">
+            <div className="hero-ai-card-title">Cognition &amp; Mental Performance</div>
+            <p><em>Mens sana in corpore sano</em> — Juvenal's line, and the German equivalent <em>Gesunder Geist in gesundem Körper</em>, both encode the same truth: the mind and the body are one system. Journal focus, mood, reaction time, and cognitive load alongside the physiology driving them, and let the AI surface which sleep architectures, training blocks, supplements, and nutritional choices actually lift your mental performance — not just your biomarkers.</p>
+          </div>
+          <div className="hero-ai-card">
             <div className="hero-ai-card-title">Cross-Domain Correlation</div>
             <p>Why did your HRV crash this week? Sleep quality, nutrition timing, training load, and stress scores analyzed together surface the signal that single-domain apps can never see.</p>
           </div>
