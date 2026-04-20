@@ -200,7 +200,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
         </div>
         <p className="hero-ai-footnote">
-          Works with Claude (Anthropic), GPT-4o (OpenAI), or any OpenRouter model. Your AI, your API key, your cost — not a subscription tax bundled into a tier you didn't ask for.
+          Works with Claude, GPT, or a locally-hosted alternative — bring your own provider, pay only what you actually use. No subscription tax bundled into a tier you didn't ask for.
         </p>
       </section>
 
@@ -210,7 +210,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <p className="hero-section-body">
           The more data streams you combine, the more the hidden patterns emerge.
           VitalScope syncs from the platforms you already use — continuously, incrementally, silently —
-          into a single local SQLite database that you own outright. No middleman. No cloud sync tax.
+          into a single local database that you own outright. No middleman. No cloud sync tax.
         </p>
         <div className="hero-sources-grid">
           <div className="hero-source-card">
@@ -246,19 +246,19 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
 
       <section className="hero-section hero-plugins">
         <div className="hero-section-label">Extensible by Design</div>
-        <h2>Connect any data source. The plugin architecture was built for it.</h2>
+        <h2>Connect any data source. The system was built for it.</h2>
         <p className="hero-section-body">
           VitalScope ships with connectors for the most popular health platforms,
-          but the plugin system is open. Nothing hardwired. Nothing locked.
+          and the rest is open to extension. Nothing hardwired. Nothing locked.
         </p>
         <div className="hero-plugins-grid">
           <div className="hero-plugin-card">
             <div className="hero-plugin-card-title">Bring Your Own Source</div>
-            <p>Write a sync script for any platform with an API or data export. Implement two methods, register the plugin, and your new data source flows into the same dashboard, the same charts, and the same AI correlation engine as every built-in connector.</p>
+            <p>Any platform that lets you export your data can be plugged in. New sources flow into the same dashboard, the same charts, and the same AI correlation engine as every built-in connector — no gatekeeper deciding which ones ship.</p>
           </div>
           <div className="hero-plugin-card">
             <div className="hero-plugin-card-title">Forked at the Forefront of Human Evolution</div>
-            <p>Biohackers, longevity researchers, and quantified-self self-experimenters iterate protocols faster than any product roadmap can absorb them — CGM curves mapped to sleep onset, peptide stacks titrated against bloodwork, n=1 trials run on their own physiology. VitalScope is open source so they can run those experiments here. Fork the plugins, bend the schema, rewrite the AI prompts, publish variants back. The frontier of human performance isn't being shipped by a vendor — it's being iterated on by the people living at the edge of it.</p>
+            <p>Biohackers, longevity researchers, and quantified-self self-experimenters iterate protocols faster than any product roadmap can absorb them — CGM curves mapped to sleep onset, peptide stacks titrated against bloodwork, n=1 trials run on their own physiology. VitalScope is open source so they can run those experiments here. Fork the project, adapt its connectors, rewrite how the AI reasons, publish your variants back. The frontier of human performance isn't being shipped by a vendor — it's being iterated on by the people living at the edge of it.</p>
           </div>
         </div>
         <div className="hero-genomics-synthesis">
@@ -391,13 +391,13 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           genome is the exception: it doesn't change, and it doesn't only describe you. Which
           is exactly why the only sane place to hold any of it is hardware you control.
           Self-hosted, your biometric profile never leaves your network. No cloud ingestion.
-          No analytics pipeline. No data broker handshake. No terms-of-service update that
+          No hidden telemetry. No data broker handshake. No terms-of-service update that
           retroactively licenses your health history to somebody else's roadmap.
         </p>
         <div className="hero-privacy-grid">
           <div className="hero-privacy-card hero-privacy-card--highlight">
             <div className="hero-privacy-card-title">Self-Hosted by Default</div>
-            <p>One SQLite file. One Python backend. One Vite frontend. Deploy on a Raspberry Pi, a home server, or a private VPS. No third-party infrastructure required by design.</p>
+            <p>Runs on hardware you own — a Raspberry Pi, a home server, or any private box on your network. No third-party infrastructure required by design.</p>
           </div>
           <div className="hero-privacy-card">
             <div className="hero-privacy-card-title">Open Source, Fully Auditable</div>
@@ -405,11 +405,11 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
           <div className="hero-privacy-card">
             <div className="hero-privacy-card-title">Local AI Option</div>
-            <p>Route AI analysis through Ollama or any OpenAI-compatible local model. The most sensitive analysis — bloodwork, form assessment — never has to leave your own network.</p>
+            <p>Route AI analysis through a locally-hosted model. The most sensitive analysis — bloodwork, form assessment — never has to leave your own network.</p>
           </div>
           <div className="hero-privacy-card">
             <div className="hero-privacy-card-title">You Own the Exit</div>
-            <p>Your data is a SQLite file. Open it with any client. Export to CSV. Run your own queries. No vendor lock-in. No export limits. No account deletion required to reclaim what was always yours.</p>
+            <p>Your data lives in a single portable file you own. Export to standard formats, open it with any tool, run your own analyses. No vendor lock-in. No export limits. No account deletion required to reclaim what was always yours.</p>
           </div>
         </div>
       </section>
