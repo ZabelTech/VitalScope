@@ -8,7 +8,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
   return (
     <div className="hero-page">
       <section className="hero-fold">
-        <div className="hero-eyebrow">Signal depth · Self-hosted · AI-powered</div>
+        <div className="hero-eyebrow">Signal depth · Self-hosted · Sovereign AI</div>
         <h1 className="hero-headline">
           The fastest loop wins.<br />
           <span className="hero-headline-accent">every.single.time.</span>
@@ -161,13 +161,15 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
       </section>
 
       <section className="hero-section hero-ai">
-        <div className="hero-section-label">AI-Powered Orient Phase</div>
+        <div className="hero-section-label">The Orient Engine</div>
         <h2>Observation is cheap. Orientation is where champions are made — and where AI earns its keep.</h2>
         <p className="hero-section-body">
-          Most health apps stop at observation — they show you the data and leave interpretation to you.
-          VitalScope goes further. The Orient phase is cognitive: it interprets, correlates, and
-          contextualizes your signals across every domain simultaneously. No human analyst can do
-          this in real time. An AI can. It's connected to the sum of human knowledge, has an
+          Most health apps stop at observation — they show you the data and leave interpretation to
+          you. VitalScope goes further. The Orient phase is cognitive: it interprets, correlates,
+          and contextualizes your signals across every domain simultaneously. No human analyst can
+          do this in real time. Your <strong>orient engine</strong> — an AI trained on the
+          biomedical literature, pointed at your longitudinal canvas, cycling across your full
+          record the moment you ask — can. It's connected to the sum of human knowledge, has an
           unlimited attention span, and never sleeps.
         </p>
         <p className="hero-section-body">
@@ -203,7 +205,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
         </div>
         <p className="hero-ai-footnote">
-          Works with Claude, GPT, or a locally-hosted alternative — bring your own provider, pay only what you actually use. No subscription tax bundled into a tier you didn't ask for.
+          Choose your agent — Claude, GPT, or a locally-hosted alternative. Bring your own provider, pay only what you actually use. No subscription tax bundled into a tier you didn't ask for.
         </p>
       </section>
 
