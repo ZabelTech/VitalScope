@@ -105,14 +105,17 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <p>
             Colonel John Boyd beat every student at Nellis Air Force Base in under forty seconds
             — not because he was faster, but because he could cycle his model of the fight faster
-            than his opponent could maintain theirs.
+            than his opponent could maintain theirs. He spent the next three decades formalising
+            that single insight into <em>Patterns of Conflict</em>, the briefing that reshaped how
+            the US military thought about adaptation rate, manoeuvre, and why the side that cycles
+            faster almost always wins.
           </p>
           <p>
-            His insight wasn't that you need more data. It's that you need to cycle your
-            observation and orientation faster than the world around you changes. In the cockpit
-            that's measured in seconds. In your biology it's days and weeks. The principle is
-            the same either way: whoever holds the more current, more accurate model of reality
-            wins — every.single.time.
+            His claim wasn't that you need more data. It's that you need to cycle your observation
+            and orientation faster than the world around you changes. In the cockpit that's
+            measured in seconds. In your biology it's days and weeks. The principle is the same
+            either way: whoever holds the more current, more accurate model of reality wins —
+            every.single.time.
           </p>
         </div>
       </section>
@@ -214,32 +217,20 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </p>
         <div className="hero-sources-grid">
           <div className="hero-source-card">
-            <div className="hero-source-name">Fitness Wearable</div>
-            <div className="hero-source-metrics">
-              Heart rate · HRV · Sleep architecture · Stress score · Body battery · Steps · VO2 max · Activities
-            </div>
-            <p>Continuous intraday time-series plus nightly summaries. Always re-fetches recent data because your overnight physiology is still being written at sync time.</p>
+            <div className="hero-source-name">Continuous Physiology</div>
+            <p>The heart rate, HRV, sleep architecture, stress, body battery, and training output your wearable records whether you're paying attention or not — re-fetched every sync, because last night's biology is still being written at the moment you ask about it.</p>
           </div>
           <div className="hero-source-card">
-            <div className="hero-source-name">Gym Tracker</div>
-            <div className="hero-source-metrics">
-              Exercises · Sets · Reps · Weight · Volume load · PRs · Rest periods · Training density
-            </div>
-            <p>Every working set logged, never inflated by rest-timer rows. Progressive overload curves, weekly volume, and training density across every movement pattern in your history.</p>
+            <div className="hero-source-name">Training Load</div>
+            <p>The one intervention whose dose you have complete control over. Every working set, rep, and load resolves into a longitudinal curve — progressive overload, weekly volume, density across every movement pattern — never inflated by rest-timer rows pretending to be work.</p>
           </div>
           <div className="hero-source-card">
-            <div className="hero-source-name">Smart Scale</div>
-            <div className="hero-source-metrics">
-              Weight · Body fat % · Muscle mass · Bone mass · BMR · Visceral fat index
-            </div>
-            <p>Daily body composition snapshots correlated against training load and nutrition — so the number on the scale finally means something in context rather than noise.</p>
+            <div className="hero-source-name">Body Composition</div>
+            <p>The slowest-to-lie output variable. One weight reading is a number; hundreds of weight, body-fat, lean-mass, and visceral-fat readings correlated against training load and nutrition is a signal — and the signal is what tells you whether what you're doing is actually working.</p>
           </div>
           <div className="hero-source-card">
-            <div className="hero-source-name">Manual Inputs</div>
-            <div className="hero-source-metrics">
-              Nutrition · Bloodwork · Supplements · Peptides · PED regimens · Water intake · Daily journal · Form checks
-            </div>
-            <p>The data your wearables can't capture: what you ate, what you took, how you felt, what you noticed. Logged once, available for correlation forever.</p>
+            <div className="hero-source-name">The Levers You Pull Yourself</div>
+            <p>The causal variables nobody else can log for you: meals, supplements, peptide protocols, PED regimens, water, bloodwork panels, and a daily journal that captures what you felt and what you noticed. Your wearable reports the output; this is where you record the input.</p>
           </div>
         </div>
       </section>
@@ -275,10 +266,12 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-section-label">The Missing Layer</div>
         <h2>Measurements tell you where you are. Your genome tells you why — and where you're predisposed to go.</h2>
         <p className="hero-section-body">
-          Bloodwork and wearable data are phenotype: the live readout of your physiology right now.
-          DNA sequencing is genotype: the blueprint you were born with. Neither is complete without the other.
-          When you overlay genomic variants on top of continuous biometric data and lab panels,
-          population averages stop mattering and your actual biology starts making sense.
+          Bloodwork and wearable data are phenotype — the live readout of your physiology right
+          now. DNA sequencing is genotype — the blueprint you were born with. Most people treat
+          their genome report as a one-time curiosity; VitalScope treats it as a permanent
+          interpretive layer that makes every bloodwork panel, every HRV trend, and every
+          performance plateau legible. When genotype and phenotype converge in the same
+          dashboard, you stop playing statistical averages and start playing your actual hand.
         </p>
         <div className="hero-genomics-grid">
           <div className="hero-genomics-card hero-genomics-card--accent">
@@ -298,12 +291,6 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <p>CYP450 variants decide how fast you metabolise caffeine, supplements, peptide protocols, PED regimens, and medications — the difference between a therapeutic dose and an adverse reaction. When your stack and your metabolism profile live in the same system, you stop dosing blind.</p>
           </div>
         </div>
-        <div className="hero-genomics-synthesis">
-          <div className="hero-genomics-synthesis-label">The Synthesis</div>
-          <p>
-            Most people treat their genome report as a one-time curiosity. VitalScope treats it as a permanent interpretive layer — the context engine that makes every bloodwork panel, every HRV trend, and every performance plateau legible. When genotype and phenotype converge in the same dashboard, you stop playing statistical averages and start playing your actual hand.
-          </p>
-        </div>
       </section>
 
       <section className="hero-section hero-longevity">
@@ -312,11 +299,16 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <p className="hero-section-body">
           Longevity is not a feature on a dashboard. It is the cumulative result of every
           training block, every sleep cycle, every supplement, every peptide, every fasted
-          window, and every inflammatory meal — integrated across decades. The question is
-          never "how long will I live?" It is: "how fast am I ageing right now, which levers
-          are actually decelerating that rate for <em>me</em>, and which ones am I pulling on
-          fashion rather than evidence?" VitalScope is the longitudinal canvas where those
-          answers accrete.
+          window, and every inflammatory meal — integrated across decades. The goal isn't
+          more years; it's what James Fries called the <em>compression of morbidity</em> —
+          pushing sickness, decline, and frailty into the shortest possible window at the end
+          of life while every decade before stays full-signal. Peter Attia frames it as
+          Medicine 3.0, David Sinclair as information-theoretic ageing, Valter Longo as
+          fasting-mimicking metabolic reset — three different vocabularies for the same
+          underlying question: how fast am I ageing right now, which levers are actually
+          decelerating that rate for <em>me</em>, and which ones am I pulling on fashion
+          rather than evidence? VitalScope is the longitudinal canvas where those answers
+          accrete.
         </p>
         <div className="hero-longevity-grid">
           <div className="hero-longevity-card hero-longevity-card--accent">
@@ -414,6 +406,61 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         </div>
       </section>
 
+      <section className="hero-section hero-objections">
+        <div className="hero-section-label">What You'll Hear</div>
+        <h2>Three objections to everything on this page. They deserve honest answers.</h2>
+        <p className="hero-section-body">
+          A worldview worth holding has to survive its strongest critics. These are the three
+          lines I hear most often — from thoughtful doctors, from reasonable skeptics, and from
+          quantified-self converts who tried it and quit. Every one of them is partially right.
+          None of them defeats the thesis.
+        </p>
+        <div className="hero-objections-grid">
+          <div className="hero-objection-card">
+            <div className="hero-objection-card-label">Objection</div>
+            <div className="hero-objection-card-title">"Isn't this hypochondria with extra steps?"</div>
+            <p className="hero-objection-card-body">
+              Hypochondria is persistent, unwarranted alarm about symptoms. This is the
+              opposite: tracking the continuous system <em>upstream</em> of symptoms so that by
+              the time anything alarming shows up you already have the context to respond
+              proportionally — or confirm it's nothing and move on. The alternative isn't calm;
+              it's ignorance that feels calm because the signal is invisible. Earlier, more
+              granular observation is exactly what the compression-of-morbidity literature
+              points to as the path off the anxious-reaction treadmill, not onto it.
+            </p>
+          </div>
+          <div className="hero-objection-card">
+            <div className="hero-objection-card-label">Objection</div>
+            <div className="hero-objection-card-title">"Doesn't quantification produce anxiety, not insight?"</div>
+            <p className="hero-objection-card-body">
+              It does — when you optimise a metric without understanding what it reports, chase
+              the number instead of the physiology, or let every app treat every deviation as
+              alarming. That failure mode is real, and it's the failure mode of closed,
+              feature-limited dashboards that can't correlate one signal against another. A
+              single HRV dip in isolation is anxiety. The same HRV dip correlated with last
+              night's sleep, this week's training load, yesterday's alcohol, and your
+              historical baseline is information. The fix for bad quantification isn't less
+              quantification — it's <em>integrated</em> quantification.
+            </p>
+          </div>
+          <div className="hero-objection-card">
+            <div className="hero-objection-card-label">Objection</div>
+            <div className="hero-objection-card-title">"Isn't n=1 just noise?"</div>
+            <p className="hero-objection-card-body">
+              A single n=1 data point is noise. A year of longitudinal n=1 data — with
+              controlled protocol changes and clean correlation against intervention windows —
+              is the highest-grade evidence that can exist about <em>you specifically</em>.
+              Population studies are rigorous claims about populations; they're being offered
+              as guidance to an individual they didn't sample, on a diet they didn't model, with
+              a training history they didn't have, and a genome they never sequenced. Statistical
+              power matters for claims about averages. Personal optimisation is a claim about
+              one person. The evidence bar is different by design — and for you, personally,
+              your own data is the only data that actually addresses the question.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <section className="hero-section hero-final-cta">
         <h2>Close the loop.</h2>
         <p className="hero-section-body">
@@ -423,11 +470,14 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           belongs to — so every decision, across every decade, compounds into the longevity
           and healthspan you actually live through.
         </p>
+        <p className="hero-section-body">
+          Stop reading about it. Start the cycle.
+        </p>
         <div className="hero-actions">
           {onLoginClick ? (
-            <button className="hero-cta-primary" onClick={onLoginClick}>Sign In</button>
+            <button className="hero-cta-primary" onClick={onLoginClick}>Begin the Cycle</button>
           ) : (
-            <Link to="/" className="hero-cta-primary">Enter VitalScope</Link>
+            <Link to="/" className="hero-cta-primary">Begin the Cycle</Link>
           )}
         </div>
       </section>
