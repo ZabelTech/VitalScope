@@ -266,7 +266,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           <p>
             VitalScope is the car. OODA is the engine. Crowdsourced intelligence is the fuel.
             The driver is the person who refuses to outsource their own destiny to doctors and
-            academics operating on decades-old knowledge under arbitrary and artificial regulations.
+            academics operating on decades-old knowledge under arbitrary regulations.
           </p>
         </div>
       </section>
