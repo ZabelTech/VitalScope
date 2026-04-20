@@ -488,6 +488,18 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           belongs to — so every decision, across every decade, compounds into the longevity
           and healthspan you actually live through.
         </p>
+        <div className="hero-creed">
+          <div className="hero-creed-label">The Cycle</div>
+          <ol className="hero-creed-list">
+            <li>Observe continuously.</li>
+            <li>Orient across domains.</li>
+            <li>Decide from your own baseline.</li>
+            <li>Act on today's instruments, not last quarter's.</li>
+            <li>Own the canvas.</li>
+            <li>Outlive the vendor.</li>
+            <li>Build your signal depth.</li>
+          </ol>
+        </div>
         <p className="hero-section-body">
           Stop reading about it. Start the cycle.
         </p>
