@@ -16,7 +16,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <p className="hero-lead">
           VitalScope unifies every biometric, every rep, every night of sleep into a single
           command center — then runs it through the OODA loop so you always know where you
-          stand, what it means, and what to do next.
+          stand, what it means, and what to do next. Built for performance today, healthspan
+          tomorrow, and longevity across every decade after.
         </p>
         <div className="hero-actions">
           {onLoginClick ? (
@@ -377,7 +378,8 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           Your physiology is generating signal every second. Right now most of it is lost to
           fragmented apps, siloed dashboards, and quarterly product updates nobody asked for.
           VitalScope captures it, connects it, and hands the picture back to the one person it
-          belongs to.
+          belongs to — so every decision, across every decade, compounds into the longevity
+          and healthspan you actually live through.
         </p>
         <div className="hero-actions">
           {onLoginClick ? (
