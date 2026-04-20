@@ -321,11 +321,11 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <div className="hero-longevity-grid">
           <div className="hero-longevity-card hero-longevity-card--accent">
             <div className="hero-longevity-card-title">Biological Age, Not Chronological</div>
-            <p>Epigenetic clocks (GrimAge, Horvath, PhenoAge, DunedinPACE), telomere length, ApoB, hs-CRP, fasting insulin, HOMA-IR, VO₂ max, grip strength. Log them as they come in from any lab and watch the trajectory — the number on your driver's license is a rounding error next to the number your methylation pattern is quietly writing.</p>
+            <p>Epigenetic clocks (GrimAge, Horvath, PhenoAge, DunedinPACE), telomere length, ApoB, Lp(a), hs-CRP, fasting insulin, HOMA-IR, VO₂ max, grip strength — plus hemostasis markers (fibrinogen, D-dimer, PT/INR, homocysteine) for the silent clotting physiology that quietly underwrites stroke, MI, and thrombotic risk long before any symptom shows up. Log them as they come in from any lab and watch the trajectory — the number on your driver's license is a rounding error next to the number your methylation pattern is quietly writing.</p>
           </div>
           <div className="hero-longevity-card">
             <div className="hero-longevity-card-title">Intervention Protocols</div>
-            <p>Rapamycin pulses. Metformin. NAD⁺ precursors. Senolytics. GLP-1 agonists. Hormetic stressors — heat, cold, hypoxia, Zone 2. Time-restricted eating. Protein cycling. Log dose, cadence, and window; correlate the protocol against the markers that actually moved. Stop running protocols on Twitter consensus.</p>
+            <p>Rapamycin pulses. Metformin. NAD⁺ precursors. Senolytics. GLP-1 agonists. Hormesis — the calibrated dose of heat, cold, hypoxia, fasting, and Zone 2 that upregulates stress-response pathways instead of damaging them. Time-restricted eating. Protein cycling. Log dose, cadence, and window; correlate the protocol against the markers that actually moved. Stop running protocols on Twitter consensus.</p>
           </div>
           <div className="hero-longevity-card">
             <div className="hero-longevity-card-title">The Rate of Ageing, Not the Age</div>
