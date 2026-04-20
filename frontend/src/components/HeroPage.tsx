@@ -187,7 +187,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
           <div className="hero-ai-card">
             <div className="hero-ai-card-title">Visual Assessment</div>
-            <p>Photograph yourself. The AI analyses your appearance to assess visible physical indicators — estimated BMI, water retention, and other visually noticeable vitals — and builds a longitudinal record across weeks and months of tracking.</p>
+            <p>Photograph yourself. The AI builds a longitudinal visual record — week-over-week, month-over-month — surfacing the shifts your own eye normalises: puffiness, definition, posture, skin tone, visible recomposition. Pairs with the scale's numbers so you see both what changed and what it looks like, not one or the other.</p>
           </div>
           <div className="hero-ai-card">
             <div className="hero-ai-card-title">DNA Sequencing Analysis</div>
@@ -209,7 +209,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
 
       <section className="hero-section hero-sources">
         <div className="hero-section-label">Unified Data Pipeline</div>
-        <h2>Every sensor. One database. Infinite correlation.</h2>
+        <h2>Every sensor. One canvas. Infinite correlation.</h2>
         <p className="hero-section-body">
           The more data streams you combine, the more the hidden patterns emerge.
           VitalScope syncs from the platforms you already use — continuously, incrementally, silently —
@@ -411,7 +411,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
         <h2>Three objections to everything on this page. They deserve honest answers.</h2>
         <p className="hero-section-body">
           A worldview worth holding has to survive its strongest critics. These are the three
-          lines I hear most often — from thoughtful doctors, from reasonable skeptics, and from
+          that come up most often — from thoughtful doctors, from reasonable skeptics, and from
           quantified-self converts who tried it and quit. Every one of them is partially right.
           None of them defeats the thesis.
         </p>
@@ -420,13 +420,17 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <div className="hero-objection-card-label">Objection</div>
             <div className="hero-objection-card-title">"Isn't this hypochondria with extra steps?"</div>
             <p className="hero-objection-card-body">
-              Hypochondria is persistent, unwarranted alarm about symptoms. This is the
-              opposite: tracking the continuous system <em>upstream</em> of symptoms so that by
-              the time anything alarming shows up you already have the context to respond
-              proportionally — or confirm it's nothing and move on. The alternative isn't calm;
-              it's ignorance that feels calm because the signal is invisible. Earlier, more
-              granular observation is exactly what the compression-of-morbidity literature
-              points to as the path off the anxious-reaction treadmill, not onto it.
+              Yes — tracking creates more moments of "something looks off." That's true, and
+              it's the real version of the concern. The question is whether those moments net
+              out positive or negative, and the asymmetry answers it: a false alarm costs
+              thirty seconds of checking correlated data until the context dissolves it; a
+              missed signal costs a pattern that's already run for months before any symptom
+              surfaces. Hypochondria is alarm <em>without</em> resolution. This is vigilance
+              <em>with</em> resolution. The compression-of-morbidity literature is clear that
+              earlier, more granular observation buys decades of full-signal living — provided
+              you have the correlated context to tell a false alarm from a real one. A
+              single-metric app gives you alarm. An integrated dashboard turns it back into
+              information — or confirms it was nothing and lets you go back to your day.
             </p>
           </div>
           <div className="hero-objection-card">
