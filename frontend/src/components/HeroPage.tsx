@@ -181,7 +181,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
           <div className="hero-ai-card">
             <div className="hero-ai-card-title">Cognition &amp; Mental Performance</div>
-            <p><em>Mens sana in corpore sano</em> — Juvenal's line, and the German equivalent <em>Gesunder Geist in gesundem Körper</em>, both encode the same truth: the mind and the body are one system. Journal focus, mood, reaction time, and cognitive load alongside the physiology driving them, and let the AI surface which sleep architectures, training blocks, supplements, and nutritional choices actually lift your mental performance — not just your biomarkers.</p>
+            <p><em>Mens sana in corpore sano</em> — Juvenal's line encodes the truth that mind and body are one system. Journal focus, mood, reaction time, and cognitive load alongside the physiology driving them, and let the AI surface which sleep architectures, training blocks, supplements, and nutritional choices actually lift your mental performance — not just your biomarkers.</p>
           </div>
           <div className="hero-ai-card">
             <div className="hero-ai-card-title">Cross-Domain Correlation</div>
