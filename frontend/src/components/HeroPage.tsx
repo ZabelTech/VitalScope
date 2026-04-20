@@ -190,10 +190,6 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
             <p>Photograph your plate. AI identifies macros, micronutrients, and bioactives — then cross-references against your supplement stack and daily targets to surface real nutritional gaps.</p>
           </div>
           <div className="hero-ai-card">
-            <div className="hero-ai-card-title">Visual Assessment</div>
-            <p>Photograph yourself. The AI builds a longitudinal visual record — week-over-week, month-over-month — surfacing the shifts your own eye normalises: puffiness, definition, posture, skin tone, visible recomposition. Pairs with the scale's numbers so you see both what changed and what it looks like, not one or the other.</p>
-          </div>
-          <div className="hero-ai-card">
             <div className="hero-ai-card-title">DNA Sequencing Analysis</div>
             <p>Upload your raw genome file. AI maps your variants against performance, nutrition, recovery, and metabolic pathways — translating genetic data into context that makes every other metric in your dashboard make sense.</p>
           </div>
@@ -230,7 +226,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </div>
           <div className="hero-source-card">
             <div className="hero-source-name">Body Composition</div>
-            <p>The slowest-to-lie output variable. One weight reading is a number; hundreds of weight, body-fat, lean-mass, and visceral-fat readings correlated against training load and nutrition is a signal — and the signal is what tells you whether what you're doing is actually working.</p>
+            <p>The slowest-to-lie output variable. One weight reading is a number; hundreds of weight, body-fat, lean-mass, and visceral-fat readings correlated against training load and nutrition is a signal — and the signal is what tells you whether what you're doing is actually working. Paired with a longitudinal visual record the AI stitches from progress photos, so the numbers and the mirror finally tell the same story.</p>
           </div>
           <div className="hero-source-card">
             <div className="hero-source-name">The Levers You Pull Yourself</div>
@@ -501,7 +497,7 @@ export function HeroPage({ onLoginClick }: HeroPageProps) {
           </ol>
         </div>
         <p className="hero-section-body">
-          Stop reading about it. Start the cycle.
+          Stop reading. Start observing.
         </p>
         <div className="hero-actions">
           {onLoginClick ? (
