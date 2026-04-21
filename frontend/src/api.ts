@@ -2,6 +2,7 @@ import type {
   AiSettings,
   AiSettingsUpdate,
   BloodworkAnalysisResult,
+  GenotypePhenotypeData,
   BloodworkPanel,
   BloodworkPanelInput,
   BodyCompositionEstimate,
@@ -508,6 +509,14 @@ export async function listGenomeUploads(start: string, end: string): Promise<Gen
 export async function deleteGenomeUpload(id: number): Promise<void> {
   const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Genotype × phenotype convergence ---
+
+export async function fetchGenotypePhenotype(): Promise<GenotypePhenotypeData> {
+  const res = await apiFetch("/api/orient/genotype-phenotype");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // --- Orient AI analysis ---

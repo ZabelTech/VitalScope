@@ -426,6 +426,43 @@ export interface JournalQuestionResponse {
 export type AiProvider = "anthropic" | "openai" | "openrouter";
 export type AiEffort = "low" | "medium" | "high";
 
+export interface ConvVariant {
+  rs_id: string;
+  genotype: string | null;
+}
+
+export interface ConvBloodwork {
+  date: string;
+  analyte: string;
+  value: number | null;
+  unit: string | null;
+  flag: string | null;
+}
+
+export interface ConvWearable {
+  type: "weekly_volume" | "supplements";
+  data?: { week: string; week_start: string; sessions: number; volume_kg: number }[];
+  names?: string[];
+}
+
+export interface ConvergencePanel {
+  id: string;
+  label: string;
+  description: string;
+  rs_ids: string[];
+  variants_found: ConvVariant[];
+  interpretation: string | null;
+  risk_level: "low" | "elevated" | "high" | null;
+  risk_note: string | null;
+  bloodwork: ConvBloodwork[];
+  wearable: ConvWearable | null;
+}
+
+export interface GenotypePhenotypeData {
+  has_genome: boolean;
+  panels: ConvergencePanel[];
+}
+
 export interface AiSettings {
   provider: AiProvider;
   model: string;
