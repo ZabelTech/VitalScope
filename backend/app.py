@@ -450,6 +450,16 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS user_goals (
+            metric     TEXT PRIMARY KEY,
+            value      REAL NOT NULL,
+            unit       TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS planned_activities (
             id                   INTEGER PRIMARY KEY AUTOINCREMENT,
             date                 TEXT NOT NULL,
@@ -1916,6 +1926,120 @@ def put_nutrition_goals(body: NutritionGoalsBody):
     conn.commit()
     conn.close()
     return {"status": "ok", "count": len(body.goals)}
+
+
+# --- Health goals ---
+
+_GOAL_UNITS: dict[str, str] = {
+    "sleep_hours":   "h",
+    "hrv":           "ms",
+    "resting_hr":    "bpm",
+    "weight_kg":     "kg",
+    "body_fat_pct":  "%",
+    "calories_kcal": "kcal",
+    "protein_g":     "g",
+    "carbs_g":       "g",
+    "fat_g":         "g",
+}
+
+
+class GoalBody(BaseModel):
+    value: float
+
+
+@app.get("/api/goals")
+def get_goals():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT metric, value, unit, updated_at FROM user_goals"
+    ).fetchall()
+    conn.close()
+    return {r["metric"]: {"value": r["value"], "unit": r["unit"], "updated_at": r["updated_at"]} for r in rows}
+
+
+@app.get("/api/goals/defaults")
+def get_goal_defaults():
+    cutoff = (datetime.utcnow() - timedelta(days=90)).strftime("%Y-%m-%d")
+    conn = get_db()
+    defaults: dict[str, float] = {}
+
+    r = conn.execute(
+        "SELECT AVG(sleep_time_seconds) / 3600.0 FROM sleep_daily "
+        "WHERE sleep_time_seconds IS NOT NULL AND date >= ?",
+        (cutoff,),
+    ).fetchone()
+    if r and r[0] is not None:
+        defaults["sleep_hours"] = round(r[0], 1)
+
+    r = conn.execute(
+        "SELECT AVG(weekly_avg) FROM hrv_daily WHERE weekly_avg IS NOT NULL AND date >= ?",
+        (cutoff,),
+    ).fetchone()
+    if r and r[0] is not None:
+        defaults["hrv"] = round(r[0])
+
+    r = conn.execute(
+        "SELECT AVG(resting_hr) FROM heart_rate_daily WHERE resting_hr IS NOT NULL AND date >= ?",
+        (cutoff,),
+    ).fetchone()
+    if r and r[0] is not None:
+        defaults["resting_hr"] = round(r[0])
+
+    r = conn.execute(
+        "SELECT weight_kg FROM weight_daily WHERE weight_kg IS NOT NULL ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    if r and r[0] is not None:
+        defaults["weight_kg"] = round(r[0], 1)
+
+    r = conn.execute(
+        "SELECT body_fat_pct FROM weight_daily WHERE body_fat_pct IS NOT NULL ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    if r and r[0] is not None:
+        defaults["body_fat_pct"] = round(r[0], 1)
+
+    for key in ("calories_kcal", "protein_g", "carbs_g", "fat_g"):
+        r = conn.execute(
+            """
+            SELECT AVG(day_total) FROM (
+                SELECT m.date, SUM(mn.amount) AS day_total
+                FROM meal_nutrients mn
+                JOIN meals m ON mn.meal_id = m.id
+                WHERE mn.nutrient_key = ? AND m.date >= ?
+                GROUP BY m.date
+            )
+            """,
+            (key, cutoff),
+        ).fetchone()
+        if r and r[0] is not None:
+            defaults[key] = round(r[0])
+
+    conn.close()
+    return defaults
+
+
+@app.put("/api/goals/{metric}")
+def put_goal(metric: str, body: GoalBody):
+    if metric not in _GOAL_UNITS:
+        raise HTTPException(status_code=400, detail=f"Unknown metric: {metric}")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    unit = _GOAL_UNITS[metric]
+    conn = get_db()
+    conn.execute(
+        "INSERT OR REPLACE INTO user_goals (metric, value, unit, updated_at) VALUES (?, ?, ?, ?)",
+        (metric, body.value, unit, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"metric": metric, "value": body.value, "unit": unit}
+
+
+@app.delete("/api/goals/{metric}")
+def delete_goal(metric: str):
+    conn = get_db()
+    conn.execute("DELETE FROM user_goals WHERE metric = ?", (metric,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
 
 
 # --- Planned activities (read-only in this version) ---

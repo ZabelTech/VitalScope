@@ -1,6 +1,7 @@
 import { format, subDays } from "date-fns";
 import { useEffect, useState } from "react";
 import { apiFetch } from "../api";
+import { useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
 import type {
   BodyBatteryDaily,
@@ -138,6 +139,8 @@ export function TodayMetrics() {
   const weight =
     weightData && weightData.length > 0 ? weightData[weightData.length - 1] : null;
 
+  const goals = useGoals();
+
   const [bbCurrent, setBbCurrent] = useState<{
     date: string;
     current: number | null;
@@ -177,6 +180,11 @@ export function TodayMetrics() {
               <ScoreBadge quality={sleep?.sleep_score_quality ?? null} />
               <span className="sleep-duration">
                 {fmtDuration(sleep?.sleep_time_seconds ?? null)}
+                {goals?.sleep_hours != null && (
+                  <span className="goal-hint" style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "0.4rem" }}>
+                    goal ≥{goals.sleep_hours.value}h
+                  </span>
+                )}
               </span>
             </div>
             <div className="sleep-bars">
@@ -221,7 +229,14 @@ export function TodayMetrics() {
             </div>
             <div className="overview-stat">
               <span className="stat-label">Weekly Avg</span>
-              <span className="stat-value">{hrv?.weekly_avg ?? "--"} ms</span>
+              <span className="stat-value">
+                {hrv?.weekly_avg ?? "--"} ms
+                {goals?.hrv != null && (
+                  <span className="goal-hint" style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "0.4rem" }}>
+                    goal ≥{goals.hrv.value}
+                  </span>
+                )}
+              </span>
             </div>
             <div className="overview-stat">
               <span className="stat-label">5min High</span>
@@ -301,6 +316,11 @@ export function TodayMetrics() {
                 {fmt2(weight?.weight_kg)}
                 <span className="stat-unit">kg</span>
               </span>
+              {goals?.weight_kg != null && (
+                <span className="goal-hint" style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "0.5rem" }}>
+                  goal {goals.weight_kg.value} kg
+                </span>
+              )}
             </div>
             <div className="overview-stat">
               <span className="stat-label">BMI</span>
@@ -310,6 +330,11 @@ export function TodayMetrics() {
               <span className="stat-label">Body Fat</span>
               <span className="stat-value">
                 {weight?.body_fat_pct != null ? `${fmt2(weight.body_fat_pct)}%` : "--"}
+                {goals?.body_fat_pct != null && (
+                  <span className="goal-hint" style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "0.4rem" }}>
+                    goal ≤{goals.body_fat_pct.value}%
+                  </span>
+                )}
               </span>
             </div>
             <div className="overview-stat">
@@ -333,6 +358,11 @@ export function TodayMetrics() {
                 {hr?.resting_hr ?? "--"}
                 <span className="stat-unit">bpm</span>
               </span>
+              {goals?.resting_hr != null && (
+                <span className="goal-hint" style={{ fontSize: "0.75rem", color: "#64748b", marginLeft: "0.5rem" }}>
+                  goal ≤{goals.resting_hr.value}
+                </span>
+              )}
             </div>
             <div className="overview-stat">
               <span className="stat-label">Min</span>
