@@ -18,6 +18,7 @@ import type {
   NutrientDef,
   NutrientCategory,
   NutrientGoals,
+  NightBriefing,
   NutritionDailyTotals,
   OrientAnalysis,
   PlannedActivity,
@@ -508,6 +509,21 @@ export async function listGenomeUploads(start: string, end: string): Promise<Gen
 export async function deleteGenomeUpload(id: number): Promise<void> {
   const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Night briefing ---
+
+export async function analyzeNightBriefing(date: string, regenerate = false): Promise<NightBriefing> {
+  const res = await apiFetch("/api/briefing/night", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date, regenerate }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
 }
 
 // --- Orient AI analysis ---

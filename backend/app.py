@@ -63,6 +63,7 @@ AI_EFFORT: str = os.environ.get("VITALSCOPE_AI_EFFORT", "medium")
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
+NIGHT_BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("NIGHT_BRIEFING_AI_TIMEOUT_SEC", "90"))
 
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
@@ -617,6 +618,28 @@ def ensure_daily_landing_tables() -> None:
 
 
 ensure_daily_landing_tables()
+
+
+def ensure_briefings_table() -> None:
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS briefings (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            date         TEXT NOT NULL,
+            kind         TEXT NOT NULL CHECK (kind IN ('night', 'morning')),
+            payload_json TEXT NOT NULL,
+            model        TEXT NOT NULL,
+            created_at   TEXT NOT NULL,
+            UNIQUE(date, kind)
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+
+ensure_briefings_table()
 
 
 def _load_ai_config_from_db() -> None:
@@ -2344,6 +2367,22 @@ class DemoProvider(AIProvider):
             return _demo_bloodwork_payload()
         return {}
 
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        await asyncio.sleep(0.4)
+        tool_name = tool.get("name")
+        if tool_name == "record_health_orientation":
+            return _demo_orient_payload()
+        if tool_name == "record_night_briefing":
+            return _demo_night_briefing_payload()
+        return {}
+
 
 def _demo_meal_payload(tool: dict) -> dict:
     nutrient_keys = list(
@@ -2409,6 +2448,111 @@ def _demo_bloodwork_payload() -> dict:
              "reference_low": 30, "reference_high": 100, "reference_text": None, "flag": "low"},
             {"analyte": "Ferritin", "value": 120, "value_text": None, "unit": "ng/mL",
              "reference_low": 30, "reference_high": 400, "reference_text": None, "flag": "normal"},
+        ],
+    }
+
+
+def _demo_orient_payload() -> dict:
+    return {
+        "overall_summary": (
+            "Your training load has been consistent over the past two weeks with solid aerobic "
+            "base work. HRV is trending stable within your baseline range and resting heart rate "
+            "shows good adaptation. Sleep quality could be improved — REM percentage has dipped "
+            "slightly below optimal."
+        ),
+        "topics": [
+            {
+                "id": "health",
+                "label": "Health",
+                "summary": "Cardiovascular markers look healthy with resting HR in a good range.",
+                "insights": [
+                    "Resting HR averaging 52 bpm over the window — well within the healthy aerobic range.",
+                    "HRV weekly average stable at 68 ms, within your personal baseline (62–74 ms).",
+                ],
+                "alerts": [],
+                "recommendations": [
+                    "Continue current aerobic training volume to maintain cardiovascular adaptation.",
+                ],
+            },
+            {
+                "id": "performance",
+                "label": "Performance",
+                "summary": "Training load is consistent; strength volume has been building steadily.",
+                "insights": [
+                    "Average 8,200 steps/day — good daily movement baseline.",
+                    "Three strength sessions logged in the window with progressive volume increase.",
+                ],
+                "alerts": [],
+                "recommendations": [
+                    "Consider a deload week if accumulated fatigue is perceived over the next 7 days.",
+                ],
+            },
+            {
+                "id": "recovery",
+                "label": "Recovery",
+                "summary": "Body battery is replenishing well overnight but stress spikes are notable.",
+                "insights": [
+                    "Body battery charged to 85+ on most mornings — indicating good sleep recovery.",
+                    "Mid-afternoon stress peaks (avg 62) suggest work-related cognitive load.",
+                ],
+                "alerts": [],
+                "recommendations": [
+                    "A 10-minute mid-afternoon walk can blunt the cortisol-driven stress curve.",
+                ],
+            },
+            {
+                "id": "body_composition",
+                "label": "Body Composition",
+                "summary": "Weight is stable over the measurement window.",
+                "insights": [
+                    "No significant weight trend detected over the 14-day window.",
+                ],
+                "alerts": [],
+                "recommendations": [
+                    "Ensure protein target is met on strength-training days to support lean mass.",
+                ],
+            },
+        ],
+    }
+
+
+def _demo_night_briefing_payload() -> dict:
+    return {
+        "today_readout": (
+            "Moderate training day — one strength session, 8,400 steps, average stress was elevated "
+            "in the afternoon but body battery held above 50 through the evening."
+        ),
+        "sleep_debt_posture": (
+            "You are carrying approximately 45 minutes of sleep debt from the past 5 nights versus "
+            "your 7.5-hour goal. Tonight needs to be 7h 45min or better to start clearing the deficit. "
+            "Last night's 6h 50min session kept debt accumulating — prioritise lights-out by 10:30 pm."
+        ),
+        "pre_sleep_checklist": [
+            "Take evening supplements (Magnesium glycinate 400 mg, Zinc 15 mg) — not yet logged.",
+            "Finish a final 300 ml glass of water to reach today's hydration target.",
+            "Dim screens or switch to blue-light filter mode — it is past 9 pm.",
+            "Set alarm no earlier than 6:15 am to protect a 7h 45min sleep window.",
+            "Review tomorrow's training plan and lay out kit to reduce morning decision load.",
+        ],
+        "watch_outs": [
+            {
+                "issue": "Afternoon strength session ended at 5:30 pm — less than 4 hours before typical bedtime.",
+                "mitigation": (
+                    "Core temperature should normalise by 10 pm. A warm shower now can accelerate "
+                    "the drop. Avoid intense activity after this point."
+                ),
+            },
+            {
+                "issue": "Last meal logged at 7:45 pm — digestion may still be active at sleep onset.",
+                "mitigation": (
+                    "Limit any additional eating. A small low-glycaemic snack (e.g. Greek yoghurt) "
+                    "is acceptable if genuinely hungry, but avoid heavy carbs or fats."
+                ),
+            },
+        ],
+        "tomorrow_setup": [
+            "Prep tomorrow's breakfast tonight — a high-protein meal ready to go reduces morning stress.",
+            "Training kit is already noted in your plan; confirm it is laid out before bed.",
         ],
     }
 
@@ -3099,6 +3243,312 @@ async def orient_analyze(body: OrientAnalyzeBody):
         "overall_summary": str(payload.get("overall_summary") or ""),
         "topics": topics,
     }
+
+
+# --- Night briefing AI analysis ---
+
+_NIGHT_BRIEFING_TOOL = {
+    "name": "record_night_briefing",
+    "description": (
+        "Record a structured end-of-day night briefing with pre-sleep guidance. "
+        "Synthesise today's training, nutrition, stress, and supplement data into "
+        "five concrete output blocks. Use only data explicitly provided. "
+        "Do not give medical advice; frame as evidence-informed self-tracking insights."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "today_readout": {
+                "type": "string",
+                "description": (
+                    "Honest one-line summary of what today was — training load, stress, "
+                    "nutrition quality, and subjective feel if available."
+                ),
+            },
+            "sleep_debt_posture": {
+                "type": "string",
+                "description": (
+                    "2-3 sentences on rolling sleep debt versus the inferred goal, "
+                    "what last night delivered, and what tonight's target needs to be."
+                ),
+            },
+            "pre_sleep_checklist": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 3,
+                "maxItems": 5,
+                "description": (
+                    "3-5 specific, actionable items still to do before bed. "
+                    "Include unchecked evening supplements by name and dose, "
+                    "outstanding hydration, wind-down actions, and alarm timing."
+                ),
+            },
+            "watch_outs": {
+                "type": "array",
+                "description": (
+                    "Things from today that risk degrading tonight's sleep, "
+                    "each paired with a still-actionable mitigation. "
+                    "Include late caffeine, late heavy meals, or late high-intensity training "
+                    "only if they appear in today's data. Leave empty if nothing applies."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {
+                            "type": "string",
+                            "description": "The specific event or pattern that risks sleep.",
+                        },
+                        "mitigation": {
+                            "type": "string",
+                            "description": "What can still be done, or that the window has passed.",
+                        },
+                    },
+                    "required": ["issue", "mitigation"],
+                    "additionalProperties": False,
+                },
+            },
+            "tomorrow_setup": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 2,
+                "description": "1-2 nudges that seed tomorrow morning well.",
+            },
+        },
+        "required": [
+            "today_readout",
+            "sleep_debt_posture",
+            "pre_sleep_checklist",
+            "watch_outs",
+            "tomorrow_setup",
+        ],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_night_briefing_data(conn: sqlite3.Connection, target_date: str) -> dict:
+    target = date.fromisoformat(target_date)
+    yesterday = (target - timedelta(days=1)).isoformat()
+    window_start = (target - timedelta(days=14)).isoformat()
+
+    def rows_to_list(rows: list) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    activities = rows_to_list(conn.execute(
+        "SELECT name, sport_type, ROUND(duration_sec/60.0) AS duration_min, "
+        "ROUND(distance_m/1000.0, 2) AS distance_km, avg_hr, calories, training_effect "
+        "FROM garmin_activities WHERE date = ? ORDER BY start_time",
+        (target_date,),
+    ).fetchall())
+
+    workouts = rows_to_list(conn.execute(
+        "SELECT w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date = ? GROUP BY w.id ORDER BY w.end_date",
+        (target_date,),
+    ).fetchall())
+
+    steps_row = conn.execute(
+        "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    steps = dict(steps_row) if steps_row else {}
+
+    stress_row = conn.execute(
+        "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    stress_today = dict(stress_row) if stress_row else {}
+
+    hrv_row = conn.execute(
+        "SELECT last_night_avg, weekly_avg, baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date = ?",
+        (yesterday,),
+    ).fetchone()
+    hrv_last_night = dict(hrv_row) if hrv_row else {}
+
+    sleep_window = rows_to_list(conn.execute(
+        "SELECT date, ROUND(sleep_time_seconds/3600.0, 1) AS sleep_hours, sleep_score, "
+        "sleep_start, sleep_end "
+        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (window_start, yesterday),
+    ).fetchall())
+
+    meal_rows = conn.execute(
+        "SELECT id, time, name FROM meals WHERE date = ? ORDER BY time, id",
+        (target_date,),
+    ).fetchall()
+    meals_today = []
+    nutrition_totals: dict[str, float] = {}
+    for meal in meal_rows:
+        nutrients = {r["nutrient_key"]: r["amount"] for r in conn.execute(
+            "SELECT nutrient_key, amount FROM meal_nutrients WHERE meal_id = ?",
+            (meal["id"],),
+        ).fetchall()}
+        meals_today.append({"time": meal["time"], "name": meal["name"], "nutrients": nutrients})
+        for k, v in nutrients.items():
+            nutrition_totals[k] = round(nutrition_totals.get(k, 0) + v, 1)
+
+    last_meal_row = conn.execute(
+        "SELECT time FROM meals WHERE date = ? AND time IS NOT NULL ORDER BY time DESC LIMIT 1",
+        (target_date,),
+    ).fetchone()
+    last_meal_time = last_meal_row["time"] if last_meal_row else None
+
+    water_row = conn.execute(
+        "SELECT COALESCE(SUM(amount_ml), 0) AS total FROM water_intake WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    water_ml = water_row["total"] if water_row else 0
+
+    evening_pending = rows_to_list(conn.execute(
+        """
+        SELECT s.name, s.dosage
+        FROM supplements s
+        LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
+        WHERE s.time_of_day = 'evening' AND COALESCE(i.taken, 0) = 0
+        ORDER BY s.sort_order, s.id
+        """,
+        (target_date,),
+    ).fetchall())
+
+    all_supplements = rows_to_list(conn.execute(
+        """
+        SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken
+        FROM supplements s
+        LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
+        ORDER BY CASE s.time_of_day WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'evening' THEN 2 END,
+                 s.sort_order, s.id
+        """,
+        (target_date,),
+    ).fetchall())
+
+    journal_row = conn.execute(
+        "SELECT morning_feeling, notes, followed_supplements, drank_alcohol, "
+        "alcohol_amount, is_work_day FROM journal_entries WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    journal_entry = dict(journal_row) if journal_row else {}
+
+    goal_rows = conn.execute("SELECT nutrient_key, amount FROM nutrient_goals").fetchall()
+    nutrition_goals = {r["nutrient_key"]: r["amount"] for r in goal_rows}
+
+    return {
+        "target_date": target_date,
+        "activities_today": activities,
+        "workouts_today": workouts,
+        "steps_today": steps,
+        "stress_today": stress_today,
+        "hrv_last_night": hrv_last_night,
+        "sleep_last_14_days": sleep_window,
+        "meals_today": meals_today,
+        "last_meal_time": last_meal_time,
+        "nutrition_totals_today": nutrition_totals,
+        "nutrition_goals": nutrition_goals,
+        "water_ml_today": water_ml,
+        "evening_supplements_pending": evening_pending,
+        "all_supplements_today": all_supplements,
+        "journal_entry_today": journal_entry,
+    }
+
+
+class NightBriefingBody(BaseModel):
+    date: Optional[str] = None
+    regenerate: bool = False
+
+
+@app.post("/api/briefing/night")
+async def night_briefing(body: NightBriefingBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    target_date = body.date or date.today().isoformat()
+
+    conn = get_db()
+    try:
+        if not body.regenerate:
+            cached = conn.execute(
+                "SELECT payload_json, model FROM briefings WHERE date = ? AND kind = 'night'",
+                (target_date,),
+            ).fetchone()
+            if cached:
+                return {
+                    **json.loads(cached["payload_json"]),
+                    "model": cached["model"],
+                    "analysis_date": target_date,
+                    "cached": True,
+                }
+
+        data = _gather_night_briefing_data(conn, target_date)
+    finally:
+        conn.close()
+
+    data_json = json.dumps(data, indent=2, default=str)
+
+    system_prompt = (
+        "You are a personal health coach with expertise in sleep physiology, recovery science, "
+        "and strength training. Analyse the user's day — training, nutrition, stress, supplements, "
+        "and sleep history — and produce a structured night briefing to close the day well and "
+        "set up tonight's sleep. Be specific: reference actual values, times, and names from the "
+        "data. Alerts and watch-outs must be grounded in what actually happened today. "
+        "Do not give medical advice. Frame insights as evidence-informed self-tracking observations. "
+        "Tone is direct, calm, and practical — not a cheerleader, not alarmist."
+    )
+
+    user_text = (
+        f"Generate a night briefing for {target_date}. "
+        "Identify what needs to happen before bed, any sleep-risk factors from today, "
+        f"and how to set up tomorrow.\n\nData (JSON):\n{data_json}"
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
+        tool=_NIGHT_BRIEFING_TOOL,
+        timeout_sec=NIGHT_BRIEFING_AI_TIMEOUT_SEC,
+    )
+
+    result = {
+        "today_readout": str(payload.get("today_readout") or ""),
+        "sleep_debt_posture": str(payload.get("sleep_debt_posture") or ""),
+        "pre_sleep_checklist": [str(i) for i in (payload.get("pre_sleep_checklist") or []) if i],
+        "watch_outs": [
+            {
+                "issue": str(wo.get("issue") or ""),
+                "mitigation": str(wo.get("mitigation") or ""),
+            }
+            for wo in (payload.get("watch_outs") or [])
+            if isinstance(wo, dict)
+        ],
+        "tomorrow_setup": [str(i) for i in (payload.get("tomorrow_setup") or []) if i],
+    }
+
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT INTO briefings (date, kind, payload_json, model, created_at)
+            VALUES (?, 'night', ?, ?, ?)
+            ON CONFLICT(date, kind) DO UPDATE SET
+                payload_json = excluded.payload_json,
+                model = excluded.model,
+                created_at = excluded.created_at
+            """,
+            (target_date, json.dumps(result), AI_MODEL, now),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {**result, "model": AI_MODEL, "analysis_date": target_date, "cached": False}
 
 
 # --- Bloodwork panels (CRUD) ---
