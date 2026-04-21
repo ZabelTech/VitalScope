@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { fetchJournalEntry, fetchJournalResponses, submitJournalEntry, submitJournalResponses } from "../api";
-import type { JournalEntry, JournalQuestionResponse, MorningFeeling } from "../types";
+import type { JournalEntry, JournalQuestionResponse, MoodTag, MorningFeeling } from "../types";
+
+const MOOD_TAGS: MoodTag[] = ["great", "good", "flat", "low", "irritable", "anxious"];
 
 function yesterdayISO(): string {
   const d = new Date();
@@ -10,23 +12,22 @@ function yesterdayISO(): string {
 
 interface Props {
   initialDate?: string;
-  // Whether to render the Date input. Default true; the landing's
-  // "Yesterday's journal" section passes false since it's always pinned
-  // to yesterday.
   showDate?: boolean;
 }
 
 export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [date, setDate] = useState<string>(initialDate ?? yesterdayISO());
-  // Primary fields owned here — yesterday's reflections.
   const [alcoholAmount, setAlcoholAmount] = useState("");
   const [notes, setNotes] = useState("");
-  // Preserved-through fields owned by other sections of the daily landing:
-  //   morning_feeling, is_work_day → TodayJournal (today only)
-  //   followed_supplements         → IntakeLog (derived from tick state)
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   const [followedSupplements, setFollowedSupplements] = useState(true);
+  const [focus, setFocus] = useState<number | null>(null);
+  const [moodTag, setMoodTag] = useState<MoodTag | null>(null);
+  const [cognitiveLoad, setCognitiveLoad] = useState<number | null>(null);
+  const [subjectiveEnergy, setSubjectiveEnergy] = useState<number | null>(null);
+  const [existingAvgRtMs, setExistingAvgRtMs] = useState<number | null>(null);
+  const [existingRtTrials, setExistingRtTrials] = useState<number | null>(null);
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [loadedExisting, setLoadedExisting] = useState(false);
   const [customResponses, setCustomResponses] = useState<JournalQuestionResponse[]>([]);
@@ -44,6 +45,12 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
           setMorningFeeling(entry.morning_feeling);
           setIsWorkDay(entry.is_work_day);
           setFollowedSupplements(entry.followed_supplements);
+          setFocus(entry.focus ?? null);
+          setMoodTag(entry.mood_tag ?? null);
+          setCognitiveLoad(entry.cognitive_load ?? null);
+          setSubjectiveEnergy(entry.subjective_energy ?? null);
+          setExistingAvgRtMs(entry.avg_rt_ms ?? null);
+          setExistingRtTrials(entry.rt_trials ?? null);
           setLoadedExisting(true);
         } else {
           setAlcoholAmount("");
@@ -51,6 +58,12 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
           setMorningFeeling("normal");
           setIsWorkDay(null);
           setFollowedSupplements(true);
+          setFocus(null);
+          setMoodTag(null);
+          setCognitiveLoad(null);
+          setSubjectiveEnergy(null);
+          setExistingAvgRtMs(null);
+          setExistingRtTrials(null);
         }
       })
       .catch(() => {});
@@ -83,6 +96,12 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
       is_work_day: isWorkDay,
+      focus,
+      mood_tag: moodTag,
+      cognitive_load: cognitiveLoad,
+      subjective_energy: subjectiveEnergy,
+      avg_rt_ms: existingAvgRtMs,
+      rt_trials: existingRtTrials,
     };
     try {
       await submitJournalEntry(entry);
@@ -136,6 +155,52 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
             placeholder="Optional notes…"
           />
         </label>
+
+        <fieldset className="journal-field">
+          <legend className="stat-label">Mood</legend>
+          <div className="workday-buttons">
+            {MOOD_TAGS.map((t) => (
+              <button
+                key={t}
+                type="button"
+                className={`chip ${moodTag === t ? "chip-active" : ""}`}
+                onClick={() => setMoodTag(moodTag === t ? null : t)}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+
+        <div className="cognition-sliders">
+          <div className="cognition-slider-row">
+            <span className="stat-label">Focus</span>
+            <input
+              type="range" min="0" max="10" step="1"
+              value={focus ?? 5}
+              onChange={(e) => setFocus(Number(e.target.value))}
+            />
+            <span className="cognition-slider-val">{focus ?? "—"}/10</span>
+          </div>
+          <div className="cognition-slider-row">
+            <span className="stat-label">Cognitive load</span>
+            <input
+              type="range" min="0" max="10" step="1"
+              value={cognitiveLoad ?? 5}
+              onChange={(e) => setCognitiveLoad(Number(e.target.value))}
+            />
+            <span className="cognition-slider-val">{cognitiveLoad ?? "—"}/10</span>
+          </div>
+          <div className="cognition-slider-row">
+            <span className="stat-label">Subjective energy</span>
+            <input
+              type="range" min="0" max="10" step="1"
+              value={subjectiveEnergy ?? 5}
+              onChange={(e) => setSubjectiveEnergy(Number(e.target.value))}
+            />
+            <span className="cognition-slider-val">{subjectiveEnergy ?? "—"}/10</span>
+          </div>
+        </div>
 
         {customResponses.map((r) => (
           <label key={r.question_id} className="journal-field">

@@ -1,22 +1,31 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { fetchJournalEntry, submitJournalEntry } from "../api";
-import type { JournalEntry, MorningFeeling } from "../types";
+import type { JournalEntry, MoodTag, MorningFeeling } from "../types";
 
 interface Props {
   date: string;
 }
 
 const FEELINGS: MorningFeeling[] = ["sleepy", "energetic", "normal", "sick"];
+const MOOD_TAGS: MoodTag[] = ["great", "good", "flat", "low", "irritable", "anxious"];
+const RT_TRIALS = 3;
+type RtPhase = "idle" | "waiting" | "ready" | "done";
 
-// Today-only journal: work/off chip toggle + "how did you feel after
-// waking up?" radios. Both fields auto-save; the full journal entry is
-// round-tripped on each save so preserved-through fields (supplements,
-// alcohol, notes) stay intact.
 export function TodayJournal({ date }: Props) {
   const [entry, setEntry] = useState<JournalEntry | null>(null);
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
+  const [focus, setFocus] = useState<number | null>(null);
+  const [moodTag, setMoodTag] = useState<MoodTag | null>(null);
+  const [cognitiveLoad, setCognitiveLoad] = useState<number | null>(null);
+  const [subjectiveEnergy, setSubjectiveEnergy] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const [rtPhase, setRtPhase] = useState<RtPhase>("idle");
+  const [rtTrials, setRtTrials] = useState<number[]>([]);
+  const [rtTooEarly, setRtTooEarly] = useState(false);
+  const rtStartRef = useRef<number>(0);
+  const rtTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     fetchJournalEntry(date)
@@ -24,12 +33,24 @@ export function TodayJournal({ date }: Props) {
         setEntry(e);
         setIsWorkDay(e?.is_work_day ?? null);
         setMorningFeeling(e?.morning_feeling ?? "normal");
+        setFocus(e?.focus ?? null);
+        setMoodTag(e?.mood_tag ?? null);
+        setCognitiveLoad(e?.cognitive_load ?? null);
+        setSubjectiveEnergy(e?.subjective_energy ?? null);
+        if (e?.rt_trials && e.rt_trials > 0) setRtPhase("done");
       })
       .catch(() => {
         setEntry(null);
         setIsWorkDay(null);
         setMorningFeeling("normal");
+        setFocus(null);
+        setMoodTag(null);
+        setCognitiveLoad(null);
+        setSubjectiveEnergy(null);
       });
+    return () => {
+      if (rtTimerRef.current) clearTimeout(rtTimerRef.current);
+    };
   }, [date]);
 
   async function save(patch: Partial<JournalEntry>) {
@@ -43,6 +64,12 @@ export function TodayJournal({ date }: Props) {
       morning_feeling: "normal",
       notes: null,
       is_work_day: null,
+      focus: null,
+      mood_tag: null,
+      cognitive_load: null,
+      subjective_energy: null,
+      avg_rt_ms: null,
+      rt_trials: null,
     };
     const next: JournalEntry = { ...base, date, ...patch };
     try {
@@ -62,6 +89,59 @@ export function TodayJournal({ date }: Props) {
     setMorningFeeling(next);
     await save({ morning_feeling: next });
   }
+
+  async function setMood(next: MoodTag) {
+    setMoodTag(next);
+    await save({ mood_tag: next });
+  }
+
+  function scheduleRtReady() {
+    const delay = 1500 + Math.random() * 2500;
+    rtTimerRef.current = setTimeout(() => {
+      rtStartRef.current = Date.now();
+      setRtPhase("ready");
+    }, delay);
+  }
+
+  function startRt() {
+    setRtTooEarly(false);
+    setRtTrials([]);
+    setRtPhase("waiting");
+    scheduleRtReady();
+  }
+
+  async function handleRtClick() {
+    if (rtPhase === "waiting") {
+      if (rtTimerRef.current) clearTimeout(rtTimerRef.current);
+      setRtPhase("idle");
+      setRtTooEarly(true);
+      return;
+    }
+    if (rtPhase !== "ready") return;
+    const elapsed = Date.now() - rtStartRef.current;
+    const next = [...rtTrials, elapsed];
+    setRtTrials(next);
+    if (next.length < RT_TRIALS) {
+      setRtPhase("waiting");
+      scheduleRtReady();
+    } else {
+      const avg = Math.round(next.reduce((a, b) => a + b, 0) / next.length);
+      setRtPhase("done");
+      await save({ avg_rt_ms: avg, rt_trials: next.length });
+    }
+  }
+
+  function resetRt() {
+    if (rtTimerRef.current) clearTimeout(rtTimerRef.current);
+    setRtPhase("idle");
+    setRtTrials([]);
+    setRtTooEarly(false);
+  }
+
+  const savedAvgRt = entry?.avg_rt_ms ? Math.round(entry.avg_rt_ms) : null;
+  const localAvgRt = rtTrials.length === RT_TRIALS
+    ? Math.round(rtTrials.reduce((a, b) => a + b, 0) / rtTrials.length)
+    : null;
 
   return (
     <>
@@ -101,6 +181,121 @@ export function TodayJournal({ date }: Props) {
             {f}
           </label>
         ))}
+      </fieldset>
+
+      <fieldset className="journal-field">
+        <legend className="stat-label">Mood</legend>
+        <div className="workday-buttons">
+          {MOOD_TAGS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className={`chip ${moodTag === t ? "chip-active" : ""}`}
+              onClick={() => setMood(t)}
+              disabled={saving}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
+      <div className="cognition-sliders">
+        <div className="cognition-slider-row">
+          <span className="stat-label">Focus</span>
+          <input
+            type="range" min="0" max="10" step="1"
+            value={focus ?? 5}
+            onChange={(e) => setFocus(Number(e.target.value))}
+            onMouseUp={(e) => {
+              const v = Number((e.target as HTMLInputElement).value);
+              setFocus(v);
+              save({ focus: v });
+            }}
+            onTouchEnd={(e) => {
+              const v = Number((e.currentTarget as HTMLInputElement).value);
+              setFocus(v);
+              save({ focus: v });
+            }}
+            disabled={saving}
+          />
+          <span className="cognition-slider-val">{focus ?? "—"}/10</span>
+        </div>
+        <div className="cognition-slider-row">
+          <span className="stat-label">Cognitive load</span>
+          <input
+            type="range" min="0" max="10" step="1"
+            value={cognitiveLoad ?? 5}
+            onChange={(e) => setCognitiveLoad(Number(e.target.value))}
+            onMouseUp={(e) => {
+              const v = Number((e.target as HTMLInputElement).value);
+              setCognitiveLoad(v);
+              save({ cognitive_load: v });
+            }}
+            onTouchEnd={(e) => {
+              const v = Number((e.currentTarget as HTMLInputElement).value);
+              setCognitiveLoad(v);
+              save({ cognitive_load: v });
+            }}
+            disabled={saving}
+          />
+          <span className="cognition-slider-val">{cognitiveLoad ?? "—"}/10</span>
+        </div>
+        <div className="cognition-slider-row">
+          <span className="stat-label">Subjective energy</span>
+          <input
+            type="range" min="0" max="10" step="1"
+            value={subjectiveEnergy ?? 5}
+            onChange={(e) => setSubjectiveEnergy(Number(e.target.value))}
+            onMouseUp={(e) => {
+              const v = Number((e.target as HTMLInputElement).value);
+              setSubjectiveEnergy(v);
+              save({ subjective_energy: v });
+            }}
+            onTouchEnd={(e) => {
+              const v = Number((e.currentTarget as HTMLInputElement).value);
+              setSubjectiveEnergy(v);
+              save({ subjective_energy: v });
+            }}
+            disabled={saving}
+          />
+          <span className="cognition-slider-val">{subjectiveEnergy ?? "—"}/10</span>
+        </div>
+      </div>
+
+      <fieldset className="journal-field">
+        <legend className="stat-label">
+          Reaction time <span className="stat-sublabel">optional · {RT_TRIALS} trials</span>
+        </legend>
+        <div className="rt-widget">
+          {rtPhase === "idle" && (
+            <button type="button" className="chip" onClick={startRt}>
+              Start test
+            </button>
+          )}
+          {(rtPhase === "waiting" || rtPhase === "ready") && (
+            <button
+              type="button"
+              className={`rt-target ${rtPhase === "ready" ? "rt-ready" : "rt-waiting"}`}
+              onClick={handleRtClick}
+            >
+              {rtPhase === "ready" ? "Click!" : "Wait…"}
+            </button>
+          )}
+          {rtPhase === "done" && (
+            <div className="rt-result">
+              <span className="rt-avg">{(localAvgRt ?? savedAvgRt ?? 0)} ms avg</span>
+              <button type="button" className="chip" onClick={resetRt}>Redo</button>
+            </div>
+          )}
+          {rtTooEarly && <p className="rt-feedback rt-too-early">Too early — wait for green!</p>}
+          {rtTrials.length > 0 && rtPhase !== "done" && (
+            <p className="rt-feedback">{rtTrials.length}/{RT_TRIALS} trials</p>
+          )}
+          {rtPhase !== "idle" && rtPhase !== "done" && (
+            <button type="button" className="rt-cancel" onClick={resetRt}>Cancel</button>
+          )}
+        </div>
       </fieldset>
     </>
   );

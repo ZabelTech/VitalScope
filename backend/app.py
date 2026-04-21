@@ -259,10 +259,18 @@ def ensure_journal_table() -> None:
         )
         """
     )
-    # Idempotent ALTER for DBs that predate is_work_day.
     existing = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
-    if "is_work_day" not in existing:
-        conn.execute("ALTER TABLE journal_entries ADD COLUMN is_work_day INTEGER")
+    for col, typedef in [
+        ("is_work_day", "INTEGER"),
+        ("focus", "INTEGER"),
+        ("mood_tag", "TEXT"),
+        ("cognitive_load", "INTEGER"),
+        ("subjective_energy", "INTEGER"),
+        ("avg_rt_ms", "REAL"),
+        ("rt_trials", "INTEGER"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE journal_entries ADD COLUMN {col} {typedef}")
     conn.commit()
     conn.close()
 
@@ -1058,6 +1066,12 @@ class JournalEntry(BaseModel):
     morning_feeling: Literal["sleepy", "energetic", "normal", "sick"]
     notes: Optional[str] = None
     is_work_day: Optional[bool] = None
+    focus: Optional[int] = None
+    mood_tag: Optional[Literal["great", "good", "flat", "low", "irritable", "anxious"]] = None
+    cognitive_load: Optional[int] = None
+    subjective_energy: Optional[int] = None
+    avg_rt_ms: Optional[float] = None
+    rt_trials: Optional[int] = None
 
 
 @app.post("/api/journal")
@@ -1067,8 +1081,9 @@ def upsert_journal(entry: JournalEntry):
         """
         INSERT INTO journal_entries
             (date, created_at, followed_supplements, drank_alcohol,
-             alcohol_amount, morning_feeling, notes, is_work_day)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             alcohol_amount, morning_feeling, notes, is_work_day,
+             focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms, rt_trials)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date) DO UPDATE SET
             created_at = excluded.created_at,
             followed_supplements = excluded.followed_supplements,
@@ -1076,7 +1091,13 @@ def upsert_journal(entry: JournalEntry):
             alcohol_amount = excluded.alcohol_amount,
             morning_feeling = excluded.morning_feeling,
             notes = excluded.notes,
-            is_work_day = excluded.is_work_day
+            is_work_day = excluded.is_work_day,
+            focus = excluded.focus,
+            mood_tag = excluded.mood_tag,
+            cognitive_load = excluded.cognitive_load,
+            subjective_energy = excluded.subjective_energy,
+            avg_rt_ms = excluded.avg_rt_ms,
+            rt_trials = excluded.rt_trials
         """,
         (
             entry.date,
@@ -1087,6 +1108,12 @@ def upsert_journal(entry: JournalEntry):
             entry.morning_feeling,
             entry.notes,
             None if entry.is_work_day is None else int(entry.is_work_day),
+            entry.focus,
+            entry.mood_tag,
+            entry.cognitive_load,
+            entry.subjective_energy,
+            entry.avg_rt_ms,
+            entry.rt_trials,
         ),
     )
     conn.commit()
@@ -1104,6 +1131,12 @@ def _row_to_journal(row: sqlite3.Row) -> dict:
         "morning_feeling": row["morning_feeling"],
         "notes": row["notes"],
         "is_work_day": None if row["is_work_day"] is None else bool(row["is_work_day"]),
+        "focus": row["focus"],
+        "mood_tag": row["mood_tag"],
+        "cognitive_load": row["cognitive_load"],
+        "subjective_energy": row["subjective_energy"],
+        "avg_rt_ms": row["avg_rt_ms"],
+        "rt_trials": row["rt_trials"],
     }
 
 
@@ -1170,6 +1203,23 @@ def delete_journal_question(q_id: int):
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Question not found")
     return {"status": "ok"}
+
+
+@app.get("/api/journal/cognition")
+def journal_cognition(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT date, focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms, rt_trials
+        FROM journal_entries
+        WHERE date >= ? AND date <= ?
+        ORDER BY date
+        """,
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/journal/{entry_date}")
@@ -3018,6 +3068,18 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
             "flagged_results": flagged,
         }
 
+    cognition = rows_to_list(conn.execute(
+        """
+        SELECT date, focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms
+        FROM journal_entries
+        WHERE date BETWEEN ? AND ?
+          AND (focus IS NOT NULL OR mood_tag IS NOT NULL
+               OR cognitive_load IS NOT NULL OR subjective_energy IS NOT NULL)
+        ORDER BY date
+        """,
+        (start_date, end_date),
+    ).fetchall())
+
     return {
         "analysis_date": end_date,
         "window_days": window_days,
@@ -3030,6 +3092,7 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
         "weight": weight,
         "recent_workouts": workouts,
         "bloodwork": bloodwork,
+        "journal_cognition": cognition,
     }
 
 

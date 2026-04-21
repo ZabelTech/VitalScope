@@ -115,6 +115,7 @@ export interface StatValues {
 }
 
 export type MorningFeeling = "sleepy" | "energetic" | "normal" | "sick";
+export type MoodTag = "great" | "good" | "flat" | "low" | "irritable" | "anxious";
 
 export interface JournalEntry {
   date: string;
@@ -125,6 +126,22 @@ export interface JournalEntry {
   morning_feeling: MorningFeeling;
   notes: string | null;
   is_work_day: boolean | null;
+  focus: number | null;
+  mood_tag: MoodTag | null;
+  cognitive_load: number | null;
+  subjective_energy: number | null;
+  avg_rt_ms: number | null;
+  rt_trials: number | null;
+}
+
+export interface CognitionDaily {
+  date: string;
+  focus: number | null;
+  mood_tag: MoodTag | null;
+  cognitive_load: number | null;
+  subjective_energy: number | null;
+  avg_rt_ms: number | null;
+  rt_trials: number | null;
 }
 
 export type NutrientCategory = "macro" | "mineral" | "vitamin" | "bioactive";
