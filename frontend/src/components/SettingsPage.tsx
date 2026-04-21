@@ -42,12 +42,66 @@ export function SettingsPage() {
       </div>
       <AiConfigCard demo={runtime?.demo ?? false} />
       <JournalConfigCard />
+      <ExportCard />
       {status === "loading" && <p>Loading…</p>}
       {status === "error" && <p className="journal-err">Failed to load plugins</p>}
       {plugins.map((p) => (
         <PluginCard key={p.name} plugin={p} demo={runtime?.demo ?? false} onChanged={reload} />
       ))}
     </div>
+  );
+}
+
+const EXPORT_DOMAINS = [
+  "heart-rate", "hrv", "sleep", "stress", "body-battery",
+  "steps", "weight", "workouts", "activities", "meals",
+  "water", "supplements", "journal", "bloodwork", "genome-variants",
+] as const;
+
+function ExportCard() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <section className="card" style={{ padding: "1rem", margin: "1rem 0" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
+        <div>
+          <h3 style={{ margin: "0 0 0.2rem" }}>Export Your Data</h3>
+          <p style={{ margin: 0, opacity: 0.7, fontSize: "0.9em" }}>
+            Download your health data in standard formats. No account deletion required.
+          </p>
+        </div>
+        <a href="/api/export/archive.zip" download style={{ flexShrink: 0 }}>
+          <button type="button">Download everything</button>
+        </a>
+      </div>
+
+      <div style={{ marginTop: "0.75rem" }}>
+        <button
+          type="button"
+          onClick={() => setExpanded((e) => !e)}
+          style={{ background: "none", border: "none", color: "inherit", cursor: "pointer", padding: 0, fontSize: "0.85em", opacity: 0.7, display: "flex", alignItems: "center", gap: "0.3rem" }}
+        >
+          <span>{expanded ? "▾" : "▸"}</span>
+          <span>Individual domains</span>
+        </button>
+
+        {expanded && (
+          <div style={{ marginTop: "0.5rem", display: "flex", flexDirection: "column", gap: "0.3rem" }}>
+            {EXPORT_DOMAINS.map((domain) => (
+              <div key={domain} style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                <span style={{ flex: 1, fontSize: "0.9em", fontFamily: "monospace" }}>{domain}</span>
+                <a href={`/api/export/${domain}.csv`} download style={{ fontSize: "0.8em" }}>
+                  <button type="button" style={{ padding: "0.2rem 0.5rem", fontSize: "0.8em" }}>CSV</button>
+                </a>
+                <a href={`/api/export/${domain}.json`} download style={{ fontSize: "0.8em" }}>
+                  <button type="button" style={{ padding: "0.2rem 0.5rem", fontSize: "0.8em" }}>JSON</button>
+                </a>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 

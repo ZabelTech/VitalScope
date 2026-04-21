@@ -2,8 +2,10 @@
 
 import asyncio
 import base64
+import csv as _csv
 import gzip
 import hmac
+import io
 import json
 import logging
 import math
@@ -13,6 +15,7 @@ import secrets
 import sqlite3
 import statistics
 import uuid as _uuid
+import zipfile
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal, Optional
@@ -22,7 +25,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from backend.plugins import REGISTRY as PLUGIN_REGISTRY, discover as discover_plugins
@@ -3834,6 +3837,205 @@ def get_plugin_runs(name: str, limit: int = Query(20, ge=1, le=200)):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# --- Export ---
+
+_EXPORT_SCHEMA_VERSION = "1"
+
+_DAILY_EXPORT_DOMAINS: dict[str, str] = {
+    "heart-rate": "v_heart_rate_daily",
+    "hrv": "v_hrv_daily",
+    "sleep": "v_sleep_daily",
+    "stress": "v_stress_daily",
+    "body-battery": "v_body_battery_daily",
+    "steps": "v_steps_daily",
+    "weight": "v_weight_daily",
+    "activities": "v_activities",
+    "water": "water_intake",
+    "journal": "journal_entries",
+}
+
+ALL_EXPORT_DOMAINS = list(_DAILY_EXPORT_DOMAINS) + [
+    "workouts", "meals", "supplements", "bloodwork", "genome-variants",
+]
+
+
+def _all_time_range(start: Optional[str], end: Optional[str]) -> tuple[str, str]:
+    return start or "1970-01-01", end or date.today().isoformat()
+
+
+def _export_rows(domain: str, start: str, end: str) -> list[dict] | None:
+    conn = get_db()
+    try:
+        if domain in _DAILY_EXPORT_DOMAINS:
+            rows = conn.execute(
+                f"SELECT * FROM {_DAILY_EXPORT_DOMAINS[domain]}"
+                " WHERE date >= ? AND date <= ? ORDER BY date",
+                (start, end),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        if domain == "workouts":
+            rows = conn.execute(
+                """SELECT w.id, w.date, w.end_date, w.name, w.duration_sec, w.notes,
+                          ws.exercise, ws.set_order, ws.weight_kg, ws.reps,
+                          ws.seconds, ws.distance_m, ws.rpe
+                   FROM workouts w
+                   LEFT JOIN workout_sets ws
+                          ON ws.workout_id = w.id AND ws.set_type = 'working'
+                   WHERE w.date >= ? AND w.date <= ?
+                   ORDER BY w.date, w.id, ws.set_order""",
+                (start, end),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        if domain == "meals":
+            rows = conn.execute(
+                """SELECT m.id, m.date, m.time, m.name, m.notes,
+                          mn.nutrient_key, mn.amount
+                   FROM meals m
+                   LEFT JOIN meal_nutrients mn ON mn.meal_id = m.id
+                   WHERE m.date >= ? AND m.date <= ?
+                   ORDER BY m.date, m.time, m.id, mn.nutrient_key""",
+                (start, end),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        if domain == "supplements":
+            rows = conn.execute(
+                """SELECT i.date, i.supplement_id, s.name, s.dosage,
+                          s.time_of_day, i.taken
+                   FROM journal_supplement_intake i
+                   JOIN supplements s ON s.id = i.supplement_id
+                   WHERE i.date >= ? AND i.date <= ?
+                   ORDER BY i.date, s.sort_order, i.supplement_id""",
+                (start, end),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        if domain == "bloodwork":
+            rows = conn.execute(
+                """SELECT p.id AS panel_id, p.date, p.lab_name, p.source,
+                          p.confidence, p.notes AS panel_notes,
+                          r.analyte, r.value, r.value_text, r.unit,
+                          r.reference_low, r.reference_high,
+                          r.reference_text, r.flag
+                   FROM bloodwork_panels p
+                   LEFT JOIN bloodwork_results r ON r.panel_id = p.id
+                   WHERE p.date >= ? AND p.date <= ?
+                   ORDER BY p.date, p.id, r.sort_order""",
+                (start, end),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        if domain == "genome-variants":
+            rows = conn.execute(
+                """SELECT id, date, variant_count, rs_count,
+                          chromosomes, notes, created_at
+                   FROM genome_uploads
+                   WHERE date >= ? AND date <= ?
+                   ORDER BY date""",
+                (start, end),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        return None
+    finally:
+        conn.close()
+
+
+def _rows_to_csv_bytes(rows: list[dict]) -> bytes:
+    if not rows:
+        return b""
+    buf = io.StringIO()
+    writer = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue().encode()
+
+
+def _iter_csv(rows: list[dict]):
+    if not rows:
+        yield b""
+        return
+    buf = io.StringIO()
+    writer = _csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+    writer.writeheader()
+    yield buf.getvalue().encode()
+    buf.seek(0)
+    buf.truncate(0)
+    for row in rows:
+        writer.writerow(row)
+        yield buf.getvalue().encode()
+        buf.seek(0)
+        buf.truncate(0)
+
+
+@app.get("/api/export/archive.zip")
+def export_archive(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = _all_time_range(start, end)
+    buf = io.BytesIO()
+    manifest: dict[str, Any] = {
+        "schema_version": _EXPORT_SCHEMA_VERSION,
+        "exported_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "start": s,
+        "end": e,
+        "files": [],
+    }
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for domain in ALL_EXPORT_DOMAINS:
+            rows = _export_rows(domain, s, e)
+            if rows is not None:
+                fname = f"{domain}.csv"
+                zf.writestr(fname, _rows_to_csv_bytes(rows))
+                manifest["files"].append({"domain": domain, "file": fname, "rows": len(rows)})
+        conn = get_db()
+        supp_rows = conn.execute(
+            "SELECT id, name, dosage, time_of_day, sort_order FROM supplements ORDER BY sort_order, id"
+        ).fetchall()
+        conn.close()
+        zf.writestr("supplement-definitions.csv", _rows_to_csv_bytes([dict(r) for r in supp_rows]))
+        manifest["files"].append({"domain": "supplement-definitions", "file": "supplement-definitions.csv", "rows": len(supp_rows)})
+        if DB_PATH.exists():
+            zf.write(str(DB_PATH), "vitalscope.db")
+            manifest["files"].append({"domain": "sqlite", "file": "vitalscope.db"})
+        zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+    buf.seek(0)
+    filename = f"vitalscope-archive-{e}.zip"
+    return Response(
+        content=buf.read(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/export/{domain}.json")
+def export_domain_json(domain: str, start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    rows = _export_rows(domain, s, e)
+    if rows is None:
+        raise HTTPException(status_code=404, detail=f"unknown export domain '{domain}'")
+    filename = f"vitalscope-{domain}-{s}-{e}.json"
+    return Response(
+        content=json.dumps(rows, default=str).encode(),
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/export/{domain}.csv")
+def export_domain_csv(domain: str, start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    rows = _export_rows(domain, s, e)
+    if rows is None:
+        raise HTTPException(status_code=404, detail=f"unknown export domain '{domain}'")
+    filename = f"vitalscope-{domain}-{s}-{e}.csv"
+    return StreamingResponse(
+        _iter_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 # Serve the built frontend (SPA) when running as a single container in prod.
