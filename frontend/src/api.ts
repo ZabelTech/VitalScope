@@ -7,6 +7,7 @@ import type {
   BodyCompositionEstimate,
   BodyCompositionEstimateInput,
   FormCheckAnalysisResult,
+  FormCheckHistoryItem,
   GenomeParseResult,
   GenomeUpload,
   GenomeUploadInput,
@@ -436,6 +437,12 @@ export async function deleteBodyCompositionEstimate(id: number): Promise<void> {
     method: "DELETE",
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchFormCheckHistory(): Promise<FormCheckHistoryItem[]> {
+  const res = await apiFetch("/api/form-checks/history");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // --- Bloodwork panels ---
