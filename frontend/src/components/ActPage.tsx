@@ -1,6 +1,7 @@
 import { BloodworkSection } from "./BloodworkSection";
 import { GenomeSection } from "./GenomeSection";
 import { IntakeLog } from "./IntakeLog";
+import { MorningBriefing } from "./MorningBriefing";
 import { NutritionPage } from "./NutritionPage";
 import { OodaPage } from "./OodaPage";
 import { TodayDashboard } from "./TodayDashboard";
@@ -9,6 +10,7 @@ export function ActPage() {
   return (
     <OodaPage
       sections={[
+        { id: "briefing", label: "Morning briefing", content: <MorningBriefing /> },
         { id: "today", label: "Today", content: <TodayDashboard /> },
         { id: "log", label: "Supplements & alcohol", content: <IntakeLog /> },
         { id: "intake", label: "Meals & water", content: <NutritionPage /> },
