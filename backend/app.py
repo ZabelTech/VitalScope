@@ -373,6 +373,84 @@ NUTRIENT_SEED = [
 ]
 
 
+# CYP450 pharmacogenomics reference data.
+# Substrates are for context only; half_life_hours drives the caffeine clearance model.
+# Source: Flockhart DA Drug Interactions Table (Indiana University) + PharmGKB.
+CYP_PHARMACOGENOMICS: dict[str, dict] = {
+    "CYP1A2": {
+        "label": "CYP1A2",
+        "substrates": ["caffeine", "melatonin", "theophylline", "duloxetine"],
+        "phenotypes": {
+            "ultra_rapid": {
+                "half_life_hours": 2.5,
+                "label": "Ultra-rapid metaboliser",
+                "description": "Clears caffeine ~2x faster than average. High doses may feel weak.",
+            },
+            "extensive": {
+                "half_life_hours": 5.0,
+                "label": "Extensive (normal) metaboliser",
+                "description": "Population average. Standard caffeine sensitivity and clearance.",
+            },
+            "intermediate": {
+                "half_life_hours": 7.0,
+                "label": "Intermediate metaboliser",
+                "description": "Slower clearance. Afternoon caffeine more likely to disturb sleep.",
+            },
+            "poor": {
+                "half_life_hours": 10.0,
+                "label": "Poor (slow) metaboliser",
+                "description": "~2x longer clearance. Caffeine logged at noon may still be active at bedtime.",
+            },
+        },
+        "default_phenotype": "extensive",
+    },
+    "CYP2D6": {
+        "label": "CYP2D6",
+        "substrates": ["codeine", "tramadol", "metoprolol", "tamoxifen", "many antidepressants"],
+        "phenotypes": {
+            "ultra_rapid": {
+                "half_life_hours": None,
+                "label": "Ultra-rapid metaboliser",
+                "description": "Codeine converts rapidly to morphine — elevated adverse-effect risk. Antidepressant efficacy may be reduced.",
+            },
+            "extensive": {
+                "half_life_hours": None,
+                "label": "Extensive (normal) metaboliser",
+                "description": "Standard drug response and clearance.",
+            },
+            "intermediate": {
+                "half_life_hours": None,
+                "label": "Intermediate metaboliser",
+                "description": "Reduced enzyme activity. Monitor dose response carefully.",
+            },
+            "poor": {
+                "half_life_hours": None,
+                "label": "Poor metaboliser",
+                "description": "Codeine is non-functional as an analgesic. Antidepressants and beta-blockers may require dose adjustment.",
+            },
+        },
+        "default_phenotype": "extensive",
+    },
+    "CYP3A4": {
+        "label": "CYP3A4",
+        "substrates": ["testosterone", "statins", "ciclosporin", "midazolam", "many supplements and peptides"],
+        "phenotypes": {
+            "extensive": {
+                "half_life_hours": None,
+                "label": "Extensive (normal) metaboliser",
+                "description": "Standard clearance of CYP3A4 substrates.",
+            },
+            "poor": {
+                "half_life_hours": None,
+                "label": "Poor metaboliser",
+                "description": "Elevated substrate exposure. Consider spacing doses and starting lower.",
+            },
+        },
+        "default_phenotype": "extensive",
+    },
+}
+
+
 def ensure_nutrition_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -609,6 +687,32 @@ def ensure_daily_landing_tables() -> None:
         CREATE TABLE IF NOT EXISTS ai_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS caffeine_intake (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            date       TEXT NOT NULL,
+            time       TEXT,
+            mg         REAL NOT NULL,
+            source     TEXT,
+            notes      TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_caffeine_intake_date ON caffeine_intake(date)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cyp_phenotypes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            cyp        TEXT NOT NULL UNIQUE,
+            phenotype  TEXT NOT NULL,
+            source     TEXT NOT NULL DEFAULT 'manual',
+            notes      TEXT,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -3389,6 +3493,209 @@ def delete_genome_upload(genome_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# --- Pharmacogenomics (CYP450 × caffeine / supplements) ---
+
+
+def _compute_caffeine_curve(
+    intakes: list[dict],
+    half_life_h: float,
+    day_date: str,
+) -> list[dict]:
+    day_start = datetime.strptime(day_date, "%Y-%m-%d")
+    kel = math.log(2) / half_life_h
+    points = []
+    for h in range(5, 25):  # 05:00 → 24:00 (midnight)
+        t_point = day_start + timedelta(hours=h)
+        total_mg = 0.0
+        for intake in intakes:
+            t_str = (intake["time"] or "07:00")[:5]
+            intake_dt = datetime.strptime(f"{intake['date']}T{t_str}", "%Y-%m-%dT%H:%M")
+            hours_elapsed = (t_point - intake_dt).total_seconds() / 3600
+            if hours_elapsed < 0:
+                continue
+            total_mg += intake["mg"] * math.exp(-kel * hours_elapsed)
+        hour_label = h % 24
+        points.append({
+            "hours_since_midnight": hour_label,
+            "time": f"{hour_label:02d}:00",
+            "concentration_mg": round(max(0.0, total_mg), 1),
+        })
+    return points
+
+
+@app.get("/api/pharmacogenomics/profile")
+def get_pharmacogenomics_profile():
+    conn = get_db()
+    phenotype_rows = {
+        r["cyp"]: dict(r)
+        for r in conn.execute("SELECT * FROM cyp_phenotypes").fetchall()
+    }
+    has_genome = conn.execute("SELECT 1 FROM genome_uploads LIMIT 1").fetchone() is not None
+    conn.close()
+    cyps = []
+    for cyp, cyp_data in CYP_PHARMACOGENOMICS.items():
+        user_row = phenotype_rows.get(cyp)
+        phenotype = user_row["phenotype"] if user_row else cyp_data["default_phenotype"]
+        pheno_info = cyp_data["phenotypes"].get(
+            phenotype, cyp_data["phenotypes"][cyp_data["default_phenotype"]]
+        )
+        cyps.append({
+            "cyp": cyp,
+            "label": cyp_data["label"],
+            "substrates": cyp_data["substrates"],
+            "phenotype": phenotype,
+            "phenotype_source": user_row["source"] if user_row else "default",
+            "phenotype_id": user_row["id"] if user_row else None,
+            "phenotype_label": pheno_info["label"],
+            "description": pheno_info["description"],
+            "half_life_hours": pheno_info["half_life_hours"],
+            "is_default": user_row is None,
+            "all_phenotypes": [
+                {
+                    "key": k,
+                    "label": v["label"],
+                    "description": v["description"],
+                    "half_life_hours": v["half_life_hours"],
+                }
+                for k, v in cyp_data["phenotypes"].items()
+            ],
+        })
+    return {"has_genome": has_genome, "cyps": cyps}
+
+
+class CypPhenotypeIn(BaseModel):
+    cyp: str
+    phenotype: str
+    source: str = "manual"
+    notes: Optional[str] = None
+
+
+@app.post("/api/pharmacogenomics/phenotypes")
+def upsert_cyp_phenotype(body: CypPhenotypeIn):
+    if body.cyp not in CYP_PHARMACOGENOMICS:
+        raise HTTPException(status_code=422, detail=f"Unknown CYP: {body.cyp!r}")
+    valid_phenotypes = set(CYP_PHARMACOGENOMICS[body.cyp]["phenotypes"].keys())
+    if body.phenotype not in valid_phenotypes:
+        raise HTTPException(status_code=422, detail=f"Invalid phenotype {body.phenotype!r} for {body.cyp}")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO cyp_phenotypes (cyp, phenotype, source, notes, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(cyp) DO UPDATE SET
+            phenotype  = excluded.phenotype,
+            source     = excluded.source,
+            notes      = excluded.notes,
+            created_at = excluded.created_at
+        """,
+        (body.cyp, body.phenotype, body.source, body.notes, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM cyp_phenotypes WHERE cyp = ?", (body.cyp,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/api/pharmacogenomics/phenotypes/{cyp}")
+def delete_cyp_phenotype(cyp: str):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM cyp_phenotypes WHERE cyp = ?", (cyp,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="phenotype not found")
+    conn.execute("DELETE FROM cyp_phenotypes WHERE cyp = ?", (cyp,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+class CaffeineIntakeIn(BaseModel):
+    date: str
+    time: Optional[str] = None
+    mg: float
+    source: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/caffeine-intake")
+def list_caffeine_intake(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM caffeine_intake WHERE date >= ? AND date <= ? ORDER BY date DESC, time ASC, id DESC",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/caffeine-intake")
+def create_caffeine_intake(body: CaffeineIntakeIn):
+    if body.mg <= 0:
+        raise HTTPException(status_code=422, detail="mg must be positive")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO caffeine_intake (date, time, mg, source, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (body.date, body.time, body.mg, body.source, body.notes, now),
+    )
+    intake_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM caffeine_intake WHERE id = ?", (intake_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/api/caffeine-intake/{intake_id}")
+def delete_caffeine_intake(intake_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM caffeine_intake WHERE id = ?", (intake_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="intake not found")
+    conn.execute("DELETE FROM caffeine_intake WHERE id = ?", (intake_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/pharmacogenomics/concentration-curve")
+def get_concentration_curve(date: Optional[str] = None):
+    target_date = date or datetime.utcnow().date().isoformat()
+    prev_date = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    conn = get_db()
+    pheno_row = conn.execute(
+        "SELECT phenotype FROM cyp_phenotypes WHERE cyp = 'CYP1A2'"
+    ).fetchone()
+    phenotype = pheno_row["phenotype"] if pheno_row else "extensive"
+    intakes = [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM caffeine_intake WHERE date IN (?, ?) ORDER BY date, time",
+            (prev_date, target_date),
+        ).fetchall()
+    ]
+    conn.close()
+    cyp1a2 = CYP_PHARMACOGENOMICS["CYP1A2"]
+    half_life = cyp1a2["phenotypes"][phenotype]["half_life_hours"]
+    baseline_hl = cyp1a2["phenotypes"]["extensive"]["half_life_hours"]
+    curve = _compute_caffeine_curve(intakes, half_life, target_date)
+    baseline = (
+        _compute_caffeine_curve(intakes, baseline_hl, target_date)
+        if phenotype != "extensive"
+        else None
+    )
+    return {
+        "date": target_date,
+        "cyp1a2_phenotype": phenotype,
+        "half_life_hours": half_life,
+        "is_default": pheno_row is None,
+        "curve": curve,
+        "baseline_curve": baseline,
+        "intakes": [i for i in intakes if i["date"] == target_date],
+    }
 
 
 # --- Body composition estimates (CRUD) ---
