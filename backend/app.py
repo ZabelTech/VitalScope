@@ -606,6 +606,25 @@ def ensure_daily_landing_tables() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_uploads_date ON genome_uploads(date)")
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS genome_variants (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            upload_id      INTEGER NOT NULL,
+            rs_id          TEXT NOT NULL,
+            gene           TEXT,
+            variant_name   TEXT,
+            domain         TEXT,
+            genotype       TEXT NOT NULL,
+            zygosity       TEXT,
+            impact_label   TEXT,
+            interpretation TEXT,
+            FOREIGN KEY (upload_id) REFERENCES genome_uploads(id) ON DELETE CASCADE,
+            UNIQUE(upload_id, rs_id)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_variants_upload ON genome_variants(upload_id)")
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS ai_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -3244,7 +3263,33 @@ def _chrom_sort_key(c: str) -> tuple:
     return (0, int(stripped), "") if stripped.isdigit() else (1, 0, stripped)
 
 
+_ALLELE_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
+
+
+def _normalize_vcf_gt(gt: str, vcf_ref: str, vcf_alt: str, reg_ref: str, reg_alt: str) -> str:
+    # Handles both direct-orientation and complement-strand VCF files by flipping 0↔1 when REF/ALT are swapped vs the registry
+    vr, va = vcf_ref.upper(), vcf_alt.upper()
+    rr, ra = reg_ref.upper(), reg_alt.upper()
+    for test_ref, test_alt in [(vr, va), (vr.translate(_ALLELE_COMPLEMENT), va.translate(_ALLELE_COMPLEMENT))]:
+        if test_ref == rr and test_alt == ra:
+            return gt
+        if test_ref == ra and test_alt == rr:
+            return gt.replace("0", "X").replace("1", "0").replace("X", "1")
+    return gt
+
+
+def _load_variant_registry() -> dict:
+    registry_path = Path(__file__).parent / "variant_registry.json"
+    try:
+        with open(registry_path) as f:
+            entries = json.load(f)
+        return {e["rs_id"]: e for e in entries}
+    except Exception:
+        return {}
+
+
 def _parse_vcf(path: Path) -> dict:
+    registry = _load_variant_registry()
     with open(path, "rb") as _fcheck:
         is_gz = _fcheck.read(2) == b"\x1f\x8b"
     open_fn = (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace")) if is_gz else (lambda p: open(p, "rt", encoding="utf-8", errors="replace"))
@@ -3252,6 +3297,7 @@ def _parse_vcf(path: Path) -> dict:
     rs_count = 0
     chromosomes: set[str] = set()
     header_found = False
+    found_variants: dict[str, dict] = {}
     with open_fn(path) as fh:
         for line in fh:
             if line.startswith("##"):
@@ -3259,7 +3305,7 @@ def _parse_vcf(path: Path) -> dict:
             if line.startswith("#CHROM"):
                 header_found = True
                 continue
-            parts = line.split("\t", 3)
+            parts = line.split("\t", 9)
             if len(parts) < 3:
                 continue
             variant_count += 1
@@ -3269,12 +3315,43 @@ def _parse_vcf(path: Path) -> dict:
             rs_id = parts[2].strip()
             if rs_id and rs_id != ".":
                 rs_count += 1
+                if rs_id in registry and rs_id not in found_variants:
+                    entry = registry[rs_id]
+                    vcf_ref = parts[3].strip() if len(parts) > 3 else ""
+                    vcf_alt = parts[4].strip() if len(parts) > 4 else ""
+                    gt = None
+                    if len(parts) > 9:
+                        fmt_str = parts[8].strip()
+                        sample_str = parts[9].strip()
+                        fmt_fields = fmt_str.split(":")
+                        sample_fields = sample_str.split(":")
+                        gt_idx = fmt_fields.index("GT") if "GT" in fmt_fields else -1
+                        if gt_idx >= 0 and gt_idx < len(sample_fields):
+                            raw = sample_fields[gt_idx].replace("|", "/")
+                            if raw == "1/0":
+                                raw = "0/1"
+                            gt = raw
+                    if gt and "." not in gt and entry.get("ref") and entry.get("alt"):
+                        gt = _normalize_vcf_gt(gt, vcf_ref, vcf_alt, entry["ref"], entry["alt"])
+                    if gt and "." not in gt and gt in entry.get("genotypes", {}):
+                        ginfo = entry["genotypes"][gt]
+                        found_variants[rs_id] = {
+                            "rs_id": rs_id,
+                            "gene": entry.get("gene", ""),
+                            "variant_name": entry.get("variant_name", ""),
+                            "domain": entry.get("domain", ""),
+                            "genotype": gt,
+                            "zygosity": ginfo.get("zygosity", ""),
+                            "impact_label": ginfo.get("label", ""),
+                            "interpretation": ginfo.get("interpretation", ""),
+                        }
     if not header_found and variant_count == 0:
         raise ValueError("not a valid VCF file")
     return {
         "variant_count": variant_count,
         "rs_count": rs_count,
         "chromosomes": sorted(chromosomes, key=_chrom_sort_key),
+        "variants": list(found_variants.values()),
     }
 
 
@@ -3289,6 +3366,7 @@ class GenomeUploadIn(BaseModel):
     rs_count: int = 0
     chromosomes: list[str] = []
     notes: Optional[str] = None
+    variants: list[dict] = []
 
 
 def _row_to_genome_upload(row: sqlite3.Row) -> dict:
@@ -3347,6 +3425,17 @@ def create_genome_upload(body: GenomeUploadIn):
             "UPDATE uploads SET genome_upload_id = ? WHERE id = ? AND kind = 'genome'",
             (genome_id, body.source_upload_id),
         )
+    for v in body.variants:
+        conn.execute(
+            """INSERT OR IGNORE INTO genome_variants
+               (upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                genome_id, v.get("rs_id", ""), v.get("gene", ""), v.get("variant_name", ""),
+                v.get("domain", ""), v.get("genotype", ""), v.get("zygosity", ""),
+                v.get("impact_label", ""), v.get("interpretation", ""),
+            ),
+        )
     conn.commit()
     row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
     conn.close()
@@ -3389,6 +3478,43 @@ def delete_genome_upload(genome_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+_DOMAIN_ORDER = ["performance", "nutrition", "longevity", "pharmacogenomics", "recovery"]
+
+
+@app.get("/api/genome/variants/{upload_id}")
+def get_genome_variants(upload_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM genome_uploads WHERE id = ?", (upload_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    rows = conn.execute(
+        """SELECT rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation
+           FROM genome_variants WHERE upload_id = ? ORDER BY domain, gene, rs_id""",
+        (upload_id,),
+    ).fetchall()
+    conn.close()
+    grouped: dict = {}
+    for row in rows:
+        domain = row["domain"] or "other"
+        grouped.setdefault(domain, []).append({
+            "rs_id": row["rs_id"],
+            "gene": row["gene"],
+            "variant_name": row["variant_name"],
+            "domain": domain,
+            "genotype": row["genotype"],
+            "zygosity": row["zygosity"],
+            "impact_label": row["impact_label"],
+            "interpretation": row["interpretation"],
+        })
+    ordered: dict = {}
+    for d in _DOMAIN_ORDER:
+        if d in grouped:
+            ordered[d] = grouped.pop(d)
+    ordered.update(grouped)
+    return ordered
 
 
 # --- Body composition estimates (CRUD) ---

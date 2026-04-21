@@ -10,6 +10,7 @@ import type {
   GenomeParseResult,
   GenomeUpload,
   GenomeUploadInput,
+  GenomeVariant,
   JournalEntry,
   JournalQuestion,
   JournalQuestionResponse,
@@ -508,6 +509,12 @@ export async function listGenomeUploads(start: string, end: string): Promise<Gen
 export async function deleteGenomeUpload(id: number): Promise<void> {
   const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchGenomeVariants(upload_id: number): Promise<Record<string, GenomeVariant[]>> {
+  const res = await apiFetch(`/api/genome/variants/${upload_id}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // --- Orient AI analysis ---
