@@ -437,6 +437,30 @@ def ensure_nutrition_tables() -> None:
 ensure_nutrition_tables()
 
 
+_VARIANT_REGISTRY_PATH = Path(__file__).parent / "variant_registry.json"
+
+
+def _seed_variant_registry(conn: sqlite3.Connection) -> None:
+    try:
+        with open(_VARIANT_REGISTRY_PATH) as f:
+            entries = json.load(f)
+    except Exception:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO variant_registry (rs_id, gene, variant_name, domain, ref, alt, genotypes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                e["rs_id"], e["gene"], e["variant_name"], e["domain"],
+                e["ref"], e["alt"], json.dumps(e["genotypes"]),
+            )
+            for e in entries
+        ],
+    )
+
+
 def ensure_daily_landing_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -623,6 +647,20 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_variants_upload ON genome_variants(upload_id)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS variant_registry (
+            rs_id        TEXT PRIMARY KEY,
+            gene         TEXT NOT NULL,
+            variant_name TEXT NOT NULL,
+            domain       TEXT NOT NULL,
+            ref          TEXT NOT NULL,
+            alt          TEXT NOT NULL,
+            genotypes    TEXT NOT NULL
+        )
+        """
+    )
+    _seed_variant_registry(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ai_config (
@@ -3279,11 +3317,16 @@ def _normalize_vcf_gt(gt: str, vcf_ref: str, vcf_alt: str, reg_ref: str, reg_alt
 
 
 def _load_variant_registry() -> dict:
-    registry_path = Path(__file__).parent / "variant_registry.json"
     try:
-        with open(registry_path) as f:
-            entries = json.load(f)
-        return {e["rs_id"]: e for e in entries}
+        conn = get_db()
+        rows = conn.execute("SELECT * FROM variant_registry").fetchall()
+        conn.close()
+        result = {}
+        for row in rows:
+            entry = dict(row)
+            entry["genotypes"] = json.loads(entry["genotypes"])
+            result[entry["rs_id"]] = entry
+        return result
     except Exception:
         return {}
 
@@ -3515,6 +3558,63 @@ def get_genome_variants(upload_id: int):
             ordered[d] = grouped.pop(d)
     ordered.update(grouped)
     return ordered
+
+
+@app.get("/api/genome/registry")
+def list_variant_registry():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT rs_id, gene, variant_name, domain, ref, alt, genotypes FROM variant_registry ORDER BY domain, gene, rs_id"
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        entry = dict(row)
+        entry["genotypes"] = json.loads(entry["genotypes"])
+        result.append(entry)
+    return result
+
+
+@app.post("/api/genome/registry")
+def upsert_variant_registry_entry(body: dict):
+    required = {"rs_id", "gene", "variant_name", "domain", "ref", "alt", "genotypes"}
+    missing = required - body.keys()
+    if missing:
+        raise HTTPException(status_code=422, detail=f"missing fields: {', '.join(sorted(missing))}")
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO variant_registry (rs_id, gene, variant_name, domain, ref, alt, genotypes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(rs_id) DO UPDATE SET
+            gene=excluded.gene, variant_name=excluded.variant_name,
+            domain=excluded.domain, ref=excluded.ref, alt=excluded.alt,
+            genotypes=excluded.genotypes
+        """,
+        (
+            body["rs_id"], body["gene"], body["variant_name"], body["domain"],
+            body["ref"], body["alt"], json.dumps(body["genotypes"]),
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM variant_registry WHERE rs_id = ?", (body["rs_id"],)).fetchone()
+    conn.close()
+    entry = dict(row)
+    entry["genotypes"] = json.loads(entry["genotypes"])
+    return entry
+
+
+@app.delete("/api/genome/registry/{rs_id}")
+def delete_variant_registry_entry(rs_id: str):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM variant_registry WHERE rs_id = ?", (rs_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="variant not found")
+    conn.execute("DELETE FROM variant_registry WHERE rs_id = ?", (rs_id,))
+    conn.commit()
+    conn.close()
+    return {"deleted": rs_id}
 
 
 # --- Body composition estimates (CRUD) ---
