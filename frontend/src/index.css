@@ -700,10 +700,10 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 .supplement-row {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   grid-template-areas:
-    "name delete"
-    "dosage delete";
+    "name toggle delete"
+    "dosage toggle delete";
   align-items: center;
   gap: 4px 12px;
   padding: 12px 0;
@@ -726,8 +726,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 @media (min-width: 640px) {
   .supplement-row {
-    grid-template-columns: 1fr 1fr auto;
-    grid-template-areas: "name dosage delete";
+    grid-template-columns: 1fr 1fr auto auto;
+    grid-template-areas: "name dosage toggle delete";
     gap: 10px;
     padding: 8px 0;
   }
@@ -1350,6 +1350,151 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   flex-direction: column;
   gap: 16px;
 }
+
+/* Nutrient gap rows */
+.nutrition-gaps {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.gap-section-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #64748b;
+  margin: 8px 0 2px;
+}
+
+.gap-section-label:first-child { margin-top: 0; }
+
+.gap-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.85rem;
+  padding: 4px 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.gap-row:last-child { border-bottom: none; }
+
+.gap-label { color: #e2e8f0; }
+
+.gap-detail {
+  color: #94a3b8;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+}
+
+.gap-supp { color: #8b5cf6; }
+
+.gap-pct {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.8rem;
+  min-width: 36px;
+  text-align: right;
+}
+
+.gap-low .gap-pct  { color: #ef4444; }
+.gap-ok  .gap-pct  { color: #22c55e; }
+.gap-high .gap-pct { color: #f97316; }
+
+/* Supplement nutrient editor */
+.supplement-row-wrap { margin-bottom: 4px; }
+
+.supplement-nutrients-toggle {
+  grid-area: toggle;
+  background: none;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #64748b;
+  font-size: 0.75rem;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+  white-space: nowrap;
+  align-self: center;
+}
+.supplement-nutrients-toggle:hover { color: #8b5cf6; border-color: #8b5cf6; }
+
+.supplement-nutrients-panel {
+  background: rgba(15, 23, 42, 0.5);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin: 4px 0 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.supp-nutrient-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.85rem;
+}
+
+.supp-nutrient-label { color: #e2e8f0; }
+.supp-nutrient-val { color: #94a3b8; font-variant-numeric: tabular-nums; }
+
+.supp-nutrient-add {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.supp-nutrient-add select,
+.supp-nutrient-add input[type="number"] {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  padding: 5px 8px;
+}
+
+.supp-nutrient-add button {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.supp-nutrient-add button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.supp-nutrient-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.supp-nutrient-save {
+  background: #3b82f6;
+  border: none;
+  border-radius: 4px;
+  color: #fff;
+  font-size: 0.85rem;
+  padding: 5px 14px;
+  cursor: pointer;
+}
+.supp-nutrient-save:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.supp-nutrient-cancel {
+  background: none;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 0.85rem;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.supp-nutrient-cancel:hover { color: #e2e8f0; border-color: #64748b; }
 
 /* Daily landing — image upload */
 .image-upload {

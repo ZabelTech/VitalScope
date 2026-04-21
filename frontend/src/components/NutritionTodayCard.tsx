@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchNutritionDaily, fetchNutritionGoals, listNutrientDefs } from "../api";
 import type { NutrientDef, NutrientGoals, NutritionDailyTotals } from "../types";
+import { NutritionGaps } from "./NutritionGaps";
 
 interface Props {
   date: string;
@@ -80,6 +81,7 @@ export function NutritionTodayCard({ date }: Props) {
           })}
         </ul>
       )}
+      <NutritionGaps date={date} />
     </div>
   );
 }
