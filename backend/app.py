@@ -464,6 +464,41 @@ def ensure_daily_landing_tables() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_date ON planned_activities(date)")
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS meal_templates (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            notes      TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meal_template_nutrients (
+            template_id  INTEGER NOT NULL REFERENCES meal_templates(id) ON DELETE CASCADE,
+            nutrient_key TEXT NOT NULL,
+            amount       REAL NOT NULL,
+            PRIMARY KEY (template_id, nutrient_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS planned_sessions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            date           TEXT NOT NULL,
+            kind           TEXT NOT NULL CHECK (kind IN ('zone2','strength','hiit','mobility','rest','sauna','cold')),
+            title          TEXT,
+            target_minutes INTEGER,
+            target_load    TEXT,
+            notes          TEXT,
+            created_at     TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_sessions_date ON planned_sessions(date)")
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS uploads (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
@@ -1424,6 +1459,25 @@ class WaterIn(BaseModel):
     amount_ml: int
 
 
+class MealTemplateIn(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    nutrients: list[MealNutrientIn] = []
+
+
+class MealTemplateLogBody(BaseModel):
+    date: str
+
+
+class PlannedSessionIn(BaseModel):
+    date: str
+    kind: Literal["zone2", "strength", "hiit", "mobility", "rest", "sauna", "cold"]
+    title: Optional[str] = None
+    target_minutes: Optional[int] = None
+    target_load: Optional[str] = None
+    notes: Optional[str] = None
+
+
 def _row_to_nutrient_def(row: sqlite3.Row) -> dict:
     return {
         "key": row["key"],
@@ -1606,6 +1660,101 @@ def delete_meal(meal_id: int):
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Meal not found")
     return {"status": "ok"}
+
+
+# --- Meal templates ---
+
+def _fetch_meal_templates(conn: sqlite3.Connection, where: str, params: tuple) -> list[dict]:
+    rows = conn.execute(
+        f"SELECT * FROM meal_templates {where} ORDER BY name, id", params
+    ).fetchall()
+    if not rows:
+        return []
+    tids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(tids))
+    nutrient_rows = conn.execute(
+        f"SELECT template_id, nutrient_key, amount FROM meal_template_nutrients WHERE template_id IN ({placeholders})",
+        tids,
+    ).fetchall()
+    by_tid: dict[int, list[dict]] = {tid: [] for tid in tids}
+    for r in nutrient_rows:
+        by_tid[r["template_id"]].append({"key": r["nutrient_key"], "amount": r["amount"]})
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "notes": r["notes"],
+            "created_at": r["created_at"],
+            "nutrients": by_tid.get(r["id"], []),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/meal-templates")
+def list_meal_templates():
+    conn = get_db()
+    result = _fetch_meal_templates(conn, "", ())
+    conn.close()
+    return result
+
+
+@app.post("/api/meal-templates")
+def create_meal_template(body: MealTemplateIn):
+    if not body.name.strip():
+        raise HTTPException(status_code=422, detail="Template name is required")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO meal_templates (name, notes, created_at) VALUES (?, ?, ?)",
+        (body.name.strip(), body.notes, now),
+    )
+    tid = cur.lastrowid
+    for n in body.nutrients:
+        conn.execute(
+            "INSERT INTO meal_template_nutrients (template_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (tid, n.nutrient_key, n.amount),
+        )
+    conn.commit()
+    result = _fetch_meal_templates(conn, "WHERE id = ?", (tid,))
+    conn.close()
+    return result[0]
+
+
+@app.delete("/api/meal-templates/{template_id}")
+def delete_meal_template(template_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM meal_templates WHERE id = ?", (template_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"status": "ok"}
+
+
+@app.post("/api/meal-templates/{template_id}/log")
+def log_meal_template(template_id: int, body: MealTemplateLogBody):
+    conn = get_db()
+    templates = _fetch_meal_templates(conn, "WHERE id = ?", (template_id,))
+    if not templates:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Template not found")
+    tmpl = templates[0]
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO meals (date, time, name, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+        (body.date, None, tmpl["name"], tmpl["notes"], now),
+    )
+    meal_id = cur.lastrowid
+    for n in tmpl["nutrients"]:
+        conn.execute(
+            "INSERT INTO meal_nutrients (meal_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (meal_id, n["key"], n["amount"]),
+        )
+    conn.commit()
+    result = _fetch_meals(conn, "WHERE id = ?", (meal_id,))
+    conn.close()
+    return result[0]
 
 
 @app.get("/api/nutrition/daily")
@@ -1918,7 +2067,7 @@ def put_nutrition_goals(body: NutritionGoalsBody):
     return {"status": "ok", "count": len(body.goals)}
 
 
-# --- Planned activities (read-only in this version) ---
+# --- Planned activities (legacy read-only) ---
 
 @app.get("/api/planned")
 def list_planned(start: Optional[str] = None, end: Optional[str] = None):
@@ -1931,6 +2080,53 @@ def list_planned(start: Optional[str] = None, end: Optional[str] = None):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# --- Planned sessions ---
+
+@app.get("/api/planned-sessions")
+def list_planned_sessions(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, date, kind, title, target_minutes, target_load, notes, created_at "
+        "FROM planned_sessions WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/planned-sessions")
+def create_planned_session(body: PlannedSessionIn):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """
+        INSERT INTO planned_sessions (date, kind, title, target_minutes, target_load, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (body.date, body.kind, body.title, body.target_minutes, body.target_load, body.notes, now),
+    )
+    row_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, date, kind, title, target_minutes, target_load, notes, created_at FROM planned_sessions WHERE id = ?",
+        (row_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/api/planned-sessions/{session_id}")
+def delete_planned_session(session_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM planned_sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "ok"}
 
 
 # --- Uploads (meal + form-check images + bloodwork PDFs/images) ---

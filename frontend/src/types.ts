@@ -318,6 +318,27 @@ export interface PlannedActivity {
   notes: string | null;
 }
 
+export interface MealTemplate {
+  id: number;
+  name: string;
+  notes: string | null;
+  created_at: string;
+  nutrients: MealNutrient[];
+}
+
+export type PlannedSessionKind = "zone2" | "strength" | "hiit" | "mobility" | "rest" | "sauna" | "cold";
+
+export interface PlannedSession {
+  id: number;
+  date: string;
+  kind: PlannedSessionKind;
+  title: string | null;
+  target_minutes: number | null;
+  target_load: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
 export type NutrientGoals = Record<string, number>;
 
 export type BloodworkFlag = "low" | "normal" | "high" | "critical";
