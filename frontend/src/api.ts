@@ -1,6 +1,8 @@
 import type {
   AiSettings,
   AiSettingsUpdate,
+  BiologicalAgeEntry,
+  BiologicalAgeEntryInput,
   BloodworkAnalysisResult,
   BloodworkPanel,
   BloodworkPanelInput,
@@ -10,9 +12,12 @@ import type {
   GenomeParseResult,
   GenomeUpload,
   GenomeUploadInput,
+  GripStrengthEntry,
+  GripStrengthEntryInput,
   JournalEntry,
   JournalQuestion,
   JournalQuestionResponse,
+  LongevityAnalyte,
   Meal,
   MealAnalysisResult,
   NutrientDef,
@@ -26,6 +31,7 @@ import type {
   TimeOfDay,
   Upload,
   UploadKind,
+  Vo2MaxEntry,
   WaterDaily,
   WaterEntry,
 } from "./types";
@@ -590,6 +596,71 @@ export async function runPluginNow(name: string, full = false): Promise<{ status
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {
   const res = await apiFetch(`/api/plugins/${name}/runs?limit=${limit}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Biological age ---
+
+export async function listBiologicalAge(start: string, end: string): Promise<BiologicalAgeEntry[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/biological-age?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createBiologicalAge(body: BiologicalAgeEntryInput): Promise<BiologicalAgeEntry> {
+  const res = await apiFetch("/api/biological-age", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteBiologicalAge(id: number): Promise<void> {
+  const res = await apiFetch(`/api/biological-age/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Longevity analytes ---
+
+export async function fetchLongevityAnalytes(): Promise<LongevityAnalyte[]> {
+  const res = await apiFetch("/api/longevity/analytes");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Grip strength ---
+
+export async function listGripStrength(start: string, end: string): Promise<GripStrengthEntry[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/grip-strength?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createGripStrength(body: GripStrengthEntryInput): Promise<GripStrengthEntry> {
+  const res = await apiFetch("/api/grip-strength", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteGripStrength(id: number): Promise<void> {
+  const res = await apiFetch(`/api/grip-strength/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- VO2 max (from Garmin) ---
+
+export async function fetchVo2Max(start: string, end: string): Promise<Vo2MaxEntry[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/longevity/vo2max?${params}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
