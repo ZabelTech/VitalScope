@@ -10,6 +10,7 @@ import type {
   GenomeParseResult,
   GenomeUpload,
   GenomeUploadInput,
+  GlucoseReading,
   JournalEntry,
   JournalQuestion,
   JournalQuestionResponse,
@@ -612,5 +613,17 @@ export async function updateAiSettings(body: AiSettingsUpdate): Promise<AiSettin
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail || `API error: ${res.status}`);
   }
+  return res.json();
+}
+
+// --- Glucose (CGM) ---
+
+export async function fetchGlucosePostprandial(
+  mealTime: string,
+  windowMinutes = 120,
+): Promise<GlucoseReading[]> {
+  const params = new URLSearchParams({ meal_time: mealTime, window_minutes: String(windowMinutes) });
+  const res = await apiFetch(`/api/glucose/postprandial?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

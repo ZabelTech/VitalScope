@@ -9,6 +9,7 @@ date range and RNG so `backend/plugins/_demo_generators.py` can reuse them
 to fake "Run now" behavior in demo mode.
 """
 
+import math
 import os
 import random
 import sqlite3
@@ -276,6 +277,52 @@ def seed_supplements(conn: sqlite3.Connection) -> None:
         )
 
 
+def seed_cgm(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    count = 0
+    for d in dates:
+        base = 95 + rng.randint(-10, 15)
+        # ~96 readings per day at 15-minute intervals
+        for i in range(96):
+            ts = datetime.combine(d, time(0, 0)) + timedelta(minutes=i * 15)
+            # Simulate a daily glucose pattern: rise after meals, fall at rest
+            hour = ts.hour + ts.minute / 60
+            meal_spike = (
+                20 * math.exp(-((hour - 8.5) ** 2) / 0.5)
+                + 25 * math.exp(-((hour - 13.5) ** 2) / 0.5)
+                + 22 * math.exp(-((hour - 19.5) ** 2) / 0.5)
+            )
+            noise = rng.gauss(0, 5)
+            mgdl = max(60, min(250, int(round(base + meal_spike + noise))))
+            trend_val = rng.choices(
+                [3, 4, 5, 6, 7], weights=[5, 15, 60, 15, 5], k=1
+            )[0]
+            trend = {3: "falling", 4: "falling_slowly", 5: "flat", 6: "rising_slowly", 7: "rising"}[trend_val]
+            conn.execute(
+                "INSERT OR REPLACE INTO glucose_readings "
+                "(timestamp, date, mgdl, trend, source) VALUES (?,?,?,?,?)",
+                (ts.strftime("%Y-%m-%dT%H:%M:%S"), d.isoformat(), mgdl, trend, "demo"),
+            )
+            count += 1
+        # Compute daily aggregate
+        values = [
+            r[0] for r in conn.execute(
+                "SELECT mgdl FROM glucose_readings WHERE date = ?", (d.isoformat(),)
+            ).fetchall()
+        ]
+        if values:
+            avg = round(sum(values) / len(values), 1)
+            std = round((sum((v - avg) ** 2 for v in values) / max(1, len(values) - 1)) ** 0.5, 1)
+            cv = round(std / avg * 100, 1) if avg > 0 else 0.0
+            tir = round(sum(1 for v in values if 70 <= v <= 180) / len(values) * 100, 1)
+            conn.execute(
+                "INSERT OR REPLACE INTO glucose_daily "
+                "(date, avg_mgdl, min_mgdl, max_mgdl, std_dev, cv_percent, tir_pct, readings_count) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (d.isoformat(), avg, min(values), max(values), std, cv, tir, len(values)),
+            )
+    return count
+
+
 def seed_meals_and_water(conn: sqlite3.Connection) -> None:
     today = date.today()
     now = datetime.utcnow().isoformat(timespec="seconds")
@@ -325,6 +372,7 @@ def main() -> None:
         seed_weight(conn, dates, rng)
         seed_activities(conn, dates, rng)
         seed_workouts(conn, dates, rng)
+        seed_cgm(conn, dates, rng)
         seed_supplements(conn)
         seed_meals_and_water(conn)
         seed_nutrition_goals(conn)

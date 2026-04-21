@@ -1,10 +1,10 @@
 # VitalScope: The State of You
 
-A personal health dashboard that aggregates data from **Garmin Connect**, the **Strong** gym tracker, and **EufyLife** smart scale into a single SQLite database and visualizes it in a React frontend organized around an **OODA loop** — Observe, Orient, Decide, Act.
+A personal health dashboard that aggregates data from **Garmin Connect**, the **Strong** gym tracker, the **EufyLife** smart scale, and **CGM devices** (Freestyle Libre via LibreLinkUp) into a single SQLite database and visualizes it in a React frontend organized around an **OODA loop** — Observe, Orient, Decide, Act.
 
 ## Current status
 
-All four sync sources are wrapped as **plugins** that the backend schedules and runs on an interval (APScheduler). The UI has five routes (Observe / Orient / Decide / Act / Settings). The database holds ~4.3 years of daily health metrics plus journal, supplements, nutrition, and water logs.
+All sync sources are wrapped as **plugins** that the backend schedules and runs on an interval (APScheduler). The UI has five routes (Observe / Orient / Decide / Act / Settings). The database holds ~4.3 years of daily health metrics plus journal, supplements, nutrition, water logs, and glucose readings.
 
 ### Data in the database
 
@@ -23,6 +23,8 @@ All four sync sources are wrapped as **plugins** that the backend schedules and 
 | Weight | 439 | 2023-04-13 → today | full body composition from Eufy smart scale |
 | Garmin activities | 760 | 2019-11-21 → today | runs, rides, strength, yoga, etc. |
 | Strong workouts | 292 | 2022-09-07 → 2026-04-09 | strength workouts with 6,557 sets |
+| Glucose (daily) | 0 | — | CGM daily averages, TIR, CV — via LibreLinkUp |
+| Glucose (readings) | 0 | — | ~15-min intraday readings from Freestyle Libre |
 
 ## Architecture
 
@@ -35,6 +37,7 @@ All four sync sources are wrapped as **plugins** that the backend schedules and 
 ├── sync_garmin_activities.py     # Runs, rides, strength sessions
 ├── sync_strong.py                # Strong gym tracker workouts + sets
 ├── sync_eufy.py                  # EufyLife smart scale (weight + composition)
+├── sync_cgm.py                   # CGM glucose readings (LibreLinkUp / Freestyle Libre)
 ├── backend/
 │   ├── app.py                    # FastAPI — 51 routes + APScheduler
 │   └── plugins/                  # Sync plugin registry
@@ -43,7 +46,8 @@ All four sync sources are wrapped as **plugins** that the backend schedules and 
 │       ├── garmin_health.py
 │       ├── garmin_activities.py
 │       ├── strong.py
-│       └── eufy.py
+│       ├── eufy.py
+│       └── cgm.py
 └── frontend/                     # Vite + React + TypeScript + Recharts
     └── src/
         ├── App.tsx               # BrowserRouter + NavBar → 5 OODA routes
@@ -138,6 +142,24 @@ python3 sync_strong.py --full    # resync all
 
 Tokens cached at `~/.strongapp` with 20 min JWT access + refresh token.
 
+### `sync_cgm.py`
+
+Syncs continuous glucose readings from **LibreLinkUp** (the companion app for Freestyle Libre sensors). Stores ~96 readings/day at 15-minute intervals plus pre-computed daily aggregates (avg, min, max, CV, time-in-range).
+
+**Incremental strategy**: always re-fetches whatever the LibreLinkUp API exposes in the current session (typically 14 days of graph data + logbook). Incrementality is implicit — `INSERT OR REPLACE` is idempotent.
+
+```bash
+export LIBRE_EMAIL="you@example.com"
+export LIBRE_PASSWORD="yourpassword"
+export LIBRE_REGION="eu"          # eu (default) | us | au | ca | de | fr | jp | …
+python3 sync_cgm.py               # incremental
+python3 sync_cgm.py --full        # same scope, forces a fresh pull
+```
+
+Token cached at `~/.cgmapp/token.json`. Region must match the account's signup region (an incorrect region returns a redirect error with the correct code).
+
+**Provider selector**: set `CGM_PROVIDER=libre` (default). Future providers can be added alongside the LibreClient class and selected here.
+
 ### `sync_eufy.py`
 
 Syncs body composition (weight, BMI, body fat, muscle, water, bone, BMR, etc.) from the **EufyLife** cloud — the smart scale's mobile app backend.
@@ -159,8 +181,9 @@ A single FastAPI file serving 51 routes from `vitalscope.db`. CORS is open to `h
 
 | Group | Routes |
 |---|---|
-| Daily summaries | `GET /api/{heart-rate,hrv,body-battery,sleep,stress,weight,steps}/daily?start=&end=` |
-| Range stats | `GET /api/{heart-rate,hrv,body-battery,sleep,stress,weight,steps}/stats?start=&end=` — `{min, max, avg, median, volatility}` |
+| Daily summaries | `GET /api/{heart-rate,hrv,body-battery,sleep,stress,weight,steps,glucose}/daily?start=&end=` |
+| Range stats | `GET /api/{heart-rate,hrv,body-battery,sleep,stress,weight,steps,glucose}/stats?start=&end=` — `{min, max, avg, median, volatility}` |
+| Glucose readings | `GET /api/glucose/readings?start=&end=` — intraday readings; `GET /api/glucose/postprandial?meal_time=&window_minutes=` — 2-hour postprandial curve |
 | Body battery live | `GET /api/body-battery/current` — latest reading + today's min/max |
 | Workouts (Strong) | `GET /api/workouts`, `/api/workouts/stats`, `/api/workouts/weekly-volume`, `/api/workouts/recent`, `/api/workouts/{id}` |
 | Activities (Garmin) | `GET /api/activities`, `/api/activities/stats`, `/api/activities/weekly`, `/api/activities/recent` |
@@ -190,7 +213,7 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
   - **Today's metrics** — today's snapshot with age badges: Last Night's Sleep (score + stages + SpO2), HRV, Body Battery (current / today range / charged / drained), Stress, Body Composition, Steps, Heart Rate.
 - **`/orient` Orient** — what does the pattern look like?
   - **AI Analysis** — 14-day rollup of wearable + workout + latest-bloodwork data run through the configured AI provider, grouped into health / performance / recovery / body composition.
-  - **Trends** — historical charts with a date range picker (30d / 90d / 6mo / 1yr / All). Each metric has a row of Min / Max / Avg / Median / Volatility cards above its chart. Training chart is merged: stacked bars of weekly Garmin sessions + Strong sessions with a distance line overlay. Calories + water chart at the bottom.
+  - **Trends** — historical charts with a date range picker (30d / 90d / 6mo / 1yr / All). Each metric has a row of Min / Max / Avg / Median / Volatility cards above its chart. Glucose chart shows avg / min / max daily lines with a 70–180 mg/dL target-range band. Training chart is merged: stacked bars of weekly Garmin sessions + Strong sessions with a distance line overlay. Calories + water chart at the bottom.
   - **Activity history** — merged Garmin + Strong card list with click-to-expand details.
 - **`/decide` Decide** — what is the plan?
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).
@@ -198,10 +221,10 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
 - **`/act` Act** — what to do today?
   - **Today** — `TodayDashboard`: quick snapshot + recent activity card.
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
-  - **Meals & water** — `NutritionPage`: log meals for a date with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). Water is logged as separate per-drink entries with a running daily total.
+  - **Meals & water** — `NutritionPage`: log meals for a date with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). If CGM data covers the meal time, the 2-hour postprandial glucose curve is shown inline below the meal. Water is logged as separate per-drink entries with a running daily total.
   - **Bloodwork** — upload a lab PDF/image and have the AI extract panels into `bloodwork_panels` / `bloodwork_results`.
   - **Genome** — upload a raw genotype file and have the AI parse summary info.
-- **`/settings` Settings** — sync plugins. One card per plugin (Garmin Health, Garmin Activities, Strong, Eufy) with Enabled toggle, interval, credential fields, Save, Run now, last-run status, and recent-runs log.
+- **`/settings` Settings** — sync plugins. One card per plugin (Garmin Health, Garmin Activities, Strong, Eufy, CGM) with Enabled toggle, interval, credential fields, Save, Run now, last-run status, and recent-runs log.
 
 ### Running the frontend
 
