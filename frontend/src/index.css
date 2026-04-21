@@ -772,6 +772,240 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   cursor: not-allowed;
 }
 
+/* --- Protocols --- */
+
+.protocol-quick-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+
+@media (min-width: 480px) {
+  .protocol-quick-grid { grid-template-columns: 1fr 1fr; }
+}
+
+.protocol-quick-card {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.protocol-quick-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.protocol-quick-inputs {
+  display: flex;
+  gap: 8px;
+}
+
+.protocol-quick-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.protocol-quick-field input {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 16px;
+  min-height: 40px;
+  width: 100%;
+}
+
+.protocol-quick-unit {
+  font-size: 0.8rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.protocol-quick-btn {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 16px;
+  min-height: 40px;
+  font-weight: 600;
+  font-size: 0.9rem;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.protocol-quick-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.protocol-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+.protocol-row-main {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.protocol-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.protocol-badge {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.protocol-name {
+  font-size: 0.95rem;
+  color: #e2e8f0;
+  font-weight: 500;
+}
+
+.protocol-meta {
+  font-size: 0.82rem;
+  color: #64748b;
+}
+
+.protocol-day-count {
+  font-size: 0.78rem;
+  color: #3b82f6;
+  background: rgba(59, 130, 246, 0.12);
+  border-radius: 999px;
+  padding: 2px 8px;
+  white-space: nowrap;
+}
+
+.protocol-log-form {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.protocol-log-fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+@media (min-width: 480px) {
+  .protocol-log-fields { grid-template-columns: 1fr 1fr 1fr; }
+}
+
+.protocol-log-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.protocol-log-input {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 8px 10px;
+  font-family: inherit;
+  font-size: 16px;
+  min-height: 40px;
+}
+
+.protocol-log-notes {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 15px;
+  resize: vertical;
+}
+
+.protocol-add-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 14px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 8px;
+}
+
+.protocol-add-fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .protocol-add-fields { grid-template-columns: 1fr 1fr; }
+}
+
+.protocol-add-fields input,
+.protocol-add-fields select {
+  background: #1e293b;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 16px;
+  min-height: 44px;
+}
+
+.protocol-add-date-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.protocol-add-date-row input {
+  flex: 1;
+}
+
+.protocol-event-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid #1e293b;
+  flex-wrap: wrap;
+}
+
+.protocol-event-row .supplement-delete {
+  margin-left: auto;
+}
+
 .meal-row {
   padding: 10px 0;
   border-bottom: 1px solid #1e293b;

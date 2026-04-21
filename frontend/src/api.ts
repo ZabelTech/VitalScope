@@ -21,6 +21,10 @@ import type {
   NutritionDailyTotals,
   OrientAnalysis,
   PlannedActivity,
+  Protocol,
+  ProtocolEvent,
+  ProtocolInput,
+  ProtocolEventInput,
   Supplement,
   SupplementIntake,
   TimeOfDay,
@@ -613,4 +617,76 @@ export async function updateAiSettings(body: AiSettingsUpdate): Promise<AiSettin
     throw new Error(detail.detail || `API error: ${res.status}`);
   }
   return res.json();
+}
+
+// --- Protocols ---
+
+export async function listProtocols(): Promise<Protocol[]> {
+  const res = await apiFetch("/api/protocols");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createProtocol(body: ProtocolInput): Promise<Protocol> {
+  const res = await apiFetch("/api/protocols", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateProtocol(id: number, body: ProtocolInput): Promise<Protocol> {
+  const res = await apiFetch(`/api/protocols/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteProtocol(id: number): Promise<void> {
+  const res = await apiFetch(`/api/protocols/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function listProtocolEvents(params?: {
+  start?: string;
+  end?: string;
+  protocol_id?: number;
+}): Promise<ProtocolEvent[]> {
+  const q = new URLSearchParams();
+  if (params?.start) q.set("start", params.start);
+  if (params?.end) q.set("end", params.end);
+  if (params?.protocol_id != null) q.set("protocol_id", String(params.protocol_id));
+  const res = await apiFetch(`/api/protocol-events${q.toString() ? `?${q}` : ""}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createProtocolEvent(body: ProtocolEventInput): Promise<ProtocolEvent> {
+  const res = await apiFetch("/api/protocol-events", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateProtocolEvent(id: number, body: ProtocolEventInput): Promise<ProtocolEvent> {
+  const res = await apiFetch(`/api/protocol-events/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteProtocolEvent(id: number): Promise<void> {
+  const res = await apiFetch(`/api/protocol-events/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
 }

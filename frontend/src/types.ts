@@ -443,3 +443,56 @@ export interface AiSettingsUpdate {
   openai_api_key?: string | null;
   openrouter_api_key?: string | null;
 }
+
+export type ProtocolCategory =
+  | "drug"
+  | "peptide"
+  | "ped"
+  | "supplement_stack"
+  | "hormesis"
+  | "fasting"
+  | "training_block";
+
+export interface Protocol {
+  id: number;
+  name: string;
+  category: ProtocolCategory;
+  dose: string | null;
+  unit: string | null;
+  cadence: string | null;
+  start_date: string;
+  end_date: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface ProtocolEvent {
+  id: number;
+  protocol_id: number;
+  date: string;
+  time: string | null;
+  dose: string | null;
+  duration_minutes: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface ProtocolInput {
+  name: string;
+  category: ProtocolCategory;
+  dose?: string | null;
+  unit?: string | null;
+  cadence?: string | null;
+  start_date: string;
+  end_date?: string | null;
+  notes?: string | null;
+}
+
+export interface ProtocolEventInput {
+  protocol_id: number;
+  date: string;
+  time?: string | null;
+  dose?: string | null;
+  duration_minutes?: number | null;
+  notes?: string | null;
+}
