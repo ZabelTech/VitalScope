@@ -384,6 +384,40 @@ export interface OrientAnalysis {
   topics: OrientTopic[];
 }
 
+export interface OrientAnomaly {
+  metric: string;
+  metric_label: string;
+  date: string;
+  value: number;
+  z_score: number;
+  direction: "high" | "low";
+  unit: string;
+  mean: number;
+  stdev: number;
+}
+
+export interface OrientAnomaliesResponse {
+  anomalies: OrientAnomaly[];
+  window_days: number;
+}
+
+export interface OrientExplainContributor {
+  factor: string;
+  direction: "elevated" | "reduced" | "normal";
+  confidence: "low" | "medium" | "high";
+  evidence: string;
+}
+
+export interface OrientExplain {
+  metric: string;
+  metric_label: string;
+  date: string;
+  model: string;
+  summary: string;
+  likely_contributors: OrientExplainContributor[];
+  what_to_watch: string;
+}
+
 export interface GenomeParseResult {
   variant_count: number;
   rs_count: number;

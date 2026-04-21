@@ -20,6 +20,8 @@ import type {
   NutrientGoals,
   NutritionDailyTotals,
   OrientAnalysis,
+  OrientAnomaliesResponse,
+  OrientExplain,
   PlannedActivity,
   Supplement,
   SupplementIntake,
@@ -517,6 +519,28 @@ export async function analyzeOrient(window_days = 14): Promise<OrientAnalysis> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ window_days }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchOrientAnomalies(window_days = 14): Promise<OrientAnomaliesResponse> {
+  const res = await apiFetch(`/api/orient/anomalies?window_days=${window_days}`);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function explainOrient(metric: string, explainDate: string): Promise<OrientExplain> {
+  const res = await apiFetch("/api/orient/explain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ metric, date: explainDate }),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
