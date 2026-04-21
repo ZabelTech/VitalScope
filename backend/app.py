@@ -558,6 +558,7 @@ def ensure_daily_landing_tables() -> None:
             lab_name          TEXT,
             notes             TEXT,
             confidence        TEXT,
+            narrative         TEXT,
             created_at        TEXT NOT NULL,
             FOREIGN KEY (source_upload_id) REFERENCES uploads(id) ON DELETE SET NULL
         )
@@ -588,6 +589,9 @@ def ensure_daily_landing_tables() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_bloodwork_results_analyte ON bloodwork_results(analyte)"
     )
+    _bp_existing = {r[1] for r in conn.execute("PRAGMA table_info(bloodwork_panels)")}
+    if "narrative" not in _bp_existing:
+        conn.execute("ALTER TABLE bloodwork_panels ADD COLUMN narrative TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS genome_uploads (
@@ -2344,6 +2348,20 @@ class DemoProvider(AIProvider):
             return _demo_bloodwork_payload()
         return {}
 
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        await asyncio.sleep(0.4)
+        tool_name = tool.get("name")
+        if tool_name == "record_panel_comparison":
+            return _demo_comparison_payload()
+        return {}
+
 
 def _demo_meal_payload(tool: dict) -> dict:
     nutrient_keys = list(
@@ -2410,6 +2428,17 @@ def _demo_bloodwork_payload() -> dict:
             {"analyte": "Ferritin", "value": 120, "value_text": None, "unit": "ng/mL",
              "reference_low": 30, "reference_high": 400, "reference_text": None, "flag": "normal"},
         ],
+    }
+
+
+def _demo_comparison_payload() -> dict:
+    return {
+        "narrative": (
+            "Compared to your panel from roughly 6 months ago, LDL Cholesterol has risen "
+            "from 118 to 135 mg/dL — a 14% increase worth monitoring. Vitamin D has dropped "
+            "slightly from 32 to 28 ng/mL, now sitting just below the optimal range. "
+            "Haemoglobin, Fasting Glucose, and TSH are all stable. HDL remains strong at 58 mg/dL."
+        )
     }
 
 
@@ -2803,6 +2832,44 @@ _BLOODWORK_TOOL = {
     },
 }
 
+_BLOODWORK_COMPARE_TOOL = {
+    "name": "record_panel_comparison",
+    "description": (
+        "Write a short narrative comparing a new blood panel to the user's prior results. "
+        "Focus on what changed vs the user's own baseline, not vs population reference ranges."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "narrative": {
+                "type": "string",
+                "description": (
+                    "2-5 sentences in plain English. Describe analytes that moved meaningfully "
+                    "since prior panels, direction and magnitude of change. Skip stable analytes. "
+                    "Do not comment on whether values are within reference ranges."
+                ),
+            },
+        },
+        "required": ["narrative"],
+        "additionalProperties": False,
+    },
+}
+
+
+@app.get("/api/bloodwork/analyte/{key}")
+def get_analyte_history(key: str):
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT r.value, r.value_text, r.unit, p.date, p.id AS panel_id
+           FROM bloodwork_results r
+           JOIN bloodwork_panels p ON r.panel_id = p.id
+           WHERE r.analyte = ?
+           ORDER BY p.date ASC, p.id ASC""",
+        (key,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
 
 @app.post("/api/bloodwork/analyze-upload")
 async def analyze_bloodwork_upload(body: AnalyzeImageBody):
@@ -3133,6 +3200,7 @@ def _row_to_panel(row: sqlite3.Row, results: Optional[list[sqlite3.Row]] = None)
         "lab_name": row["lab_name"],
         "notes": row["notes"],
         "confidence": row["confidence"],
+        "narrative": row["narrative"],
         "created_at": row["created_at"],
     }
     if results is not None:
@@ -3140,8 +3208,58 @@ def _row_to_panel(row: sqlite3.Row, results: Optional[list[sqlite3.Row]] = None)
     return out
 
 
+def _fetch_prior_panels_for_comparison(
+    conn: sqlite3.Connection, current_panel_id: int, panel_date: str, n: int = 4
+) -> list[dict]:
+    panels = conn.execute(
+        "SELECT id, date FROM bloodwork_panels "
+        "WHERE (date < ? OR (date = ? AND id < ?)) AND id != ? "
+        "ORDER BY date DESC, id DESC LIMIT ?",
+        (panel_date, panel_date, current_panel_id, current_panel_id, n),
+    ).fetchall()
+    out = []
+    for p in panels:
+        results = conn.execute(
+            "SELECT analyte, value, value_text, unit FROM bloodwork_results "
+            "WHERE panel_id = ? ORDER BY sort_order, id",
+            (p["id"],),
+        ).fetchall()
+        out.append({"date": p["date"], "results": [dict(r) for r in results]})
+    return out
+
+
+async def _generate_comparison_narrative(
+    new_results: list,
+    prior_panels: list[dict],
+) -> str:
+    lines = ["New panel analytes:"]
+    for r in new_results:
+        val = r.value if r.value is not None else r.value_text
+        unit = r.unit or ""
+        lines.append(f"  {r.analyte}: {val} {unit}".rstrip())
+    lines.append("")
+    for p in prior_panels:
+        lines.append(f"Panel dated {p['date']}:")
+        for r in p["results"]:
+            val = r["value"] if r["value"] is not None else r["value_text"]
+            unit = r["unit"] or ""
+            lines.append(f"  {r['analyte']}: {val} {unit}".rstrip())
+        lines.append("")
+    payload = await _call_ai_text_tool(
+        system=(
+            "You are a health-data assistant helping a user understand how their "
+            "bloodwork has shifted over time. Compare only the user's own values — "
+            "do not reference population reference ranges."
+        ),
+        user_text="\n".join(lines),
+        tool=_BLOODWORK_COMPARE_TOOL,
+        timeout_sec=BLOODWORK_AI_TIMEOUT_SEC,
+    )
+    return payload.get("narrative") or ""
+
+
 @app.post("/api/bloodwork-panels")
-def create_bloodwork_panel(body: BloodworkPanelIn):
+async def create_bloodwork_panel(body: BloodworkPanelIn):
     now = datetime.utcnow().isoformat(timespec="seconds")
     conn = get_db()
     try:
@@ -3172,6 +3290,21 @@ def create_bloodwork_panel(body: BloodworkPanelIn):
                 (panel_id, body.source_upload_id),
             )
         conn.commit()
+        if AI_AVAILABLE and body.results:
+            try:
+                prior = _fetch_prior_panels_for_comparison(conn, panel_id, body.date)
+                if prior:
+                    narrative = await _generate_comparison_narrative(body.results, prior)
+                    if narrative:
+                        conn.execute(
+                            "UPDATE bloodwork_panels SET narrative = ? WHERE id = ?",
+                            (narrative, panel_id),
+                        )
+                        conn.commit()
+            except Exception:
+                _ai_logger.warning(
+                    "Failed to generate bloodwork comparison narrative", exc_info=True
+                )
         panel_row = conn.execute(
             "SELECT * FROM bloodwork_panels WHERE id = ?", (panel_id,)
         ).fetchone()
