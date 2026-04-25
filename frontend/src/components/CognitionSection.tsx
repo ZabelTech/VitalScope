@@ -2,11 +2,11 @@ import { useState } from "react";
 import { format, subDays } from "date-fns";
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
-  ResponsiveContainer, Scatter, ScatterChart, ZAxis,
+  ResponsiveContainer, Scatter, ScatterChart, ZAxis, Area,
 } from "recharts";
 import { DateRangePicker } from "./DateRangePicker";
 import { useMetricData } from "../hooks/useMetricData";
-import type { CognitionDaily, SleepDaily } from "../types";
+import type { CognitionDaily, ProcessingSpeedDaily, SleepDaily } from "../types";
 
 const today = format(new Date(), "yyyy-MM-dd");
 const ninetyDaysAgo = format(subDays(new Date(), 90), "yyyy-MM-dd");
@@ -26,6 +26,7 @@ export function CognitionSection() {
   const { data: cognition, loading } = useMetricData<CognitionDaily[]>(
     "journal/cognition", start, end
   );
+  const { data: processing } = useMetricData<ProcessingSpeedDaily[]>("cognition/processing-speed/daily", start, end);
   const { data: sleep } = useMetricData<SleepDaily[]>("sleep/daily", start, end);
 
   if (loading) return <div className="chart-loading">Loading cognition data…</div>;
@@ -133,6 +134,42 @@ export function CognitionSection() {
               />
             </ScatterChart>
           </ResponsiveContainer></div>
+        </>
+      )}
+
+      {(processing ?? []).length > 0 && (
+        <>
+          <h3 className="chart-subhead">Processing speed</h3>
+          <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={processing}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
+              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Legend />
+              <Line
+                yAxisId="left"
+                type="monotone"
+                dataKey="throughput_pm"
+                name="Throughput/min"
+                stroke="#8b5cf6"
+                dot={{ r: 2 }}
+                connectNulls
+              />
+              <Area
+                yAxisId="right"
+                type="monotone"
+                dataKey={(d: ProcessingSpeedDaily) => Math.round(d.accuracy * 100)}
+                name="Accuracy %"
+                stroke="#3b82f6"
+                fill="#3b82f6"
+                fillOpacity={0.15}
+                connectNulls
+              />
+            </ComposedChart>
+          </ResponsiveContainer></div>
+          <p className="chart-empty">Low-quality sessions are still shown and marked in the task result card.</p>
         </>
       )}
     </div>

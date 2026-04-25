@@ -1,11 +1,19 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   createCaffeineIntake,
   fetchJournalEntry,
   listCaffeineIntake,
+  submitProcessingSpeedSession,
   submitJournalEntry,
 } from "../api";
-import type { CaffeineIntake, JournalEntry, MoodTag, MorningFeeling } from "../types";
+import type {
+  CaffeineIntake,
+  JournalEntry,
+  MoodTag,
+  MorningFeeling,
+  ProcessingSpeedSessionResult,
+} from "../types";
+import { ProcessingSpeedTask } from "./ProcessingSpeedTask";
 
 interface Props {
   date: string;
@@ -14,8 +22,6 @@ interface Props {
 const FEELINGS: MorningFeeling[] = ["sleepy", "energetic", "normal", "sick"];
 const CAFFEINE_QUICK_MG = [80, 100, 150, 200];
 const MOOD_TAGS: MoodTag[] = ["great", "good", "flat", "low", "irritable", "anxious"];
-const RT_TRIALS = 3;
-type RtPhase = "idle" | "waiting" | "ready" | "done";
 
 export function TodayJournal({ date }: Props) {
   const [entry, setEntry] = useState<JournalEntry | null>(null);
@@ -33,11 +39,7 @@ export function TodayJournal({ date }: Props) {
     setCaffeineIntakes(await listCaffeineIntake(date, date));
   }, [date]);
 
-  const [rtPhase, setRtPhase] = useState<RtPhase>("idle");
-  const [rtTrials, setRtTrials] = useState<number[]>([]);
-  const [rtTooEarly, setRtTooEarly] = useState(false);
-  const rtStartRef = useRef<number>(0);
-  const rtTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [processingResult, setProcessingResult] = useState<ProcessingSpeedSessionResult | null>(null);
 
   useEffect(() => {
     fetchJournalEntry(date)
@@ -49,7 +51,7 @@ export function TodayJournal({ date }: Props) {
         setMoodTag(e?.mood_tag ?? null);
         setCognitiveLoad(e?.cognitive_load ?? null);
         setSubjectiveEnergy(e?.subjective_energy ?? null);
-        if (e?.rt_trials && e.rt_trials > 0) setRtPhase("done");
+        setProcessingResult(null);
       })
       .catch(() => {
         setEntry(null);
@@ -61,9 +63,7 @@ export function TodayJournal({ date }: Props) {
         setSubjectiveEnergy(null);
       });
     reloadCaffeine().catch(() => {});
-    return () => {
-      if (rtTimerRef.current) clearTimeout(rtTimerRef.current);
-    };
+    return () => {};
   }, [date, reloadCaffeine]);
 
   async function save(patch: Partial<JournalEntry>) {
@@ -123,53 +123,7 @@ export function TodayJournal({ date }: Props) {
     await save({ mood_tag: next });
   }
 
-  function scheduleRtReady() {
-    const delay = 1500 + Math.random() * 2500;
-    rtTimerRef.current = setTimeout(() => {
-      rtStartRef.current = Date.now();
-      setRtPhase("ready");
-    }, delay);
-  }
-
-  function startRt() {
-    setRtTooEarly(false);
-    setRtTrials([]);
-    setRtPhase("waiting");
-    scheduleRtReady();
-  }
-
-  async function handleRtClick() {
-    if (rtPhase === "waiting") {
-      if (rtTimerRef.current) clearTimeout(rtTimerRef.current);
-      setRtPhase("idle");
-      setRtTooEarly(true);
-      return;
-    }
-    if (rtPhase !== "ready") return;
-    const elapsed = Date.now() - rtStartRef.current;
-    const next = [...rtTrials, elapsed];
-    setRtTrials(next);
-    if (next.length < RT_TRIALS) {
-      setRtPhase("waiting");
-      scheduleRtReady();
-    } else {
-      const avg = Math.round(next.reduce((a, b) => a + b, 0) / next.length);
-      setRtPhase("done");
-      await save({ avg_rt_ms: avg, rt_trials: next.length });
-    }
-  }
-
-  function resetRt() {
-    if (rtTimerRef.current) clearTimeout(rtTimerRef.current);
-    setRtPhase("idle");
-    setRtTrials([]);
-    setRtTooEarly(false);
-  }
-
   const savedAvgRt = entry?.avg_rt_ms ? Math.round(entry.avg_rt_ms) : null;
-  const localAvgRt = rtTrials.length === RT_TRIALS
-    ? Math.round(rtTrials.reduce((a, b) => a + b, 0) / rtTrials.length)
-    : null;
 
   return (
     <>
@@ -310,40 +264,34 @@ export function TodayJournal({ date }: Props) {
         </div>
       </div>
 
-      <fieldset className="journal-field">
-        <legend className="stat-label">
-          Reaction time <span className="stat-sublabel">optional · {RT_TRIALS} trials</span>
-        </legend>
-        <div className="rt-widget">
-          {rtPhase === "idle" && (
-            <button type="button" className="chip" onClick={startRt}>
-              Start test
-            </button>
-          )}
-          {(rtPhase === "waiting" || rtPhase === "ready") && (
-            <button
-              type="button"
-              className={`rt-target ${rtPhase === "ready" ? "rt-ready" : "rt-waiting"}`}
-              onClick={handleRtClick}
-            >
-              {rtPhase === "ready" ? "Click!" : "Wait…"}
-            </button>
-          )}
-          {rtPhase === "done" && (
-            <div className="rt-result">
-              <span className="rt-avg">{(localAvgRt ?? savedAvgRt ?? 0)} ms avg</span>
-              <button type="button" className="chip" onClick={resetRt}>Redo</button>
-            </div>
-          )}
-          {rtTooEarly && <p className="rt-feedback rt-too-early">Too early — wait for green!</p>}
-          {rtTrials.length > 0 && rtPhase !== "done" && (
-            <p className="rt-feedback">{rtTrials.length}/{RT_TRIALS} trials</p>
-          )}
-          {rtPhase !== "idle" && rtPhase !== "done" && (
-            <button type="button" className="rt-cancel" onClick={resetRt}>Cancel</button>
-          )}
-        </div>
-      </fieldset>
+      <ProcessingSpeedTask
+        date={date}
+        onComplete={async (payload) => {
+          const result = await submitProcessingSpeedSession(payload);
+          setProcessingResult(result);
+          await save({
+            avg_rt_ms: result.summary.median_rt_ms,
+            rt_trials: result.summary.attempted,
+          });
+        }}
+      />
+      {(processingResult || savedAvgRt !== null) && (
+        <fieldset className="journal-field">
+          <legend className="stat-label">Processing-speed result</legend>
+          <div className="rt-widget">
+            <p className="rt-feedback">
+              Median RT: {processingResult?.summary.median_rt_ms != null
+                ? `${Math.round(processingResult.summary.median_rt_ms)} ms`
+                : savedAvgRt != null ? `${savedAvgRt} ms` : "—"}
+            </p>
+            {processingResult && (
+              <p className="rt-feedback">
+                Accuracy: {Math.round(processingResult.summary.accuracy * 100)}% · Throughput: {processingResult.summary.throughput_pm.toFixed(1)}/min · Quality: {processingResult.summary.quality_flag}
+              </p>
+            )}
+          </div>
+        </fieldset>
+      )}
     </>
   );
 }

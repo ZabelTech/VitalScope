@@ -144,6 +144,66 @@ export interface CognitionDaily {
   rt_trials: number | null;
 }
 
+export type ProcessingSpeedDifficulty = "easy" | "moderate" | "hard";
+
+export interface ProcessingSpeedTrialInput {
+  trial_index: number;
+  difficulty: ProcessingSpeedDifficulty;
+  target_symbol: string;
+  candidate_symbols: string[];
+  correct_answer: boolean;
+  user_answer: boolean | null;
+  is_correct: boolean;
+  rt_ms: number | null;
+  timeout: boolean;
+  presented_at: string;
+}
+
+export interface ProcessingSpeedSessionInput {
+  date: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  stimulus_seed: string;
+  stimulus_version: string;
+  interruption_count: number;
+  focus_lost_ms_total: number;
+  device_info: Record<string, string>;
+  trials: ProcessingSpeedTrialInput[];
+}
+
+export interface ProcessingSpeedSessionResult {
+  session_id: number;
+  summary: {
+    attempted: number;
+    correct: number;
+    accuracy: number;
+    median_rt_ms: number | null;
+    throughput_pm: number;
+    quality_flag: "ok" | "low";
+  };
+  baseline: {
+    window_days: number;
+    count: number;
+    mean: number | null;
+    std: number | null;
+    confidence: "ok" | "low";
+  };
+  delta_vs_baseline: number | null;
+  z_score: number | null;
+}
+
+export interface ProcessingSpeedDaily {
+  date: string;
+  attempted: number;
+  correct: number;
+  accuracy: number;
+  median_rt_ms: number | null;
+  throughput_pm: number;
+  quality_flag: "ok" | "low";
+  created_at: string;
+}
+
 export type NutrientCategory = "macro" | "mineral" | "vitamin" | "bioactive";
 
 export interface NutrientDef {
