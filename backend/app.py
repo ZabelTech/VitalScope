@@ -398,6 +398,10 @@ def ensure_supplement_tables() -> None:
         )
         """
     )
+    try:
+        conn.execute("ALTER TABLE supplements ADD COLUMN nutrients TEXT")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -1975,20 +1979,28 @@ def list_journal(start: Optional[str] = None, end: Optional[str] = None):
 TIME_OF_DAY_ORDER = {"morning": 0, "noon": 1, "evening": 2}
 
 
+class SupplementNutrientIn(BaseModel):
+    key: str
+    amount: float
+
+
 class SupplementIn(BaseModel):
     name: str
     dosage: str
     time_of_day: Literal["morning", "noon", "evening"]
     sort_order: int = 0
+    nutrients: Optional[list[SupplementNutrientIn]] = None
 
 
 def _row_to_supplement(row: sqlite3.Row) -> dict:
+    raw = row["nutrients"] if "nutrients" in row.keys() else None
     return {
         "id": row["id"],
         "name": row["name"],
         "dosage": row["dosage"],
         "time_of_day": row["time_of_day"],
         "sort_order": row["sort_order"],
+        "nutrients": json.loads(raw) if raw else None,
     }
 
 
@@ -2011,17 +2023,21 @@ def list_supplements():
 
 @app.post("/api/supplements")
 def create_supplement(body: SupplementIn):
+    nutrients_json = (
+        json.dumps([n.dict() for n in body.nutrients]) if body.nutrients is not None else None
+    )
     conn = get_db()
     cur = conn.execute(
         """
-        INSERT INTO supplements (name, dosage, time_of_day, sort_order, created_at)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO supplements (name, dosage, time_of_day, sort_order, nutrients, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             body.name.strip(),
             body.dosage.strip(),
             body.time_of_day,
             body.sort_order,
+            nutrients_json,
             datetime.utcnow().isoformat(timespec="seconds"),
         ),
     )
@@ -2034,14 +2050,17 @@ def create_supplement(body: SupplementIn):
 
 @app.put("/api/supplements/{sid}")
 def update_supplement(sid: int, body: SupplementIn):
+    nutrients_json = (
+        json.dumps([n.dict() for n in body.nutrients]) if body.nutrients is not None else None
+    )
     conn = get_db()
     cur = conn.execute(
         """
         UPDATE supplements
-        SET name = ?, dosage = ?, time_of_day = ?, sort_order = ?
+        SET name = ?, dosage = ?, time_of_day = ?, sort_order = ?, nutrients = ?
         WHERE id = ?
         """,
-        (body.name.strip(), body.dosage.strip(), body.time_of_day, body.sort_order, sid),
+        (body.name.strip(), body.dosage.strip(), body.time_of_day, body.sort_order, nutrients_json, sid),
     )
     if cur.rowcount == 0:
         conn.close()
@@ -3043,6 +3062,66 @@ def put_nutrition_goals(body: NutritionGoalsBody):
     conn.commit()
     conn.close()
     return {"status": "ok", "count": len(body.goals)}
+
+
+@app.get("/api/nutrition/gaps")
+def nutrition_gaps(date: str):
+    conn = get_db()
+    goal_rows = conn.execute("SELECT nutrient_key, amount FROM nutrient_goals").fetchall()
+    goals = {r["nutrient_key"]: r["amount"] for r in goal_rows}
+    if not goals:
+        conn.close()
+        return []
+    consumed_rows = conn.execute(
+        """
+        SELECT mn.nutrient_key, SUM(mn.amount) AS total
+        FROM meals m
+        JOIN meal_nutrients mn ON mn.meal_id = m.id
+        WHERE m.date = ?
+        GROUP BY mn.nutrient_key
+        """,
+        (date,),
+    ).fetchall()
+    consumed: dict[str, float] = {r["nutrient_key"]: r["total"] for r in consumed_rows}
+    supplement_rows = conn.execute(
+        """
+        SELECT s.nutrients
+        FROM supplements s
+        JOIN journal_supplement_intake i ON i.supplement_id = s.id
+        WHERE i.date = ? AND i.taken = 1 AND s.nutrients IS NOT NULL
+        """,
+        (date,),
+    ).fetchall()
+    from_supplements: dict[str, float] = {}
+    for row in supplement_rows:
+        for n in json.loads(row["nutrients"]):
+            from_supplements[n["key"]] = from_supplements.get(n["key"], 0.0) + n["amount"]
+    def_rows = conn.execute("SELECT key, label, unit FROM nutrient_defs").fetchall()
+    defs = {r["key"]: {"label": r["label"], "unit": r["unit"]} for r in def_rows}
+    conn.close()
+    result = []
+    for key, target in goals.items():
+        c = consumed.get(key, 0.0)
+        s = from_supplements.get(key, 0.0)
+        total = c + s
+        pct = (total / target * 100) if target > 0 else 0
+        if pct >= 110:
+            status = "high"
+        elif pct >= 80:
+            status = "ok"
+        else:
+            status = "low"
+        result.append({
+            "key": key,
+            "label": defs.get(key, {}).get("label", key),
+            "unit": defs.get(key, {}).get("unit", ""),
+            "consumed": c,
+            "from_supplements": s,
+            "target": target,
+            "delta": total - target,
+            "status": status,
+        })
+    return result
 
 
 # --- Health goals ---

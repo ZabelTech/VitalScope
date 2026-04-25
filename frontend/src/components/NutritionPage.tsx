@@ -18,6 +18,7 @@ import {
 } from "../api";
 import type { GlucoseReading, Meal, NutrientCategory, NutrientDef } from "../types";
 import { MealFormFields, type MealFormOutput } from "./MealFormFields";
+import { NutritionGaps } from "./NutritionGaps";
 import { WaterQuickLog } from "./WaterQuickLog";
 
 function todayISO(): string {
@@ -69,6 +70,7 @@ export function NutritionPage() {
   const [defs, setDefs] = useState<NutrientDef[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [gapsKey, setGapsKey] = useState(0);
 
   useEffect(() => {
     listNutrientDefs().then(setDefs).catch(() => setStatus("error"));
@@ -79,6 +81,7 @@ export function NutritionPage() {
     try {
       setMeals(await listMeals(date, date));
       setStatus("idle");
+      setGapsKey((k) => k + 1);
     } catch {
       setStatus("error");
     }
@@ -169,6 +172,8 @@ export function NutritionPage() {
           onAdded={reload}
         />
       </div>
+
+      <NutritionGaps date={date} refreshKey={gapsKey} asCard />
 
       <WaterQuickLog date={date} />
     </div>

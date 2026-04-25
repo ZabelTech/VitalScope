@@ -249,16 +249,33 @@ export interface WaterDaily {
 
 export type TimeOfDay = "morning" | "noon" | "evening";
 
+export interface SupplementNutrient {
+  key: string;
+  amount: number;
+}
+
 export interface Supplement {
   id: number;
   name: string;
   dosage: string;
   time_of_day: TimeOfDay;
   sort_order: number;
+  nutrients: SupplementNutrient[] | null;
 }
 
 export interface SupplementIntake extends Supplement {
   taken: boolean;
+}
+
+export interface NutritionGapItem {
+  key: string;
+  label: string;
+  unit: string;
+  consumed: number;
+  from_supplements: number;
+  target: number;
+  delta: number;
+  status: "ok" | "low" | "high";
 }
 
 export interface Workout {
