@@ -13,6 +13,7 @@ import type {
   GenomeParseResult,
   GenomeUpload,
   GenomeUploadInput,
+  GenomeVariant,
   JournalEntry,
   JournalQuestion,
   JournalQuestionResponse,
@@ -575,6 +576,12 @@ export async function analyzeNightBriefing(date: string, regenerate = false): Pr
 
 export async function fetchGenotypePhenotype(): Promise<GenotypePhenotypeData> {
   const res = await apiFetch("/api/orient/genotype-phenotype");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchGenomeVariants(upload_id: number): Promise<Record<string, GenomeVariant[]>> {
+  const res = await apiFetch(`/api/genome/variants/${upload_id}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
