@@ -1,11 +1,19 @@
 import { format, subYears } from "date-fns";
 import { useCallback, useEffect, useState } from "react";
-import { deleteGenomeUpload, listGenomeUploads } from "../api";
-import type { GenomeUpload } from "../types";
+import { deleteGenomeUpload, fetchGenomeVariants, listGenomeUploads } from "../api";
+import type { GenomeUpload, GenomeVariant } from "../types";
 import { ImageUpload } from "./ImageUpload";
 
 const today = format(new Date(), "yyyy-MM-dd");
 const fiveYearsAgo = format(subYears(new Date(), 5), "yyyy-MM-dd");
+
+const DOMAIN_LABELS: Record<string, string> = {
+  performance: "Performance",
+  nutrition: "Nutrition",
+  longevity: "Longevity",
+  pharmacogenomics: "Pharmacogenomics",
+  recovery: "Recovery",
+};
 
 export function GenomeSection() {
   const [uploads, setUploads] = useState<GenomeUpload[]>([]);
@@ -70,6 +78,15 @@ export function GenomeSection() {
 }
 
 function GenomeDetail({ upload, onDelete }: { upload: GenomeUpload; onDelete: () => void }) {
+  const [variantsByDomain, setVariantsByDomain] = useState<Record<string, GenomeVariant[]> | null>(null);
+  const [varErr, setVarErr] = useState(false);
+
+  useEffect(() => {
+    fetchGenomeVariants(upload.id)
+      .then(setVariantsByDomain)
+      .catch(() => setVarErr(true));
+  }, [upload.id]);
+
   return (
     <div className="bloodwork-panel-detail">
       <div className="genome-parse-stats">
@@ -93,6 +110,54 @@ function GenomeDetail({ upload, onDelete }: { upload: GenomeUpload; onDelete: ()
         </p>
       )}
       {upload.notes && <p className="journal-hint">{upload.notes}</p>}
+
+      {variantsByDomain === null && !varErr && (
+        <p className="journal-hint">Loading variant interpretations…</p>
+      )}
+      {varErr && (
+        <p className="journal-hint">Could not load variant interpretations.</p>
+      )}
+      {variantsByDomain && Object.keys(variantsByDomain).length === 0 && (
+        <p className="journal-hint">No registry variants detected in this file. Upload an annotated VCF with RS IDs to see interpretations.</p>
+      )}
+      {variantsByDomain && Object.keys(variantsByDomain).length > 0 && (
+        <div className="genome-variants-section">
+          {Object.entries(variantsByDomain).map(([domain, variants]) => (
+            <div key={domain} className="genome-domain-group">
+              <h4 className="genome-domain-label">
+                {DOMAIN_LABELS[domain] ?? domain}
+              </h4>
+              <div className="bloodwork-draft-table-wrap">
+                <table className="bloodwork-draft-table bloodwork-draft-table--readonly genome-variants-table">
+                  <thead>
+                    <tr>
+                      <th>Gene / Variant</th>
+                      <th>Your genotype</th>
+                      <th>Interpretation</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {variants.map((v) => (
+                      <tr key={v.rs_id}>
+                        <td>
+                          <span className="genome-variant-gene">{v.gene}</span>
+                          <span className="genome-variant-name">{v.variant_name}</span>
+                          <span className="genome-variant-rsid">{v.rs_id}</span>
+                        </td>
+                        <td>
+                          <span className="genome-variant-label">{v.impact_label}</span>
+                        </td>
+                        <td className="genome-variant-interp">{v.interpretation}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
       <div className="journal-actions">
         <button
           type="button"
