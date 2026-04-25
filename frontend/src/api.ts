@@ -1,6 +1,7 @@
 import type {
   AiSettings,
   AiSettingsUpdate,
+  AnalyteDataPoint,
   BloodworkAnalysisResult,
   GenotypePhenotypeData,
   BloodworkPanel,
@@ -586,6 +587,16 @@ export async function getBloodworkPanel(id: number): Promise<BloodworkPanel> {
 export async function deleteBloodworkPanel(id: number): Promise<void> {
   const res = await apiFetch(`/api/bloodwork-panels/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function getAnalyteHistory(
+  analyte: string,
+): Promise<AnalyteDataPoint[]> {
+  const res = await apiFetch(
+    `/api/bloodwork/analyte/${encodeURIComponent(analyte)}`,
+  );
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // --- Genome uploads ---

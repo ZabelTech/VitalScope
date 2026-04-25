@@ -457,9 +457,18 @@ export interface BloodworkPanel {
   lab_name: string | null;
   notes: string | null;
   confidence: "low" | "medium" | "high" | null;
+  narrative: string | null;
   created_at: string;
   result_count?: number;
   results?: BloodworkResult[];
+}
+
+export interface AnalyteDataPoint {
+  panel_id: number;
+  date: string;
+  value: number | null;
+  value_text: string | null;
+  unit: string | null;
 }
 
 export interface BloodworkPanelInput {
