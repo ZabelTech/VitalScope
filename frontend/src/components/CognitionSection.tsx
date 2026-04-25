@@ -141,7 +141,7 @@ export function CognitionSection() {
         <>
           <h3 className="chart-subhead">Processing speed</h3>
           <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={processing}>
+            <ComposedChart data={processing ?? []}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
