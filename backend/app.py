@@ -63,6 +63,7 @@ AI_EFFORT: str = os.environ.get("VITALSCOPE_AI_EFFORT", "medium")
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
+BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("BRIEFING_AI_TIMEOUT_SEC", "90"))
 NIGHT_BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("NIGHT_BRIEFING_AI_TIMEOUT_SEC", "90"))
 
 _AI_KEY_BY_PROVIDER = {
@@ -613,25 +614,16 @@ def ensure_daily_landing_tables() -> None:
         )
         """
     )
-    conn.commit()
-    conn.close()
-
-
-ensure_daily_landing_tables()
-
-
-def ensure_briefings_table() -> None:
-    conn = get_db()
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS briefings (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
             date         TEXT NOT NULL,
-            kind         TEXT NOT NULL CHECK (kind IN ('night', 'morning')),
+            kind         TEXT NOT NULL,
             payload_json TEXT NOT NULL,
             model        TEXT NOT NULL,
-            created_at   TEXT NOT NULL,
-            UNIQUE(date, kind)
+            provider     TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            PRIMARY KEY (date, kind)
         )
         """
     )
@@ -639,7 +631,8 @@ def ensure_briefings_table() -> None:
     conn.close()
 
 
-ensure_briefings_table()
+ensure_daily_landing_tables()
+
 
 
 def _load_ai_config_from_db() -> None:
@@ -2379,6 +2372,8 @@ class DemoProvider(AIProvider):
         tool_name = tool.get("name")
         if tool_name == "record_health_orientation":
             return _demo_orient_payload()
+        if tool_name == "record_morning_briefing":
+            return _demo_morning_briefing_payload()
         if tool_name == "record_night_briefing":
             return _demo_night_briefing_payload()
         return {}
@@ -2512,6 +2507,37 @@ def _demo_orient_payload() -> dict:
                     "Ensure protein target is met on strength-training days to support lean mass.",
                 ],
             },
+        ],
+    }
+
+
+def _demo_morning_briefing_payload() -> dict:
+    return {
+        "recovery_readout": (
+            "HRV 68 ms (above 62 ms weekly avg), resting HR 52 bpm, body battery 84/100, "
+            "sleep 7.4 h with 1.6 h deep — well recovered."
+        ),
+        "yesterday_carryover": (
+            "Yesterday's 45-min Zone 2 run added moderate aerobic load; no residual fatigue signal. "
+            "Protein intake was 112 g against a ~160 g target — consider a higher-protein first meal."
+        ),
+        "tonight_outlook": (
+            "If training intensity stays low-to-moderate today, tonight's HRV should remain elevated. "
+            "Aim for last caffeine before 14:00 and last meal 2–3 h before bed to protect sleep architecture."
+        ),
+        "whats_up": [
+            "Morning supplements: Vitamin D 5000 IU, Magnesium Glycinate 400 mg — not yet logged.",
+            "No meals logged yet today.",
+        ],
+        "whats_planned": [
+            "No training sessions planned for today.",
+            "Active recovery or light walk recommended given yesterday's run.",
+        ],
+        "suggestions": [
+            "Protein deficit from yesterday (~48 g short): front-load protein at breakfast with eggs or Greek yogurt.",
+            "Body battery charged to 84 — a moderate workout today is viable if planned.",
+            "Last caffeine cut-off: 14:00 to protect deep sleep given yesterday's high sleep stress (28).",
+            "HRV above baseline — good window for strength training if planned this week.",
         ],
     }
 
@@ -3245,6 +3271,320 @@ async def orient_analyze(body: OrientAnalyzeBody):
     }
 
 
+# --- Morning briefing ---
+
+_MORNING_BRIEFING_TOOL = {
+    "name": "record_morning_briefing",
+    "description": (
+        "Record a structured morning briefing that synthesises last night's recovery, "
+        "yesterday's training load, and today's plan into a single actionable read. "
+        "Keep tone informative and non-prescriptive — frame observations around the "
+        "user's own data, not generic health advice."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "recovery_readout": {
+                "type": "string",
+                "description": (
+                    "One concise sentence capturing the body's state this morning. "
+                    "Reference actual values: e.g. 'HRV 68 ms (above 62 ms baseline), "
+                    "resting HR 52 bpm, body battery 84/100, sleep 7.4 h — well recovered.'"
+                ),
+            },
+            "yesterday_carryover": {
+                "type": "string",
+                "description": (
+                    "What from yesterday still matters today: accumulated fatigue, "
+                    "sleep debt, nutrition gaps, or training adaptations. 1-2 sentences "
+                    "grounded in the data."
+                ),
+            },
+            "tonight_outlook": {
+                "type": "string",
+                "description": (
+                    "How choices today will shape tonight's sleep quality and tomorrow's "
+                    "recovery: caffeine cutoff, training intensity window, last-meal timing. "
+                    "1-2 sentences grounded in the data."
+                ),
+            },
+            "whats_up": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Scheduled or already-logged events for today: supplements, meals, "
+                    "planned activities, journal note. Each item is one short bullet. "
+                    "Leave empty if nothing is logged or planned."
+                ),
+            },
+            "whats_planned": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "The day's planned structure: training sessions, fasting window, "
+                    "nutrition targets. Each item is one short bullet. "
+                    "Leave empty if nothing is planned."
+                ),
+            },
+            "suggestions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "2-4 concrete, non-prescriptive nudges grounded directly in the data. "
+                    "Reference specific values. Avoid generic advice."
+                ),
+            },
+        },
+        "required": [
+            "recovery_readout",
+            "yesterday_carryover",
+            "tonight_outlook",
+            "whats_up",
+            "whats_planned",
+            "suggestions",
+        ],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    today_str = today.isoformat()
+    yesterday_str = yesterday.isoformat()
+
+    def row_to_dict(row) -> Optional[dict]:
+        return dict(row) if row else None
+
+    def rows_to_list(rows) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    sleep = row_to_dict(conn.execute(
+        "SELECT date, sleep_score, sleep_score_quality, "
+        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
+        "ROUND(light_sleep_seconds / 3600.0, 1) AS light_hours, "
+        "sleep_start, sleep_end, avg_spo2, avg_sleep_stress "
+        "FROM sleep_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    hrv = row_to_dict(conn.execute(
+        "SELECT weekly_avg, last_night_avg, "
+        "baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    hr = row_to_dict(conn.execute(
+        "SELECT resting_hr, avg_7d_resting_hr FROM heart_rate_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    body_battery = row_to_dict(conn.execute(
+        "SELECT charged, drained FROM body_battery_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    garmin_sessions = rows_to_list(conn.execute(
+        "SELECT name, sport_type, "
+        "ROUND(duration_sec / 60.0) AS duration_min, "
+        "ROUND(distance_m / 1000.0, 2) AS distance_km, "
+        "avg_hr, calories, training_effect, anaerobic_te "
+        "FROM garmin_activities WHERE date = ? ORDER BY start_time",
+        (yesterday_str,),
+    ).fetchall())
+
+    strong_workouts = rows_to_list(conn.execute(
+        "SELECT w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date = ? GROUP BY w.id ORDER BY w.date",
+        (yesterday_str,),
+    ).fetchall())
+
+    steps = row_to_dict(conn.execute(
+        "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    stress = row_to_dict(conn.execute(
+        "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    journal = row_to_dict(conn.execute(
+        "SELECT morning_feeling, drank_alcohol, alcohol_amount, notes "
+        "FROM journal_entries WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    nutrition = row_to_dict(conn.execute(
+        "SELECT "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount ELSE 0 END)) AS calories_kcal, "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount ELSE 0 END)) AS protein_g, "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount ELSE 0 END)) AS carbs_g, "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='fat_g' THEN mn.amount ELSE 0 END)) AS fat_g "
+        "FROM meals m JOIN meal_nutrients mn ON mn.meal_id = m.id "
+        "WHERE m.date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    water = row_to_dict(conn.execute(
+        "SELECT ROUND(SUM(amount_ml)) AS total_ml FROM water_intake WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    planned_activities = rows_to_list(conn.execute(
+        "SELECT sport_type, target_distance_m, target_duration_sec, notes "
+        "FROM planned_activities WHERE date = ? ORDER BY id",
+        (today_str,),
+    ).fetchall())
+
+    supplements = rows_to_list(conn.execute(
+        "SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken "
+        "FROM supplements s "
+        "LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ? "
+        "ORDER BY s.sort_order",
+        (today_str,),
+    ).fetchall())
+
+    bp = conn.execute(
+        "SELECT id, date FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    open_bloodwork_alerts: list[str] = []
+    if bp:
+        flagged = conn.execute(
+            "SELECT analyte, value, value_text, unit, flag "
+            "FROM bloodwork_results WHERE panel_id = ? "
+            "AND flag IS NOT NULL AND flag != 'normal' "
+            "ORDER BY sort_order LIMIT 10",
+            (bp["id"],),
+        ).fetchall()
+        open_bloodwork_alerts = [
+            f"{r['analyte']}: {r['value'] if r['value'] is not None else r['value_text']} "
+            f"{r['unit'] or ''} ({r['flag']})"
+            for r in flagged
+        ]
+
+    return {
+        "briefing_date": today_str,
+        "yesterday": yesterday_str,
+        "last_night_sleep": sleep,
+        "hrv": hrv,
+        "resting_hr": hr,
+        "body_battery_at_wake": body_battery,
+        "yesterday_garmin_sessions": garmin_sessions,
+        "yesterday_strong_workouts": strong_workouts,
+        "yesterday_steps": steps,
+        "yesterday_stress": stress,
+        "yesterday_journal": journal,
+        "yesterday_nutrition": nutrition,
+        "yesterday_water": water,
+        "todays_planned_activities": planned_activities,
+        "todays_supplements": supplements,
+        "open_bloodwork_alerts": open_bloodwork_alerts,
+    }
+
+
+class MorningBriefingBody(BaseModel):
+    regenerate: bool = False
+
+
+@app.post("/api/briefing/morning")
+async def morning_briefing(body: MorningBriefingBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    today_str = date.today().isoformat()
+    conn = get_db()
+    try:
+        if not body.regenerate:
+            cached = conn.execute(
+                "SELECT payload_json, model, provider, generated_at "
+                "FROM briefings WHERE date = ? AND kind = 'morning'",
+                (today_str,),
+            ).fetchone()
+            if cached:
+                payload = json.loads(cached["payload_json"])
+                return {
+                    **payload,
+                    "model": cached["model"],
+                    "provider": cached["provider"],
+                    "generated_at": cached["generated_at"],
+                    "briefing_date": today_str,
+                    "cached": True,
+                }
+        metrics = _gather_morning_metrics(conn)
+    finally:
+        conn.close()
+
+    metrics_json = json.dumps(metrics, indent=2, default=str)
+
+    system_prompt = (
+        "You are a personal health assistant with expertise in recovery science, "
+        "sleep physiology, and training load management. You produce a concise morning "
+        "briefing that helps the user start the day with clarity: what their body is "
+        "telling them, what yesterday's choices mean for today, and how today's choices "
+        "will shape tonight's recovery. "
+        "Be specific: always reference actual numbers from the data. "
+        "Do not give medical advice. Avoid generic wellness platitudes. "
+        "Keep tone practical and grounded."
+    )
+
+    user_text = (
+        f"Generate my morning briefing for {today_str}. "
+        "Last night's sleep, this morning's HRV/HR/body-battery, yesterday's training "
+        "and nutrition, today's plan, and supplement schedule are all included below.\n\n"
+        f"Data (JSON):\n{metrics_json}"
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
+        tool=_MORNING_BRIEFING_TOOL,
+        timeout_sec=BRIEFING_AI_TIMEOUT_SEC,
+    )
+
+    result = {
+        "recovery_readout": str(payload.get("recovery_readout") or ""),
+        "yesterday_carryover": str(payload.get("yesterday_carryover") or ""),
+        "tonight_outlook": str(payload.get("tonight_outlook") or ""),
+        "whats_up": [str(s) for s in (payload.get("whats_up") or []) if s],
+        "whats_planned": [str(s) for s in (payload.get("whats_planned") or []) if s],
+        "suggestions": [str(s) for s in (payload.get("suggestions") or []) if s],
+    }
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn2 = get_db()
+    try:
+        conn2.execute(
+            "INSERT OR REPLACE INTO briefings "
+            "(date, kind, payload_json, model, provider, generated_at) "
+            "VALUES (?, 'morning', ?, ?, ?, ?)",
+            (today_str, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at),
+        )
+        conn2.commit()
+    finally:
+        conn2.close()
+
+    return {
+        **result,
+        "model": AI_MODEL,
+        "provider": AI_PROVIDER,
+        "generated_at": generated_at,
+        "briefing_date": today_str,
+        "cached": False,
+    }
+
+
 # --- Night briefing AI analysis ---
 
 _NIGHT_BRIEFING_TOOL = {
@@ -3530,19 +3870,14 @@ async def night_briefing(body: NightBriefingBody):
         "tomorrow_setup": [str(i) for i in (payload.get("tomorrow_setup") or []) if i],
     }
 
-    now = datetime.utcnow().isoformat(timespec="seconds")
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     conn = get_db()
     try:
         conn.execute(
-            """
-            INSERT INTO briefings (date, kind, payload_json, model, created_at)
-            VALUES (?, 'night', ?, ?, ?)
-            ON CONFLICT(date, kind) DO UPDATE SET
-                payload_json = excluded.payload_json,
-                model = excluded.model,
-                created_at = excluded.created_at
-            """,
-            (target_date, json.dumps(result), AI_MODEL, now),
+            "INSERT OR REPLACE INTO briefings "
+            "(date, kind, payload_json, model, provider, generated_at) "
+            "VALUES (?, 'night', ?, ?, ?, ?)",
+            (target_date, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at),
         )
         conn.commit()
     finally:

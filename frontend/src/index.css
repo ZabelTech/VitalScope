@@ -1966,6 +1966,65 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   padding-top: 4px;
 }
 
+/* Morning briefing */
+.briefing-result {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.briefing-meta {
+  font-size: 0.75rem;
+  color: #64748b;
+  margin-bottom: 4px;
+}
+
+.briefing-block {
+  background: #1e293b;
+  border-left: 3px solid #3b82f6;
+  border-radius: 0 8px 8px 0;
+  padding: 12px 16px;
+}
+
+.briefing-block-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.briefing-prose {
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+  margin: 0;
+}
+
+.briefing-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  color: #e2e8f0;
+}
+
+.briefing-list li + li {
+  margin-top: 4px;
+}
+
+.briefing-suggestions li {
+  color: #fde68a;
+}
+
+.briefing-empty {
+  font-size: 0.85rem;
+  color: #475569;
+  margin: 0;
+  font-style: italic;
+}
+
 /* Night briefing */
 .night-briefing {
   display: flex;

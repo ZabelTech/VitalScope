@@ -18,6 +18,7 @@ import type {
   NutrientDef,
   NutrientCategory,
   NutrientGoals,
+  MorningBriefing,
   NightBriefing,
   NutritionDailyTotals,
   OrientAnalysis,
@@ -509,6 +510,21 @@ export async function listGenomeUploads(start: string, end: string): Promise<Gen
 export async function deleteGenomeUpload(id: number): Promise<void> {
   const res = await apiFetch(`/api/genome-uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Morning briefing ---
+
+export async function getMorningBriefing(regenerate = false): Promise<MorningBriefing> {
+  const res = await apiFetch("/api/briefing/morning", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ regenerate }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
 }
 
 // --- Night briefing ---
