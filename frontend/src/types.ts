@@ -384,6 +384,20 @@ export interface OrientAnalysis {
   topics: OrientTopic[];
 }
 
+export interface MorningBriefing {
+  recovery_readout: string;
+  yesterday_carryover: string;
+  tonight_outlook: string;
+  whats_up: string[];
+  whats_planned: string[];
+  suggestions: string[];
+  model: string;
+  provider: string;
+  generated_at: string;
+  briefing_date: string;
+  cached: boolean;
+}
+
 export interface GenomeParseResult {
   variant_count: number;
   rs_count: number;
