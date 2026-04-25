@@ -57,6 +57,8 @@ python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sq
   - Daily nutrient totals via `GET /api/nutrition/daily` return `[{ date, totals: { key: amount } }]` — shape is deliberately keyed by nutrient so a chart can pluck one key without client-side grouping. When adding a chart, import `fetchNutritionDaily`/`fetchWaterDaily` directly rather than shoehorning into `useMetricData` (the shape doesn't match `fetchMetric`'s generic `T`).
 - **Bloodwork**: two tables. `bloodwork_panels(id PK, date, source, source_upload_id, lab_name, notes, confidence, created_at)` — one row per lab report. `bloodwork_results(id PK, panel_id FK, analyte, value, value_text, unit, reference_low, reference_high, reference_text, flag, sort_order)` with `ON DELETE CASCADE` from panels. Values use `value` for numbers, `value_text` for qualitative results (`"Negative"` etc.) — never both. Reference ranges use the low/high pair for numeric ranges, `reference_text` for anything else. The AI parses PDFs only on the **anthropic** provider (OpenAI chat-completions can't ingest PDFs); `OpenAIProvider.analyze_with_tool` raises 400 on `application/pdf` mime.
 - **Uploads**: `uploads.kind` is a `CHECK` whitelist `('meal','form','bloodwork')`. To add a new kind, extend `Literal` on `/api/uploads`, `/api/uploads` list, and run the table-rebuild migration in `ensure_daily_landing_tables` (SQLite can't `ALTER` a `CHECK`). Bloodwork uploads additionally accept `application/pdf` and use a 10 MB size cap (everything else stays at 5 MB).
+- **Briefings**: `briefings(date, kind, payload_json, model, provider, generated_at, PRIMARY KEY (date, kind))` — one row per date+kind. `kind='morning'` is the morning briefing. `payload_json` is the full AI result as JSON. Subsequent requests for the same date+kind return the cached row; pass `{ "regenerate": true }` to `POST /api/briefing/morning` to force a fresh generation (overwrites the existing row with `INSERT OR REPLACE`).
+- **Processing-speed task**: `cog_processing_sessions` stores one row per completed run (summary metrics + quality flags + interruption telemetry + deterministic `stimulus_seed`). `cog_processing_trials` stores per-trial payload (`PRIMARY KEY (session_id, trial_index)`, `ON DELETE CASCADE`). Use `POST /api/cognition/processing-speed/session` for writes and `GET /api/cognition/processing-speed/daily` / `GET /api/cognition/processing-speed/baseline` for trend + baseline reads. `journal_entries.avg_rt_ms` / `rt_trials` are still populated for backwards-compatible charts and should mirror the latest session summary for that date.
 
 ## Sync-script conventions
 
@@ -141,12 +143,13 @@ Timeout env vars (all default shown):
 - `VITALSCOPE_AI_TIMEOUT_SEC=20` — image/form-check analysis
 - `BLOODWORK_AI_TIMEOUT_SEC=60` — bloodwork PDF/image extraction
 - `ORIENT_AI_TIMEOUT_SEC=90` — orient-phase text analysis (more tokens)
+- `BRIEFING_AI_TIMEOUT_SEC=90` — morning briefing text analysis
 
 ### AI provider interface
 
 Both `AnthropicProvider` and `OpenAIProvider` implement two methods:
 - `analyze_with_tool(system, user_text, media_b64, mime, tool, timeout_sec)` — vision input (image/PDF). Only Anthropic accepts PDFs.
-- `analyze_text_with_tool(system, user_text, tool, timeout_sec)` — text-only input; no media. Used by the orient analysis endpoint.
+- `analyze_text_with_tool(system, user_text, tool, timeout_sec)` — text-only input; no media. Used by the orient analysis and morning briefing endpoints.
 
 When adding a new AI endpoint that doesn't need an image, use `_call_ai_text_tool(...)` instead of `_call_ai_tool(...)`.
 
@@ -154,7 +157,11 @@ When adding a new AI endpoint that doesn't need an image, use `_call_ai_text_too
 
 Aggregates the last 14 days (configurable via `window_days`, 7–30) of wearable and workout data from the DB — heart rate, HRV, sleep, stress, body battery, steps, weight, recent workouts, and the latest bloodwork panel's flagged results — then calls the configured AI provider via `analyze_text_with_tool` to produce a structured report split into four topics: `health`, `performance`, `recovery`, `body_composition`. Each topic includes `insights`, `alerts`, and `recommendations`. Frontend component: `OrientAiAnalysis.tsx` in the Orient → AI Analysis section.
 
-When `VITALSCOPE_DEMO=1`, `_get_ai_provider()` short-circuits to `DemoProvider` (also in `backend/app.py`) — no API key is consulted, the three analyse endpoints all succeed, and the returned `model` / `ai_provider` strings are both `"demo"`. `DemoProvider.analyze_with_tool` dispatches on `tool["name"]` to a hand-written payload per endpoint (`_demo_meal_payload`, `_demo_form_check_payload`, `_demo_bloodwork_payload`); if you add a new analyse endpoint, add a matching case there too or the demo build will 500 on an empty dict.
+### Morning briefing (`POST /api/briefing/morning`)
+
+Aggregates today's recovery data (last night's sleep, HRV, resting HR, body battery) and yesterday's load (Garmin sessions, Strong workouts, steps, stress, nutrition, journal entry) plus today's plan (planned activities, supplements schedule), then calls the AI provider via `analyze_text_with_tool` to produce six fields: `recovery_readout`, `yesterday_carryover`, `tonight_outlook`, `whats_up`, `whats_planned`, `suggestions`. Result is cached per-date in the `briefings(date, kind, payload_json, model, provider, generated_at, PRIMARY KEY (date, kind))` table; pass `{ "regenerate": true }` to bypass the cache. Frontend component: `MorningBriefing.tsx` in Act → Morning briefing (top of Today).
+
+When `VITALSCOPE_DEMO=1`, `_get_ai_provider()` short-circuits to `DemoProvider` (also in `backend/app.py`) — no API key is consulted, all analyse endpoints succeed, and the returned `model` / `ai_provider` strings are both `"demo"`. `DemoProvider.analyze_with_tool` dispatches on `tool["name"]` for vision endpoints (`_demo_meal_payload`, `_demo_form_check_payload`, `_demo_bloodwork_payload`); `DemoProvider.analyze_text_with_tool` dispatches for text-only endpoints (`_demo_orient_payload`, `_demo_morning_briefing_payload`). If you add a new analyse endpoint, add a matching case in the relevant method or the demo build will 500 on an empty dict.
 
 ## Before reporting a task done
 
