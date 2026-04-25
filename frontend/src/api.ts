@@ -34,6 +34,7 @@ import type {
   MorningBriefing,
   NightBriefing,
   NutritionDailyTotals,
+  NutritionGapItem,
   OrientAnalysis,
   PharmacogenomicsProfile,
   PlannedActivity,
@@ -146,6 +147,7 @@ export interface SupplementInput {
   dosage: string;
   time_of_day: TimeOfDay;
   sort_order?: number;
+  nutrients?: { key: string; amount: number }[] | null;
 }
 
 export async function listSupplements(): Promise<Supplement[]> {
@@ -400,6 +402,13 @@ export async function updateNutritionGoals(goals: NutrientGoals): Promise<void> 
     body: JSON.stringify({ goals }),
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchNutritionGaps(date: string): Promise<NutritionGapItem[]> {
+  const params = new URLSearchParams({ date });
+  const res = await apiFetch(`/api/nutrition/gaps?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // --- Planned activities ---
