@@ -405,6 +405,50 @@ def ensure_supplement_tables() -> None:
 ensure_supplement_tables()
 
 
+def ensure_protocol_tables() -> None:
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS protocols (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category TEXT NOT NULL CHECK (category IN (
+                'drug','peptide','ped','supplement_stack','hormesis','fasting','training_block'
+            )),
+            dose TEXT,
+            unit TEXT,
+            cadence TEXT,
+            start_date TEXT NOT NULL,
+            end_date TEXT,
+            notes TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS protocol_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            protocol_id INTEGER NOT NULL,
+            date TEXT NOT NULL,
+            time TEXT,
+            dose TEXT,
+            duration_minutes INTEGER,
+            notes TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (protocol_id) REFERENCES protocols(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_events_date ON protocol_events(date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_events_pid ON protocol_events(protocol_id)")
+    conn.commit()
+    conn.close()
+
+
+ensure_protocol_tables()
+
+
 NUTRIENT_SEED = [
     ("calories_kcal", "Calories", "kcal", "macro", 0),
     ("protein_g", "Protein", "g", "macro", 1),
@@ -2114,6 +2158,245 @@ def save_journal_responses(entry_date: str, body: JournalResponsesBody):
     conn.commit()
     conn.close()
     return {"status": "ok", "date": entry_date, "count": len(body.items)}
+
+
+# --- Protocols ---
+
+PROTOCOL_CATEGORY_LABELS = {
+    "drug": "Drug",
+    "peptide": "Peptide",
+    "ped": "PED",
+    "supplement_stack": "Stack",
+    "hormesis": "Hormesis",
+    "fasting": "Fasting",
+    "training_block": "Training",
+}
+
+ProtocolCategory = Literal[
+    "drug", "peptide", "ped", "supplement_stack", "hormesis", "fasting", "training_block"
+]
+
+
+class ProtocolIn(BaseModel):
+    name: str
+    category: ProtocolCategory
+    dose: Optional[str] = None
+    unit: Optional[str] = None
+    cadence: Optional[str] = None
+    start_date: str
+    end_date: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class ProtocolEventIn(BaseModel):
+    protocol_id: int
+    date: str
+    time: Optional[str] = None
+    dose: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    notes: Optional[str] = None
+
+
+def _row_to_protocol(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "category": row["category"],
+        "dose": row["dose"],
+        "unit": row["unit"],
+        "cadence": row["cadence"],
+        "start_date": row["start_date"],
+        "end_date": row["end_date"],
+        "notes": row["notes"],
+        "created_at": row["created_at"],
+    }
+
+
+def _row_to_protocol_event(row: sqlite3.Row) -> dict:
+    return {
+        "id": row["id"],
+        "protocol_id": row["protocol_id"],
+        "date": row["date"],
+        "time": row["time"],
+        "dose": row["dose"],
+        "duration_minutes": row["duration_minutes"],
+        "notes": row["notes"],
+        "created_at": row["created_at"],
+    }
+
+
+@app.get("/api/protocols")
+def list_protocols():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM protocols ORDER BY start_date DESC, id DESC"
+    ).fetchall()
+    conn.close()
+    return [_row_to_protocol(r) for r in rows]
+
+
+@app.post("/api/protocols")
+def create_protocol(body: ProtocolIn):
+    conn = get_db()
+    cur = conn.execute(
+        """
+        INSERT INTO protocols (name, category, dose, unit, cadence, start_date, end_date, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            body.name.strip(),
+            body.category,
+            body.dose.strip() if body.dose else None,
+            body.unit.strip() if body.unit else None,
+            body.cadence.strip() if body.cadence else None,
+            body.start_date,
+            body.end_date,
+            body.notes.strip() if body.notes else None,
+            datetime.utcnow().isoformat(timespec="seconds"),
+        ),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM protocols WHERE id = ?", (new_id,)).fetchone()
+    conn.close()
+    return _row_to_protocol(row)
+
+
+@app.put("/api/protocols/{pid}")
+def update_protocol(pid: int, body: ProtocolIn):
+    conn = get_db()
+    cur = conn.execute(
+        """
+        UPDATE protocols
+        SET name = ?, category = ?, dose = ?, unit = ?, cadence = ?,
+            start_date = ?, end_date = ?, notes = ?
+        WHERE id = ?
+        """,
+        (
+            body.name.strip(),
+            body.category,
+            body.dose.strip() if body.dose else None,
+            body.unit.strip() if body.unit else None,
+            body.cadence.strip() if body.cadence else None,
+            body.start_date,
+            body.end_date,
+            body.notes.strip() if body.notes else None,
+            pid,
+        ),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Protocol not found")
+    conn.commit()
+    row = conn.execute("SELECT * FROM protocols WHERE id = ?", (pid,)).fetchone()
+    conn.close()
+    return _row_to_protocol(row)
+
+
+@app.delete("/api/protocols/{pid}")
+def delete_protocol(pid: int):
+    conn = get_db()
+    conn.execute("DELETE FROM protocol_events WHERE protocol_id = ?", (pid,))
+    cur = conn.execute("DELETE FROM protocols WHERE id = ?", (pid,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Protocol not found")
+    return {"status": "ok"}
+
+
+@app.get("/api/protocol-events")
+def list_protocol_events(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    protocol_id: Optional[int] = None,
+):
+    conn = get_db()
+    clauses = []
+    params: list = []
+    if start:
+        clauses.append("date >= ?")
+        params.append(start)
+    if end:
+        clauses.append("date <= ?")
+        params.append(end)
+    if protocol_id is not None:
+        clauses.append("protocol_id = ?")
+        params.append(protocol_id)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    rows = conn.execute(
+        f"SELECT * FROM protocol_events {where} ORDER BY date DESC, id DESC",
+        params,
+    ).fetchall()
+    conn.close()
+    return [_row_to_protocol_event(r) for r in rows]
+
+
+@app.post("/api/protocol-events")
+def create_protocol_event(body: ProtocolEventIn):
+    conn = get_db()
+    proto = conn.execute("SELECT id FROM protocols WHERE id = ?", (body.protocol_id,)).fetchone()
+    if proto is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Protocol not found")
+    cur = conn.execute(
+        """
+        INSERT INTO protocol_events (protocol_id, date, time, dose, duration_minutes, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            body.protocol_id,
+            body.date,
+            body.time,
+            body.dose.strip() if body.dose else None,
+            body.duration_minutes,
+            body.notes.strip() if body.notes else None,
+            datetime.utcnow().isoformat(timespec="seconds"),
+        ),
+    )
+    new_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM protocol_events WHERE id = ?", (new_id,)).fetchone()
+    conn.close()
+    return _row_to_protocol_event(row)
+
+
+@app.put("/api/protocol-events/{eid}")
+def update_protocol_event(eid: int, body: ProtocolEventIn):
+    conn = get_db()
+    cur = conn.execute(
+        """
+        UPDATE protocol_events
+        SET date = ?, time = ?, dose = ?, duration_minutes = ?, notes = ?
+        WHERE id = ?
+        """,
+        (
+            body.date,
+            body.time,
+            body.dose.strip() if body.dose else None,
+            body.duration_minutes,
+            body.notes.strip() if body.notes else None,
+            eid,
+        ),
+    )
+    if cur.rowcount == 0:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Protocol event not found")
+    conn.commit()
+    row = conn.execute("SELECT * FROM protocol_events WHERE id = ?", (eid,)).fetchone()
+    conn.close()
+    return _row_to_protocol_event(row)
+
+
+@app.delete("/api/protocol-events/{eid}")
+def delete_protocol_event(eid: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM protocol_events WHERE id = ?", (eid,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Protocol event not found")
+    return {"status": "ok"}
 
 
 # --- Nutrition ---

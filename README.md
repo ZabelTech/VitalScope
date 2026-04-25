@@ -68,6 +68,7 @@ All sync sources are wrapped as **plugins** that the backend schedules and runs 
             ├── TodayMetrics.tsx       # Observe → Today's metrics
             ├── JournalPage.tsx        # embedded in DailyPage (yesterday's journal)
             ├── ProcessingSpeedTask.tsx # Act → Today processing-speed test
+            ├── ProtocolsSection.tsx   # Act → Protocols (quick-log + CRUD)
             ├── BloodworkSection.tsx   # Act → Bloodwork
             ├── GenomeSection.tsx      # Act → Genome
             ├── TrendsPage.tsx         # Orient → Trends
@@ -191,6 +192,7 @@ A single FastAPI file serving routes from `vitalscope.db`. CORS is open to `http
 | Journal | `GET/POST /api/journal`, `GET /api/journal/{date}`, `GET/POST /api/journal/{date}/supplements` |
 | Cognition processing speed | `POST /api/cognition/processing-speed/session`, `GET /api/cognition/processing-speed/daily`, `GET /api/cognition/processing-speed/baseline` |
 | Supplements | `GET/POST/PUT/DELETE /api/supplements[/{id}]` |
+| Protocols | `GET/POST/PUT/DELETE /api/protocols[/{id}]`, `GET/POST/PUT/DELETE /api/protocol-events[/{id}]` |
 | Nutrition | `GET/POST/PUT/DELETE /api/meals[/{id}]`, `GET /api/nutrition/daily`, `GET/POST/DELETE /api/water[/{id}]`, `GET /api/water/daily`, `GET/POST /api/nutrients/definitions`, `DELETE /api/nutrients/definitions/{key}` |
 | Plugins | `GET /api/plugins`, `GET/PUT /api/plugins/{name}`, `POST /api/plugins/{name}/run`, `GET /api/plugins/{name}/runs` |
 | Meta | `GET /api/date-range` — earliest/latest date across all tables |
@@ -224,6 +226,7 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
   - **Today** — `TodayDashboard`: quick snapshot + recent activity card + 75-second processing-speed task in the journal card.
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
   - **Meals & water** — `NutritionPage`: log meals for a date with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). If CGM data covers the meal time, the 2-hour postprandial glucose curve is shown inline below the meal. Water is logged as separate per-drink entries with a running daily total.
+  - **Protocols** — `ProtocolsSection`: define and log intervention protocols (drugs, peptides, PEDs, supplement stacks, hormesis sessions, fasting windows, training blocks). Quick-log cards for Zone 2, sauna (°C + min), cold plunge (°C + min), and TRE window (start/end time). Active protocols show a running day-count; one-tap event logging with dose auto-fill.
   - **Bloodwork** — upload a lab PDF/image and have the AI extract panels into `bloodwork_panels` / `bloodwork_results`.
   - **Genome** — upload a raw genotype file and have the AI parse summary info.
 - **`/settings` Settings** — sync plugins. One card per plugin (Garmin Health, Garmin Activities, Strong, Eufy, CGM) with Enabled toggle, interval, credential fields, Save, Run now, last-run status, and recent-runs log.

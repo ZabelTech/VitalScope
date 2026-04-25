@@ -3,6 +3,7 @@ import { GenomeSection } from "./GenomeSection";
 import { IntakeLog } from "./IntakeLog";
 import { NutritionPage } from "./NutritionPage";
 import { OodaPage } from "./OodaPage";
+import { ProtocolsSection } from "./ProtocolsSection";
 import { TodayDashboard } from "./TodayDashboard";
 
 export function ActPage() {
@@ -12,6 +13,7 @@ export function ActPage() {
         { id: "today", label: "Today", content: <TodayDashboard /> },
         { id: "log", label: "Supplements & alcohol", content: <IntakeLog /> },
         { id: "intake", label: "Meals & water", content: <NutritionPage /> },
+        { id: "protocols", label: "Protocols", content: <ProtocolsSection /> },
         { id: "bloodwork", label: "Bloodwork", content: <BloodworkSection /> },
         { id: "genome", label: "Genome", content: <GenomeSection /> },
       ]}
