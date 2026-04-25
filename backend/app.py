@@ -5666,6 +5666,52 @@ def delete_body_composition_estimate(estimate_id: int):
     return {"status": "ok"}
 
 
+@app.get("/api/form-checks/history")
+def list_form_check_history():
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT u.id AS upload_id, u.date, u.created_at,
+               bce.id AS estimate_id,
+               bce.body_fat_pct, bce.muscle_mass_category, bce.water_retention,
+               bce.visible_definition, bce.posture_note, bce.symmetry_note,
+               bce.fatigue_signs, bce.hydration_signs, bce.general_vigor_note,
+               bce.notes AS estimate_notes, bce.confidence,
+               bce.created_at AS estimate_created_at
+        FROM uploads u
+        LEFT JOIN body_composition_estimates bce
+          ON bce.id = u.body_composition_estimate_id
+        WHERE u.kind = 'form'
+        ORDER BY u.id DESC
+        """
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        estimate = None
+        if r["estimate_id"] is not None:
+            estimate = {
+                "id": r["estimate_id"],
+                "date": r["date"],
+                "source": "form-check-ai",
+                "source_upload_id": r["upload_id"],
+                "body_fat_pct": r["body_fat_pct"],
+                "muscle_mass_category": r["muscle_mass_category"],
+                "water_retention": r["water_retention"],
+                "visible_definition": r["visible_definition"],
+                "posture_note": r["posture_note"],
+                "symmetry_note": r["symmetry_note"],
+                "fatigue_signs": r["fatigue_signs"],
+                "hydration_signs": r["hydration_signs"],
+                "general_vigor_note": r["general_vigor_note"],
+                "notes": r["estimate_notes"],
+                "confidence": r["confidence"],
+                "created_at": r["estimate_created_at"],
+            }
+        result.append({"upload_id": r["upload_id"], "date": r["date"], "created_at": r["created_at"], "estimate": estimate})
+    return result
+
+
 # --- Plugins ---
 
 _plugin_logger = logging.getLogger("vitalscope.plugins")

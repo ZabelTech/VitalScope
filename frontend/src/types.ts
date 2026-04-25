@@ -386,6 +386,13 @@ export interface BodyCompositionEstimateInput {
   confidence?: "low" | "medium" | "high" | null;
 }
 
+export interface FormCheckHistoryItem {
+  upload_id: number;
+  date: string;
+  created_at: string;
+  estimate: BodyCompositionEstimate | null;
+}
+
 export interface PlannedActivity {
   id: number;
   date: string;
