@@ -63,6 +63,8 @@ AI_EFFORT: str = os.environ.get("VITALSCOPE_AI_EFFORT", "medium")
 AI_TIMEOUT_SEC = int(os.environ.get("VITALSCOPE_AI_TIMEOUT_SEC", "20"))
 BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
+BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("BRIEFING_AI_TIMEOUT_SEC", "90"))
+NIGHT_BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("NIGHT_BRIEFING_AI_TIMEOUT_SEC", "90"))
 
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
@@ -81,7 +83,9 @@ AUTH_COOKIE = "vitalscope_auth"
 # (which it should be in prod via `flyctl secrets set`). Falls back to a
 # per-process random value in dev, which means restarts invalidate cookies
 # — acceptable for dev.
-SESSION_SECRET = os.environ.get("VITALSCOPE_SESSION_SECRET") or secrets.token_urlsafe(32)
+SESSION_SECRET = os.environ.get("VITALSCOPE_SESSION_SECRET") or hmac.new(
+    AUTH_PASSWORD.encode(), b"vitalscope.session-secret", "sha256"
+).hexdigest()
 
 
 def _auth_token() -> str:
@@ -259,15 +263,84 @@ def ensure_journal_table() -> None:
         )
         """
     )
-    # Idempotent ALTER for DBs that predate is_work_day.
     existing = {r[1] for r in conn.execute("PRAGMA table_info(journal_entries)")}
-    if "is_work_day" not in existing:
-        conn.execute("ALTER TABLE journal_entries ADD COLUMN is_work_day INTEGER")
+    for col, typedef in [
+        ("is_work_day", "INTEGER"),
+        ("focus", "INTEGER"),
+        ("mood_tag", "TEXT"),
+        ("cognitive_load", "INTEGER"),
+        ("subjective_energy", "INTEGER"),
+        ("avg_rt_ms", "REAL"),
+        ("rt_trials", "INTEGER"),
+    ]:
+        if col not in existing:
+            conn.execute(f"ALTER TABLE journal_entries ADD COLUMN {col} {typedef}")
     conn.commit()
     conn.close()
 
 
 ensure_journal_table()
+
+
+def ensure_processing_speed_tables() -> None:
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cog_processing_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            attempted INTEGER NOT NULL,
+            correct INTEGER NOT NULL,
+            accuracy REAL NOT NULL,
+            median_rt_ms REAL,
+            rt_iqr_ms REAL,
+            throughput_pm REAL NOT NULL,
+            inverse_efficiency REAL,
+            omission_errors INTEGER NOT NULL DEFAULT 0,
+            commission_errors INTEGER NOT NULL DEFAULT 0,
+            fast10_rt_ms REAL,
+            slow10_rt_ms REAL,
+            same_button_streak_max INTEGER NOT NULL DEFAULT 0,
+            interruption_count INTEGER NOT NULL DEFAULT 0,
+            focus_lost_ms_total INTEGER NOT NULL DEFAULT 0,
+            quality_flag TEXT NOT NULL CHECK (quality_flag IN ('ok','low')),
+            quality_reasons_json TEXT NOT NULL DEFAULT '[]',
+            device_info_json TEXT,
+            stimulus_version TEXT NOT NULL DEFAULT 'v1',
+            stimulus_seed TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cog_processing_trials (
+            session_id INTEGER NOT NULL,
+            trial_index INTEGER NOT NULL,
+            difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','moderate','hard')),
+            target_symbol TEXT NOT NULL,
+            candidate_symbols_json TEXT NOT NULL,
+            correct_answer INTEGER NOT NULL,
+            user_answer INTEGER,
+            is_correct INTEGER NOT NULL,
+            rt_ms INTEGER,
+            timeout INTEGER NOT NULL DEFAULT 0,
+            presented_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, trial_index),
+            FOREIGN KEY (session_id) REFERENCES cog_processing_sessions(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cog_processing_sessions_date ON cog_processing_sessions(date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cog_processing_sessions_quality_date ON cog_processing_sessions(quality_flag, date)")
+    conn.commit()
+    conn.close()
+
+
+ensure_processing_speed_tables()
 
 
 def ensure_journal_questions_tables() -> None:
@@ -417,6 +490,84 @@ NUTRIENT_SEED = [
 ]
 
 
+# CYP450 pharmacogenomics reference data.
+# Substrates are for context only; half_life_hours drives the caffeine clearance model.
+# Source: Flockhart DA Drug Interactions Table (Indiana University) + PharmGKB.
+CYP_PHARMACOGENOMICS: dict[str, dict] = {
+    "CYP1A2": {
+        "label": "CYP1A2",
+        "substrates": ["caffeine", "melatonin", "theophylline", "duloxetine"],
+        "phenotypes": {
+            "ultra_rapid": {
+                "half_life_hours": 2.5,
+                "label": "Ultra-rapid metaboliser",
+                "description": "Clears caffeine ~2x faster than average. High doses may feel weak.",
+            },
+            "extensive": {
+                "half_life_hours": 5.0,
+                "label": "Extensive (normal) metaboliser",
+                "description": "Population average. Standard caffeine sensitivity and clearance.",
+            },
+            "intermediate": {
+                "half_life_hours": 7.0,
+                "label": "Intermediate metaboliser",
+                "description": "Slower clearance. Afternoon caffeine more likely to disturb sleep.",
+            },
+            "poor": {
+                "half_life_hours": 10.0,
+                "label": "Poor (slow) metaboliser",
+                "description": "~2x longer clearance. Caffeine logged at noon may still be active at bedtime.",
+            },
+        },
+        "default_phenotype": "extensive",
+    },
+    "CYP2D6": {
+        "label": "CYP2D6",
+        "substrates": ["codeine", "tramadol", "metoprolol", "tamoxifen", "many antidepressants"],
+        "phenotypes": {
+            "ultra_rapid": {
+                "half_life_hours": None,
+                "label": "Ultra-rapid metaboliser",
+                "description": "Codeine converts rapidly to morphine — elevated adverse-effect risk. Antidepressant efficacy may be reduced.",
+            },
+            "extensive": {
+                "half_life_hours": None,
+                "label": "Extensive (normal) metaboliser",
+                "description": "Standard drug response and clearance.",
+            },
+            "intermediate": {
+                "half_life_hours": None,
+                "label": "Intermediate metaboliser",
+                "description": "Reduced enzyme activity. Monitor dose response carefully.",
+            },
+            "poor": {
+                "half_life_hours": None,
+                "label": "Poor metaboliser",
+                "description": "Codeine is non-functional as an analgesic. Antidepressants and beta-blockers may require dose adjustment.",
+            },
+        },
+        "default_phenotype": "extensive",
+    },
+    "CYP3A4": {
+        "label": "CYP3A4",
+        "substrates": ["testosterone", "statins", "ciclosporin", "midazolam", "many supplements and peptides"],
+        "phenotypes": {
+            "extensive": {
+                "half_life_hours": None,
+                "label": "Extensive (normal) metaboliser",
+                "description": "Standard clearance of CYP3A4 substrates.",
+            },
+            "poor": {
+                "half_life_hours": None,
+                "label": "Poor metaboliser",
+                "description": "Elevated substrate exposure. Consider spacing doses and starting lower.",
+            },
+        },
+        "default_phenotype": "extensive",
+    },
+}
+
+
 def ensure_nutrition_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -479,6 +630,30 @@ def ensure_nutrition_tables() -> None:
 
 
 ensure_nutrition_tables()
+
+
+_VARIANT_REGISTRY_PATH = Path(__file__).parent / "variant_registry.json"
+
+
+def _seed_variant_registry(conn: sqlite3.Connection) -> None:
+    try:
+        with open(_VARIANT_REGISTRY_PATH) as f:
+            entries = json.load(f)
+    except Exception:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO variant_registry (rs_id, gene, variant_name, domain, ref, alt, genotypes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                e["rs_id"], e["gene"], e["variant_name"], e["domain"],
+                e["ref"], e["alt"], json.dumps(e["genotypes"]),
+            )
+            for e in entries
+        ],
+    )
 
 
 def ensure_daily_landing_tables() -> None:
@@ -650,9 +825,90 @@ def ensure_daily_landing_tables() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_uploads_date ON genome_uploads(date)")
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS genome_variants (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            genome_upload_id INTEGER NOT NULL,
+            rs_id            TEXT NOT NULL,
+            chrom            TEXT,
+            pos              INTEGER,
+            ref_allele       TEXT,
+            alt_allele       TEXT,
+            genotype         TEXT,
+            gene             TEXT,
+            variant_name     TEXT,
+            domain           TEXT,
+            zygosity         TEXT,
+            impact_label     TEXT,
+            interpretation   TEXT,
+            created_at       TEXT NOT NULL,
+            FOREIGN KEY (genome_upload_id) REFERENCES genome_uploads(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_variants_upload ON genome_variants(genome_upload_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_variants_rs ON genome_variants(rs_id)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS variant_registry (
+            rs_id        TEXT PRIMARY KEY,
+            gene         TEXT NOT NULL,
+            variant_name TEXT NOT NULL,
+            domain       TEXT NOT NULL,
+            ref          TEXT NOT NULL,
+            alt          TEXT NOT NULL,
+            genotypes    TEXT NOT NULL
+        )
+        """
+    )
+    _seed_variant_registry(conn)
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS ai_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS briefings (
+            date         TEXT NOT NULL,
+            kind         TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            model        TEXT NOT NULL,
+            provider     TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            PRIMARY KEY (date, kind)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS caffeine_intake (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            date       TEXT NOT NULL,
+            time       TEXT,
+            mg         REAL NOT NULL,
+            source     TEXT,
+            notes      TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_caffeine_intake_date ON caffeine_intake(date)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cyp_phenotypes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            cyp        TEXT NOT NULL UNIQUE,
+            phenotype  TEXT NOT NULL,
+            source     TEXT NOT NULL DEFAULT 'manual',
+            notes      TEXT,
+            created_at TEXT NOT NULL
         )
         """
     )
@@ -661,6 +917,7 @@ def ensure_daily_landing_tables() -> None:
 
 
 ensure_daily_landing_tables()
+
 
 
 def _load_ai_config_from_db() -> None:
@@ -1102,6 +1359,282 @@ class JournalEntry(BaseModel):
     morning_feeling: Literal["sleepy", "energetic", "normal", "sick"]
     notes: Optional[str] = None
     is_work_day: Optional[bool] = None
+    focus: Optional[int] = None
+    mood_tag: Optional[Literal["great", "good", "flat", "low", "irritable", "anxious"]] = None
+    cognitive_load: Optional[int] = None
+    subjective_energy: Optional[int] = None
+    avg_rt_ms: Optional[float] = None
+    rt_trials: Optional[int] = None
+
+
+class ProcessingSpeedTrialIn(BaseModel):
+    trial_index: int
+    difficulty: Literal["easy", "moderate", "hard"]
+    target_symbol: str
+    candidate_symbols: list[str]
+    correct_answer: bool
+    user_answer: Optional[bool] = None
+    is_correct: bool
+    rt_ms: Optional[int] = None
+    timeout: bool = False
+    presented_at: str
+
+
+class ProcessingSpeedSessionIn(BaseModel):
+    date: str
+    started_at: str
+    ended_at: str
+    duration_ms: int
+    stimulus_seed: str
+    stimulus_version: str = "v1"
+    interruption_count: int = 0
+    focus_lost_ms_total: int = 0
+    device_info: dict[str, Any] | None = None
+    trials: list[ProcessingSpeedTrialIn]
+
+
+def _percentile(values: list[int], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = int(round((len(ordered) - 1) * quantile))
+    return float(ordered[idx])
+
+
+def _compute_processing_speed_summary(session: ProcessingSpeedSessionIn) -> dict[str, Any]:
+    attempted = len(session.trials)
+    correct = sum(1 for t in session.trials if t.is_correct and not t.timeout)
+    omission_errors = sum(1 for t in session.trials if t.timeout)
+    commission_errors = attempted - correct - omission_errors
+    accuracy = (correct / attempted) if attempted > 0 else 0.0
+    rt_values = [t.rt_ms for t in session.trials if t.is_correct and t.rt_ms is not None and not t.timeout]
+    rt_values_non_null = [t.rt_ms for t in session.trials if t.rt_ms is not None and not t.timeout]
+    median_rt = float(statistics.median(rt_values)) if rt_values else None
+    rt_iqr = None
+    if len(rt_values) >= 4:
+        rt_iqr = _percentile([int(v) for v in rt_values], 0.75) - _percentile([int(v) for v in rt_values], 0.25)
+    fast10_rt = _percentile([int(v) for v in rt_values_non_null], 0.1) if rt_values_non_null else None
+    slow10_rt = _percentile([int(v) for v in rt_values_non_null], 0.9) if rt_values_non_null else None
+    duration_min = max(session.duration_ms / 60000, 1e-9)
+    throughput_pm = correct / duration_min
+    inverse_eff = (median_rt / accuracy) if (median_rt is not None and accuracy >= 0.01) else None
+    same_button_streak_max = 0
+    streak = 0
+    last_answer: Optional[bool] = None
+    for trial in session.trials:
+        if trial.user_answer is None:
+            continue
+        if last_answer is None or trial.user_answer == last_answer:
+            streak += 1
+        else:
+            streak = 1
+        last_answer = trial.user_answer
+        same_button_streak_max = max(same_button_streak_max, streak)
+    low_reasons: list[str] = []
+    very_fast = [t for t in session.trials if t.rt_ms is not None and t.rt_ms < 150]
+    if attempted > 0 and (len(very_fast) / attempted) > 0.2:
+        low_reasons.append("rt_floor")
+    if attempted > 0 and accuracy < 0.6 and median_rt is not None and median_rt < 300:
+        low_reasons.append("low_accuracy_fast")
+    answered = [t for t in session.trials if t.user_answer is not None]
+    yes_count = sum(1 for t in answered if t.user_answer is True)
+    no_count = sum(1 for t in answered if t.user_answer is False)
+    max_bias = max(yes_count, no_count)
+    if len(answered) >= 10 and (max_bias / max(len(answered), 1)) > 0.9 and accuracy < 0.7:
+        low_reasons.append("response_bias")
+    if session.focus_lost_ms_total > 10000 or session.interruption_count >= 3:
+        low_reasons.append("interrupted")
+    return {
+        "attempted": attempted,
+        "correct": correct,
+        "accuracy": accuracy,
+        "median_rt_ms": median_rt,
+        "rt_iqr_ms": rt_iqr,
+        "throughput_pm": throughput_pm,
+        "inverse_efficiency": inverse_eff,
+        "omission_errors": omission_errors,
+        "commission_errors": commission_errors,
+        "fast10_rt_ms": fast10_rt,
+        "slow10_rt_ms": slow10_rt,
+        "same_button_streak_max": same_button_streak_max,
+        "quality_flag": "low" if low_reasons else "ok",
+        "quality_reasons": low_reasons,
+    }
+
+
+def _processing_speed_baseline(conn: sqlite3.Connection, target_date: str, window: int) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT throughput_pm
+        FROM cog_processing_sessions
+        WHERE quality_flag = 'ok'
+          AND date < ?
+          AND date >= date(?, ?)
+        ORDER BY date DESC, created_at DESC
+        """,
+        (target_date, target_date, f"-{window} day"),
+    ).fetchall()
+    values = [float(r["throughput_pm"]) for r in rows]
+    if len(values) < 3:
+        return {"window_days": window, "count": len(values), "mean": None, "std": None, "confidence": "low"}
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if len(values) >= 2 else 0.0
+    return {"window_days": window, "count": len(values), "mean": mean, "std": std, "confidence": "ok"}
+
+
+@app.post("/api/cognition/processing-speed/session")
+def submit_processing_speed_session(session: ProcessingSpeedSessionIn):
+    if not session.trials:
+        raise HTTPException(status_code=422, detail="At least one trial is required")
+    if session.duration_ms <= 0:
+        raise HTTPException(status_code=422, detail="duration_ms must be > 0")
+    summary = _compute_processing_speed_summary(session)
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """
+        INSERT INTO cog_processing_sessions (
+            date, started_at, ended_at, duration_ms, attempted, correct, accuracy,
+            median_rt_ms, rt_iqr_ms, throughput_pm, inverse_efficiency,
+            omission_errors, commission_errors, fast10_rt_ms, slow10_rt_ms,
+            same_button_streak_max, interruption_count, focus_lost_ms_total,
+            quality_flag, quality_reasons_json, device_info_json, stimulus_version,
+            stimulus_seed, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session.date,
+            session.started_at,
+            session.ended_at,
+            session.duration_ms,
+            summary["attempted"],
+            summary["correct"],
+            summary["accuracy"],
+            summary["median_rt_ms"],
+            summary["rt_iqr_ms"],
+            summary["throughput_pm"],
+            summary["inverse_efficiency"],
+            summary["omission_errors"],
+            summary["commission_errors"],
+            summary["fast10_rt_ms"],
+            summary["slow10_rt_ms"],
+            summary["same_button_streak_max"],
+            session.interruption_count,
+            session.focus_lost_ms_total,
+            summary["quality_flag"],
+            json.dumps(summary["quality_reasons"]),
+            json.dumps(session.device_info or {}),
+            session.stimulus_version,
+            session.stimulus_seed,
+            now,
+        ),
+    )
+    session_id = int(cur.lastrowid)
+    for trial in sorted(session.trials, key=lambda t: t.trial_index):
+        conn.execute(
+            """
+            INSERT INTO cog_processing_trials (
+                session_id, trial_index, difficulty, target_symbol, candidate_symbols_json,
+                correct_answer, user_answer, is_correct, rt_ms, timeout, presented_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                trial.trial_index,
+                trial.difficulty,
+                trial.target_symbol,
+                json.dumps(trial.candidate_symbols),
+                int(trial.correct_answer),
+                None if trial.user_answer is None else int(trial.user_answer),
+                int(trial.is_correct),
+                trial.rt_ms,
+                int(trial.timeout),
+                trial.presented_at,
+            ),
+        )
+    baseline = _processing_speed_baseline(conn, session.date, 7)
+    delta_vs_baseline = None
+    z_score = None
+    if baseline["mean"] is not None:
+        delta_vs_baseline = summary["throughput_pm"] - float(baseline["mean"])
+        std = float(baseline["std"] or 0.0)
+        z_score = (delta_vs_baseline / std) if std > 0 else 0.0
+    conn.execute(
+        """
+        UPDATE journal_entries
+        SET avg_rt_ms = ?, rt_trials = ?
+        WHERE date = ?
+        """,
+        (summary["median_rt_ms"], summary["attempted"], session.date),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "session_id": session_id,
+        "summary": summary,
+        "baseline": baseline,
+        "delta_vs_baseline": delta_vs_baseline,
+        "z_score": z_score,
+    }
+
+
+@app.get("/api/cognition/processing-speed/daily")
+def get_processing_speed_daily(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """
+        WITH latest AS (
+          SELECT date, MAX(created_at) AS created_at
+          FROM cog_processing_sessions
+          WHERE date >= ? AND date <= ?
+          GROUP BY date
+        )
+        SELECT s.date, s.attempted, s.correct, s.accuracy, s.median_rt_ms, s.throughput_pm,
+               s.quality_flag, s.created_at
+        FROM cog_processing_sessions s
+        JOIN latest l ON l.date = s.date AND l.created_at = s.created_at
+        ORDER BY s.date
+        """,
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/cognition/processing-speed/baseline")
+def get_processing_speed_baseline(date: str, window: int = Query(7, ge=3, le=30)):
+    conn = get_db()
+    baseline = _processing_speed_baseline(conn, date, window)
+    row = conn.execute(
+        """
+        SELECT throughput_pm
+        FROM cog_processing_sessions
+        WHERE date = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (date,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No processing-speed session for that date")
+    today_throughput = float(row["throughput_pm"])
+    z_score = None
+    delta_vs_baseline = None
+    if baseline["mean"] is not None:
+        delta_vs_baseline = today_throughput - float(baseline["mean"])
+        std = float(baseline["std"] or 0.0)
+        z_score = (delta_vs_baseline / std) if std > 0 else 0.0
+    return {
+        "date": date,
+        "throughput_pm": today_throughput,
+        "baseline": baseline,
+        "delta_vs_baseline": delta_vs_baseline,
+        "z_score": z_score,
+    }
 
 
 @app.post("/api/journal")
@@ -1111,8 +1644,9 @@ def upsert_journal(entry: JournalEntry):
         """
         INSERT INTO journal_entries
             (date, created_at, followed_supplements, drank_alcohol,
-             alcohol_amount, morning_feeling, notes, is_work_day)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             alcohol_amount, morning_feeling, notes, is_work_day,
+             focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms, rt_trials)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(date) DO UPDATE SET
             created_at = excluded.created_at,
             followed_supplements = excluded.followed_supplements,
@@ -1120,7 +1654,13 @@ def upsert_journal(entry: JournalEntry):
             alcohol_amount = excluded.alcohol_amount,
             morning_feeling = excluded.morning_feeling,
             notes = excluded.notes,
-            is_work_day = excluded.is_work_day
+            is_work_day = excluded.is_work_day,
+            focus = excluded.focus,
+            mood_tag = excluded.mood_tag,
+            cognitive_load = excluded.cognitive_load,
+            subjective_energy = excluded.subjective_energy,
+            avg_rt_ms = excluded.avg_rt_ms,
+            rt_trials = excluded.rt_trials
         """,
         (
             entry.date,
@@ -1131,6 +1671,12 @@ def upsert_journal(entry: JournalEntry):
             entry.morning_feeling,
             entry.notes,
             None if entry.is_work_day is None else int(entry.is_work_day),
+            entry.focus,
+            entry.mood_tag,
+            entry.cognitive_load,
+            entry.subjective_energy,
+            entry.avg_rt_ms,
+            entry.rt_trials,
         ),
     )
     conn.commit()
@@ -1148,6 +1694,12 @@ def _row_to_journal(row: sqlite3.Row) -> dict:
         "morning_feeling": row["morning_feeling"],
         "notes": row["notes"],
         "is_work_day": None if row["is_work_day"] is None else bool(row["is_work_day"]),
+        "focus": row["focus"],
+        "mood_tag": row["mood_tag"],
+        "cognitive_load": row["cognitive_load"],
+        "subjective_energy": row["subjective_energy"],
+        "avg_rt_ms": row["avg_rt_ms"],
+        "rt_trials": row["rt_trials"],
     }
 
 
@@ -1214,6 +1766,23 @@ def delete_journal_question(q_id: int):
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Question not found")
     return {"status": "ok"}
+
+
+@app.get("/api/journal/cognition")
+def journal_cognition(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT date, focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms, rt_trials
+        FROM journal_entries
+        WHERE date >= ? AND date <= ?
+        ORDER BY date
+        """,
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 @app.get("/api/journal/{entry_date}")
@@ -2627,6 +3196,24 @@ class DemoProvider(AIProvider):
             return _demo_bloodwork_payload()
         return {}
 
+    async def analyze_text_with_tool(
+        self,
+        *,
+        system: str,
+        user_text: str,
+        tool: dict,
+        timeout_sec: int,
+    ) -> dict:
+        await asyncio.sleep(0.4)
+        tool_name = tool.get("name")
+        if tool_name == "record_health_orientation":
+            return _demo_orient_payload()
+        if tool_name == "record_morning_briefing":
+            return _demo_morning_briefing_payload()
+        if tool_name == "record_night_briefing":
+            return _demo_night_briefing_payload()
+        return {}
+
 
 def _demo_meal_payload(tool: dict) -> dict:
     nutrient_keys = list(
@@ -2692,6 +3279,133 @@ def _demo_bloodwork_payload() -> dict:
              "reference_low": 30, "reference_high": 100, "reference_text": None, "flag": "low"},
             {"analyte": "Ferritin", "value": 120, "value_text": None, "unit": "ng/mL",
              "reference_low": 30, "reference_high": 400, "reference_text": None, "flag": "normal"},
+        ],
+    }
+
+
+def _demo_orient_payload() -> dict:
+    return {
+        "overall_summary": (
+            "Demo mode: wearable metrics are stable with no acute concerns across the 14-day window. "
+            "HRV and resting HR are within baseline, sleep is adequate, and training load is moderate."
+        ),
+        "topics": [
+            {
+                "id": "health",
+                "label": "Health",
+                "summary": "Resting HR averaging 54 bpm and HRV within balanced baseline suggest good cardiovascular readiness.",
+                "insights": [
+                    "Resting HR: 54 bpm (7-day avg 55 bpm) — no upward drift.",
+                    "SpO2 averaging 96% through the window — within normal range.",
+                ],
+                "alerts": [],
+                "recommendations": ["Continue current recovery habits."],
+            },
+            {
+                "id": "performance",
+                "label": "Performance",
+                "summary": "Training load is moderate with 3-4 sessions per week and consistent step count.",
+                "insights": [
+                    "Average 8,400 steps/day, above the 7,500 goal.",
+                    "3 strength sessions logged in the past 7 days.",
+                ],
+                "alerts": [],
+                "recommendations": ["Consider a deload week if fatigue accumulates over the next 7 days."],
+            },
+            {
+                "id": "recovery",
+                "label": "Recovery",
+                "summary": "Sleep averaging 7.2 h with adequate deep and REM proportions.",
+                "insights": [
+                    "Sleep score averaging 72 (Good) over the window.",
+                    "HRV last night (68 ms) above weekly average (62 ms) — positive recovery signal.",
+                ],
+                "alerts": [],
+                "recommendations": ["Maintain consistent sleep timing to protect HRV baseline."],
+            },
+            {
+                "id": "body_composition",
+                "label": "Body Composition",
+                "summary": "Weight stable; no significant trend in body fat or muscle mass.",
+                "insights": [
+                    "Weight: 82.4 kg (±0.6 kg over the window).",
+                    "Body fat estimated at 17.2% — no meaningful change.",
+                ],
+                "alerts": [],
+                "recommendations": ["Track protein intake to support muscle retention during training."],
+            },
+        ],
+    }
+
+
+def _demo_morning_briefing_payload() -> dict:
+    return {
+        "recovery_readout": (
+            "HRV 68 ms (above 62 ms weekly avg), resting HR 52 bpm, body battery 84/100, "
+            "sleep 7.4 h with 1.6 h deep — well recovered."
+        ),
+        "yesterday_carryover": (
+            "Yesterday's 45-min Zone 2 run added moderate aerobic load; no residual fatigue signal. "
+            "Protein intake was 112 g against a ~160 g target — consider a higher-protein first meal."
+        ),
+        "tonight_outlook": (
+            "If training intensity stays low-to-moderate today, tonight's HRV should remain elevated. "
+            "Aim for last caffeine before 14:00 and last meal 2–3 h before bed to protect sleep architecture."
+        ),
+        "whats_up": [
+            "Morning supplements: Vitamin D 5000 IU, Magnesium Glycinate 400 mg — not yet logged.",
+            "No meals logged yet today.",
+        ],
+        "whats_planned": [
+            "No training sessions planned for today.",
+            "Active recovery or light walk recommended given yesterday's run.",
+        ],
+        "suggestions": [
+            "Protein deficit from yesterday (~48 g short): front-load protein at breakfast with eggs or Greek yogurt.",
+            "Body battery charged to 84 — a moderate workout today is viable if planned.",
+            "Last caffeine cut-off: 14:00 to protect deep sleep given yesterday's high sleep stress (28).",
+            "HRV above baseline — good window for strength training if planned this week.",
+        ],
+    }
+
+
+def _demo_night_briefing_payload() -> dict:
+    return {
+        "today_readout": (
+            "Moderate training day — one strength session, 8,400 steps, average stress was elevated "
+            "in the afternoon but body battery held above 50 through the evening."
+        ),
+        "sleep_debt_posture": (
+            "You are carrying approximately 45 minutes of sleep debt from the past 5 nights versus "
+            "your 7.5-hour goal. Tonight needs to be 7h 45min or better to start clearing the deficit. "
+            "Last night's 6h 50min session kept debt accumulating — prioritise lights-out by 10:30 pm."
+        ),
+        "pre_sleep_checklist": [
+            "Take evening supplements (Magnesium glycinate 400 mg, Zinc 15 mg) — not yet logged.",
+            "Finish a final 300 ml glass of water to reach today's hydration target.",
+            "Dim screens or switch to blue-light filter mode — it is past 9 pm.",
+            "Set alarm no earlier than 6:15 am to protect a 7h 45min sleep window.",
+            "Review tomorrow's training plan and lay out kit to reduce morning decision load.",
+        ],
+        "watch_outs": [
+            {
+                "issue": "Afternoon strength session ended at 5:30 pm — less than 4 hours before typical bedtime.",
+                "mitigation": (
+                    "Core temperature should normalise by 10 pm. A warm shower now can accelerate "
+                    "the drop. Avoid intense activity after this point."
+                ),
+            },
+            {
+                "issue": "Last meal logged at 7:45 pm — digestion may still be active at sleep onset.",
+                "mitigation": (
+                    "Limit any additional eating. A small low-glycaemic snack (e.g. Greek yoghurt) "
+                    "is acceptable if genuinely hungry, but avoid heavy carbs or fats."
+                ),
+            },
+        ],
+        "tomorrow_setup": [
+            "Prep tomorrow's breakfast tonight — a high-protein meal ready to go reduces morning stress.",
+            "Training kit is already noted in your plan; confirm it is laid out before bed.",
         ],
     }
 
@@ -3301,6 +4015,18 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
             "flagged_results": flagged,
         }
 
+    cognition = rows_to_list(conn.execute(
+        """
+        SELECT date, focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms
+        FROM journal_entries
+        WHERE date BETWEEN ? AND ?
+          AND (focus IS NOT NULL OR mood_tag IS NOT NULL
+               OR cognitive_load IS NOT NULL OR subjective_energy IS NOT NULL)
+        ORDER BY date
+        """,
+        (start_date, end_date),
+    ).fetchall())
+
     return {
         "analysis_date": end_date,
         "window_days": window_days,
@@ -3313,6 +4039,7 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
         "weight": weight,
         "recent_workouts": workouts,
         "bloodwork": bloodwork,
+        "journal_cognition": cognition,
     }
 
 
@@ -3382,6 +4109,621 @@ async def orient_analyze(body: OrientAnalyzeBody):
         "overall_summary": str(payload.get("overall_summary") or ""),
         "topics": topics,
     }
+
+
+# --- Morning briefing ---
+
+_MORNING_BRIEFING_TOOL = {
+    "name": "record_morning_briefing",
+    "description": (
+        "Record a structured morning briefing that synthesises last night's recovery, "
+        "yesterday's training load, and today's plan into a single actionable read. "
+        "Keep tone informative and non-prescriptive — frame observations around the "
+        "user's own data, not generic health advice."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "recovery_readout": {
+                "type": "string",
+                "description": (
+                    "One concise sentence capturing the body's state this morning. "
+                    "Reference actual values: e.g. 'HRV 68 ms (above 62 ms baseline), "
+                    "resting HR 52 bpm, body battery 84/100, sleep 7.4 h — well recovered.'"
+                ),
+            },
+            "yesterday_carryover": {
+                "type": "string",
+                "description": (
+                    "What from yesterday still matters today: accumulated fatigue, "
+                    "sleep debt, nutrition gaps, or training adaptations. 1-2 sentences "
+                    "grounded in the data."
+                ),
+            },
+            "tonight_outlook": {
+                "type": "string",
+                "description": (
+                    "How choices today will shape tonight's sleep quality and tomorrow's "
+                    "recovery: caffeine cutoff, training intensity window, last-meal timing. "
+                    "1-2 sentences grounded in the data."
+                ),
+            },
+            "whats_up": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Scheduled or already-logged events for today: supplements, meals, "
+                    "planned activities, journal note. Each item is one short bullet. "
+                    "Leave empty if nothing is logged or planned."
+                ),
+            },
+            "whats_planned": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "The day's planned structure: training sessions, fasting window, "
+                    "nutrition targets. Each item is one short bullet. "
+                    "Leave empty if nothing is planned."
+                ),
+            },
+            "suggestions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "2-4 concrete, non-prescriptive nudges grounded directly in the data. "
+                    "Reference specific values. Avoid generic advice."
+                ),
+            },
+        },
+        "required": [
+            "recovery_readout",
+            "yesterday_carryover",
+            "tonight_outlook",
+            "whats_up",
+            "whats_planned",
+            "suggestions",
+        ],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
+    today = date.today()
+    yesterday = today - timedelta(days=1)
+    today_str = today.isoformat()
+    yesterday_str = yesterday.isoformat()
+
+    def row_to_dict(row) -> Optional[dict]:
+        return dict(row) if row else None
+
+    def rows_to_list(rows) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    sleep = row_to_dict(conn.execute(
+        "SELECT date, sleep_score, sleep_score_quality, "
+        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
+        "ROUND(light_sleep_seconds / 3600.0, 1) AS light_hours, "
+        "sleep_start, sleep_end, avg_spo2, avg_sleep_stress "
+        "FROM sleep_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    hrv = row_to_dict(conn.execute(
+        "SELECT weekly_avg, last_night_avg, "
+        "baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    hr = row_to_dict(conn.execute(
+        "SELECT resting_hr, avg_7d_resting_hr FROM heart_rate_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    body_battery = row_to_dict(conn.execute(
+        "SELECT charged, drained FROM body_battery_daily WHERE date = ?",
+        (today_str,),
+    ).fetchone())
+
+    garmin_sessions = rows_to_list(conn.execute(
+        "SELECT name, sport_type, "
+        "ROUND(duration_sec / 60.0) AS duration_min, "
+        "ROUND(distance_m / 1000.0, 2) AS distance_km, "
+        "avg_hr, calories, training_effect, anaerobic_te "
+        "FROM garmin_activities WHERE date = ? ORDER BY start_time",
+        (yesterday_str,),
+    ).fetchall())
+
+    strong_workouts = rows_to_list(conn.execute(
+        "SELECT w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date = ? GROUP BY w.id ORDER BY w.date",
+        (yesterday_str,),
+    ).fetchall())
+
+    steps = row_to_dict(conn.execute(
+        "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    stress = row_to_dict(conn.execute(
+        "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    journal = row_to_dict(conn.execute(
+        "SELECT morning_feeling, drank_alcohol, alcohol_amount, notes "
+        "FROM journal_entries WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    nutrition = row_to_dict(conn.execute(
+        "SELECT "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount ELSE 0 END)) AS calories_kcal, "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount ELSE 0 END)) AS protein_g, "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount ELSE 0 END)) AS carbs_g, "
+        "ROUND(SUM(CASE WHEN mn.nutrient_key='fat_g' THEN mn.amount ELSE 0 END)) AS fat_g "
+        "FROM meals m JOIN meal_nutrients mn ON mn.meal_id = m.id "
+        "WHERE m.date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    water = row_to_dict(conn.execute(
+        "SELECT ROUND(SUM(amount_ml)) AS total_ml FROM water_intake WHERE date = ?",
+        (yesterday_str,),
+    ).fetchone())
+
+    planned_activities = rows_to_list(conn.execute(
+        "SELECT sport_type, target_distance_m, target_duration_sec, notes "
+        "FROM planned_activities WHERE date = ? ORDER BY id",
+        (today_str,),
+    ).fetchall())
+
+    supplements = rows_to_list(conn.execute(
+        "SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken "
+        "FROM supplements s "
+        "LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ? "
+        "ORDER BY s.sort_order",
+        (today_str,),
+    ).fetchall())
+
+    bp = conn.execute(
+        "SELECT id, date FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    open_bloodwork_alerts: list[str] = []
+    if bp:
+        flagged = conn.execute(
+            "SELECT analyte, value, value_text, unit, flag "
+            "FROM bloodwork_results WHERE panel_id = ? "
+            "AND flag IS NOT NULL AND flag != 'normal' "
+            "ORDER BY sort_order LIMIT 10",
+            (bp["id"],),
+        ).fetchall()
+        open_bloodwork_alerts = [
+            f"{r['analyte']}: {r['value'] if r['value'] is not None else r['value_text']} "
+            f"{r['unit'] or ''} ({r['flag']})"
+            for r in flagged
+        ]
+
+    return {
+        "briefing_date": today_str,
+        "yesterday": yesterday_str,
+        "last_night_sleep": sleep,
+        "hrv": hrv,
+        "resting_hr": hr,
+        "body_battery_at_wake": body_battery,
+        "yesterday_garmin_sessions": garmin_sessions,
+        "yesterday_strong_workouts": strong_workouts,
+        "yesterday_steps": steps,
+        "yesterday_stress": stress,
+        "yesterday_journal": journal,
+        "yesterday_nutrition": nutrition,
+        "yesterday_water": water,
+        "todays_planned_activities": planned_activities,
+        "todays_supplements": supplements,
+        "open_bloodwork_alerts": open_bloodwork_alerts,
+    }
+
+
+class MorningBriefingBody(BaseModel):
+    regenerate: bool = False
+
+
+@app.post("/api/briefing/morning")
+async def morning_briefing(body: MorningBriefingBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    today_str = date.today().isoformat()
+    conn = get_db()
+    try:
+        if not body.regenerate:
+            cached = conn.execute(
+                "SELECT payload_json, model, provider, generated_at "
+                "FROM briefings WHERE date = ? AND kind = 'morning'",
+                (today_str,),
+            ).fetchone()
+            if cached:
+                payload = json.loads(cached["payload_json"])
+                return {
+                    **payload,
+                    "model": cached["model"],
+                    "provider": cached["provider"],
+                    "generated_at": cached["generated_at"],
+                    "briefing_date": today_str,
+                    "cached": True,
+                }
+        metrics = _gather_morning_metrics(conn)
+    finally:
+        conn.close()
+
+    metrics_json = json.dumps(metrics, indent=2, default=str)
+
+    system_prompt = (
+        "You are a personal health assistant with expertise in recovery science, "
+        "sleep physiology, and training load management. You produce a concise morning "
+        "briefing that helps the user start the day with clarity: what their body is "
+        "telling them, what yesterday's choices mean for today, and how today's choices "
+        "will shape tonight's recovery. "
+        "Be specific: always reference actual numbers from the data. "
+        "Do not give medical advice. Avoid generic wellness platitudes. "
+        "Keep tone practical and grounded."
+    )
+
+    user_text = (
+        f"Generate my morning briefing for {today_str}. "
+        "Last night's sleep, this morning's HRV/HR/body-battery, yesterday's training "
+        "and nutrition, today's plan, and supplement schedule are all included below.\n\n"
+        f"Data (JSON):\n{metrics_json}"
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
+        tool=_MORNING_BRIEFING_TOOL,
+        timeout_sec=BRIEFING_AI_TIMEOUT_SEC,
+    )
+
+    result = {
+        "recovery_readout": str(payload.get("recovery_readout") or ""),
+        "yesterday_carryover": str(payload.get("yesterday_carryover") or ""),
+        "tonight_outlook": str(payload.get("tonight_outlook") or ""),
+        "whats_up": [str(s) for s in (payload.get("whats_up") or []) if s],
+        "whats_planned": [str(s) for s in (payload.get("whats_planned") or []) if s],
+        "suggestions": [str(s) for s in (payload.get("suggestions") or []) if s],
+    }
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn2 = get_db()
+    try:
+        conn2.execute(
+            "INSERT OR REPLACE INTO briefings "
+            "(date, kind, payload_json, model, provider, generated_at) "
+            "VALUES (?, 'morning', ?, ?, ?, ?)",
+            (today_str, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at),
+        )
+        conn2.commit()
+    finally:
+        conn2.close()
+
+    return {
+        **result,
+        "model": AI_MODEL,
+        "provider": AI_PROVIDER,
+        "generated_at": generated_at,
+        "briefing_date": today_str,
+        "cached": False,
+    }
+
+
+# --- Night briefing AI analysis ---
+
+_NIGHT_BRIEFING_TOOL = {
+    "name": "record_night_briefing",
+    "description": (
+        "Record a structured end-of-day night briefing with pre-sleep guidance. "
+        "Synthesise today's training, nutrition, stress, and supplement data into "
+        "five concrete output blocks. Use only data explicitly provided. "
+        "Do not give medical advice; frame as evidence-informed self-tracking insights."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "today_readout": {
+                "type": "string",
+                "description": (
+                    "Honest one-line summary of what today was — training load, stress, "
+                    "nutrition quality, and subjective feel if available."
+                ),
+            },
+            "sleep_debt_posture": {
+                "type": "string",
+                "description": (
+                    "2-3 sentences on rolling sleep debt versus the inferred goal, "
+                    "what last night delivered, and what tonight's target needs to be."
+                ),
+            },
+            "pre_sleep_checklist": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 3,
+                "maxItems": 5,
+                "description": (
+                    "3-5 specific, actionable items still to do before bed. "
+                    "Include unchecked evening supplements by name and dose, "
+                    "outstanding hydration, wind-down actions, and alarm timing."
+                ),
+            },
+            "watch_outs": {
+                "type": "array",
+                "description": (
+                    "Things from today that risk degrading tonight's sleep, "
+                    "each paired with a still-actionable mitigation. "
+                    "Include late caffeine, late heavy meals, or late high-intensity training "
+                    "only if they appear in today's data. Leave empty if nothing applies."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "issue": {
+                            "type": "string",
+                            "description": "The specific event or pattern that risks sleep.",
+                        },
+                        "mitigation": {
+                            "type": "string",
+                            "description": "What can still be done, or that the window has passed.",
+                        },
+                    },
+                    "required": ["issue", "mitigation"],
+                    "additionalProperties": False,
+                },
+            },
+            "tomorrow_setup": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+                "maxItems": 2,
+                "description": "1-2 nudges that seed tomorrow morning well.",
+            },
+        },
+        "required": [
+            "today_readout",
+            "sleep_debt_posture",
+            "pre_sleep_checklist",
+            "watch_outs",
+            "tomorrow_setup",
+        ],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_night_briefing_data(conn: sqlite3.Connection, target_date: str) -> dict:
+    target = date.fromisoformat(target_date)
+    yesterday = (target - timedelta(days=1)).isoformat()
+    window_start = (target - timedelta(days=14)).isoformat()
+
+    def rows_to_list(rows: list) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    activities = rows_to_list(conn.execute(
+        "SELECT name, sport_type, ROUND(duration_sec/60.0) AS duration_min, "
+        "ROUND(distance_m/1000.0, 2) AS distance_km, avg_hr, calories, training_effect "
+        "FROM garmin_activities WHERE date = ? ORDER BY start_time",
+        (target_date,),
+    ).fetchall())
+
+    workouts = rows_to_list(conn.execute(
+        "SELECT w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date = ? GROUP BY w.id ORDER BY w.end_date",
+        (target_date,),
+    ).fetchall())
+
+    steps_row = conn.execute(
+        "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    steps = dict(steps_row) if steps_row else {}
+
+    stress_row = conn.execute(
+        "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    stress_today = dict(stress_row) if stress_row else {}
+
+    hrv_row = conn.execute(
+        "SELECT last_night_avg, weekly_avg, baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date = ?",
+        (yesterday,),
+    ).fetchone()
+    hrv_last_night = dict(hrv_row) if hrv_row else {}
+
+    sleep_window = rows_to_list(conn.execute(
+        "SELECT date, ROUND(sleep_time_seconds/3600.0, 1) AS sleep_hours, sleep_score, "
+        "sleep_start, sleep_end "
+        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (window_start, yesterday),
+    ).fetchall())
+
+    meal_rows = conn.execute(
+        "SELECT id, time, name FROM meals WHERE date = ? ORDER BY time, id",
+        (target_date,),
+    ).fetchall()
+    meals_today = []
+    nutrition_totals: dict[str, float] = {}
+    for meal in meal_rows:
+        nutrients = {r["nutrient_key"]: r["amount"] for r in conn.execute(
+            "SELECT nutrient_key, amount FROM meal_nutrients WHERE meal_id = ?",
+            (meal["id"],),
+        ).fetchall()}
+        meals_today.append({"time": meal["time"], "name": meal["name"], "nutrients": nutrients})
+        for k, v in nutrients.items():
+            nutrition_totals[k] = round(nutrition_totals.get(k, 0) + v, 1)
+
+    last_meal_row = conn.execute(
+        "SELECT time FROM meals WHERE date = ? AND time IS NOT NULL ORDER BY time DESC LIMIT 1",
+        (target_date,),
+    ).fetchone()
+    last_meal_time = last_meal_row["time"] if last_meal_row else None
+
+    water_row = conn.execute(
+        "SELECT COALESCE(SUM(amount_ml), 0) AS total FROM water_intake WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    water_ml = water_row["total"] if water_row else 0
+
+    evening_pending = rows_to_list(conn.execute(
+        """
+        SELECT s.name, s.dosage
+        FROM supplements s
+        LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
+        WHERE s.time_of_day = 'evening' AND COALESCE(i.taken, 0) = 0
+        ORDER BY s.sort_order, s.id
+        """,
+        (target_date,),
+    ).fetchall())
+
+    all_supplements = rows_to_list(conn.execute(
+        """
+        SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken
+        FROM supplements s
+        LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
+        ORDER BY CASE s.time_of_day WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'evening' THEN 2 END,
+                 s.sort_order, s.id
+        """,
+        (target_date,),
+    ).fetchall())
+
+    journal_row = conn.execute(
+        "SELECT morning_feeling, notes, followed_supplements, drank_alcohol, "
+        "alcohol_amount, is_work_day FROM journal_entries WHERE date = ?",
+        (target_date,),
+    ).fetchone()
+    journal_entry = dict(journal_row) if journal_row else {}
+
+    goal_rows = conn.execute("SELECT nutrient_key, amount FROM nutrient_goals").fetchall()
+    nutrition_goals = {r["nutrient_key"]: r["amount"] for r in goal_rows}
+
+    return {
+        "target_date": target_date,
+        "activities_today": activities,
+        "workouts_today": workouts,
+        "steps_today": steps,
+        "stress_today": stress_today,
+        "hrv_last_night": hrv_last_night,
+        "sleep_last_14_days": sleep_window,
+        "meals_today": meals_today,
+        "last_meal_time": last_meal_time,
+        "nutrition_totals_today": nutrition_totals,
+        "nutrition_goals": nutrition_goals,
+        "water_ml_today": water_ml,
+        "evening_supplements_pending": evening_pending,
+        "all_supplements_today": all_supplements,
+        "journal_entry_today": journal_entry,
+    }
+
+
+class NightBriefingBody(BaseModel):
+    date: Optional[str] = None
+    regenerate: bool = False
+
+
+@app.post("/api/briefing/night")
+async def night_briefing(body: NightBriefingBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    target_date = body.date or date.today().isoformat()
+
+    conn = get_db()
+    try:
+        if not body.regenerate:
+            cached = conn.execute(
+                "SELECT payload_json, model FROM briefings WHERE date = ? AND kind = 'night'",
+                (target_date,),
+            ).fetchone()
+            if cached:
+                return {
+                    **json.loads(cached["payload_json"]),
+                    "model": cached["model"],
+                    "analysis_date": target_date,
+                    "cached": True,
+                }
+
+        data = _gather_night_briefing_data(conn, target_date)
+    finally:
+        conn.close()
+
+    data_json = json.dumps(data, indent=2, default=str)
+
+    system_prompt = (
+        "You are a personal health coach with expertise in sleep physiology, recovery science, "
+        "and strength training. Analyse the user's day — training, nutrition, stress, supplements, "
+        "and sleep history — and produce a structured night briefing to close the day well and "
+        "set up tonight's sleep. Be specific: reference actual values, times, and names from the "
+        "data. Alerts and watch-outs must be grounded in what actually happened today. "
+        "Do not give medical advice. Frame insights as evidence-informed self-tracking observations. "
+        "Tone is direct, calm, and practical — not a cheerleader, not alarmist."
+    )
+
+    user_text = (
+        f"Generate a night briefing for {target_date}. "
+        "Identify what needs to happen before bed, any sleep-risk factors from today, "
+        f"and how to set up tomorrow.\n\nData (JSON):\n{data_json}"
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
+        tool=_NIGHT_BRIEFING_TOOL,
+        timeout_sec=NIGHT_BRIEFING_AI_TIMEOUT_SEC,
+    )
+
+    result = {
+        "today_readout": str(payload.get("today_readout") or ""),
+        "sleep_debt_posture": str(payload.get("sleep_debt_posture") or ""),
+        "pre_sleep_checklist": [str(i) for i in (payload.get("pre_sleep_checklist") or []) if i],
+        "watch_outs": [
+            {
+                "issue": str(wo.get("issue") or ""),
+                "mitigation": str(wo.get("mitigation") or ""),
+            }
+            for wo in (payload.get("watch_outs") or [])
+            if isinstance(wo, dict)
+        ],
+        "tomorrow_setup": [str(i) for i in (payload.get("tomorrow_setup") or []) if i],
+    }
+
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO briefings "
+            "(date, kind, payload_json, model, provider, generated_at) "
+            "VALUES (?, 'night', ?, ?, ?, ?)",
+            (target_date, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {**result, "model": AI_MODEL, "analysis_date": target_date, "cached": False}
 
 
 # --- Bloodwork panels (CRUD) ---
@@ -3522,12 +4864,265 @@ def delete_bloodwork_panel(panel_id: int):
 
 # --- Genome uploads (VCF parse + CRUD) ---
 
+_TARGET_RS_IDS: frozenset = frozenset({
+    "rs429358", "rs7412",       # APOE ε2/ε3/ε4
+    "rs1801133", "rs1801131",   # MTHFR C677T, A1298C
+    "rs731236", "rs1544410",    # VDR TaqI, BsmI
+    "rs174546", "rs1535",       # FADS1, FADS2
+    "rs1815739",                # ACTN3 R577X
+    "rs762551",                 # CYP1A2 *1F
+})
+
+_CONV_PANELS = [
+    {
+        "id": "apoe",
+        "label": "APOE × Lipids",
+        "description": "APOE genotype is the strongest common genetic determinant of LDL-C, ApoB, and cardiovascular risk.",
+        "rs_ids": ["rs429358", "rs7412"],
+        "analyte_patterns": ["LDL", "ApoB", "Apolipoprotein B", "Lp(a)", "Lipoprotein(a)"],
+    },
+    {
+        "id": "mthfr",
+        "label": "MTHFR × Methylation",
+        "description": "MTHFR variants reduce folate-to-methylfolate conversion, affecting homocysteine, B12, and methylation capacity.",
+        "rs_ids": ["rs1801133", "rs1801131"],
+        "analyte_patterns": ["Homocysteine", "Vitamin B12", "B12", "Cobalamin", "Folate", "Folic Acid"],
+    },
+    {
+        "id": "vdr",
+        "label": "VDR × Vitamin D",
+        "description": "VDR variants affect vitamin D receptor sensitivity and 25(OH)D utilisation.",
+        "rs_ids": ["rs731236", "rs1544410"],
+        "analyte_patterns": ["25-OH", "25(OH)", "Vitamin D", "25-Hydroxy", "Calcidiol"],
+    },
+    {
+        "id": "fads",
+        "label": "FADS × Omega-3",
+        "description": "FADS1/FADS2 variants reduce fatty acid desaturation efficiency, affecting conversion of ALA to EPA/DHA.",
+        "rs_ids": ["rs174546", "rs1535"],
+        "analyte_patterns": ["Omega-3", "Omega 3", "EPA", "DHA", "Fatty Acid Index"],
+    },
+    {
+        "id": "actn3",
+        "label": "ACTN3 × Training",
+        "description": "ACTN3 R577X determines alpha-actinin-3 expression in fast-twitch fibres, influencing power versus endurance phenotype.",
+        "rs_ids": ["rs1815739"],
+        "analyte_patterns": [],
+    },
+    {
+        "id": "cyp1a2",
+        "label": "CYP1A2 × Caffeine",
+        "description": "CYP1A2 controls caffeine metabolism rate. Slow metabolisers retain caffeine longer, with greater cardiovascular impact.",
+        "rs_ids": ["rs762551"],
+        "analyte_patterns": [],
+    },
+]
+
+
 def _chrom_sort_key(c: str) -> tuple:
     stripped = c.lstrip("chr").lstrip("Chr")
     return (0, int(stripped), "") if stripped.isdigit() else (1, 0, stripped)
 
 
-def _parse_vcf(path: Path) -> dict:
+def _resolve_gt(format_str: str, sample_str: str, ref: str, alt_str: str) -> Optional[str]:
+    try:
+        fmt_fields = format_str.split(":")
+        samp_fields = sample_str.split(":")
+        gt_idx = fmt_fields.index("GT") if "GT" in fmt_fields else 0
+        gt_raw = samp_fields[gt_idx] if gt_idx < len(samp_fields) else ""
+        indices = gt_raw.replace("|", "/").split("/")
+        allele_list = [ref] + alt_str.split(",")
+        allele_map = {str(i): nuc for i, nuc in enumerate(allele_list)}
+        allele_map["."] = None
+        resolved = [allele_map.get(idx) for idx in indices]
+        if any(a is None for a in resolved):
+            return None
+        return "/".join(sorted(resolved))
+    except Exception:
+        return None
+
+
+def _count_alt(v: Optional[dict]) -> int:
+    if not v:
+        return 0
+    geno = v.get("genotype") or ""
+    alt = (v.get("alt_allele") or "").split(",")[0]
+    if not alt or not geno:
+        return 0
+    return geno.split("/").count(alt)
+
+
+def _has_geno(v: Optional[dict]) -> bool:
+    return bool(v and v.get("genotype"))
+
+
+def _interp_apoe(vmap: dict) -> dict:
+    v1 = vmap.get("rs429358")
+    v2 = vmap.get("rs7412")
+    if not (_has_geno(v1) and _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "APOE ε2/ε3/ε4 status requires both rs429358 and rs7412; one or both were absent from this genome file."}
+    e4 = _count_alt(v1)
+    e2 = _count_alt(v2)
+    e3 = max(0, 2 - e4 - e2)
+    alleles = sorted(["ε4"] * e4 + ["ε3"] * e3 + ["ε2"] * e2)
+    label = f"APOE {alleles[0]}/{alleles[1]}" if len(alleles) == 2 else f"APOE {'/'.join(alleles)}"
+    if e4 == 2:
+        return {"label": label, "risk_level": "high",
+                "risk_note": "Homozygous APOE ε4/ε4 substantially elevates LDL-C, ApoB, and lifetime cardiovascular risk. Statin therapy and aggressive lipid management are typically indicated."}
+    if e4 == 1:
+        return {"label": label, "risk_level": "elevated",
+                "risk_note": "One APOE ε4 allele increases LDL-C and cardiovascular risk above the ε3/ε3 baseline. Dietary fat quality matters more than quantity; lipid response to diet may be blunted."}
+    if e2 == 2:
+        return {"label": label, "risk_level": "low",
+                "risk_note": "APOE ε2/ε2 typically lowers LDL-C but can elevate Lp(a) and triglycerides. Monitor the full lipid panel rather than LDL alone."}
+    if e2 == 1:
+        return {"label": label, "risk_level": "low",
+                "risk_note": "APOE ε2/ε3 is typically associated with lower LDL-C and mildly elevated triglycerides in some individuals."}
+    return {"label": label, "risk_level": "low",
+            "risk_note": "APOE ε3/ε3 (most common genotype) — standard lipid response to diet; routine monitoring sufficient."}
+
+
+def _interp_mthfr(vmap: dict) -> dict:
+    v1 = vmap.get("rs1801133")
+    v2 = vmap.get("rs1801131")
+    if not (_has_geno(v1) or _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "MTHFR variants rs1801133 (C677T) and rs1801131 (A1298C) were not found in this genome file."}
+    parts = []
+    risk = "low"
+    if _has_geno(v1):
+        n = _count_alt(v1)
+        if n == 1:
+            parts.append("C677T heterozygous")
+            risk = "elevated"
+        elif n == 2:
+            parts.append("C677T homozygous")
+            risk = "high"
+    if _has_geno(v2):
+        n = _count_alt(v2)
+        if n == 1:
+            parts.append("A1298C heterozygous")
+            if risk == "low":
+                risk = "elevated"
+        elif n == 2:
+            parts.append("A1298C homozygous")
+            if risk == "low":
+                risk = "elevated"
+    label = f"MTHFR {', '.join(parts)}" if parts else "MTHFR wild-type"
+    if not parts:
+        note = "No common MTHFR variants detected. Folate-to-methylfolate conversion appears unimpaired."
+    elif risk == "high":
+        note = "Homozygous MTHFR C677T substantially reduces enzyme activity (~30% of normal). Active methylfolate (5-MTHF) is typically more effective than standard folic acid. Monitor homocysteine; B12 and folate status are key."
+    else:
+        note = "Reduced MTHFR enzyme activity detected. Ensure adequate B12 and folate intake; consider methylated forms. Elevated homocysteine is possible — especially under low B12/folate conditions."
+    return {"label": label, "risk_level": risk if parts else "low", "risk_note": note}
+
+
+def _interp_vdr(vmap: dict) -> dict:
+    v1 = vmap.get("rs731236")
+    v2 = vmap.get("rs1544410")
+    if not (_has_geno(v1) or _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "VDR variants rs731236 (TaqI) and rs1544410 (BsmI) were not found in this genome file."}
+    parts = []
+    if _has_geno(v1):
+        parts.append(f"TaqI {v1['genotype']}")
+    if _has_geno(v2):
+        parts.append(f"BsmI {v2['genotype']}")
+    label = f"VDR {' · '.join(parts)}"
+    note = "VDR variants can reduce vitamin D receptor sensitivity, meaning higher 25(OH)D levels may be needed for equivalent biological effect. Target serum 25(OH)D at the higher end of the optimal range (50–80 ng/mL)."
+    return {"label": label, "risk_level": "elevated", "risk_note": note}
+
+
+def _interp_fads(vmap: dict) -> dict:
+    v1 = vmap.get("rs174546")
+    v2 = vmap.get("rs1535")
+    if not (_has_geno(v1) or _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "FADS1/FADS2 variants rs174546 and rs1535 were not found in this genome file."}
+    parts = []
+    if _has_geno(v1):
+        parts.append(f"FADS1 {v1['genotype']}")
+    if _has_geno(v2):
+        parts.append(f"FADS2 {v2['genotype']}")
+    label = f"FADS {' · '.join(parts)}"
+    note = "FADS variants reduce conversion of ALA to EPA/DHA. Pre-formed EPA/DHA from fish oil or algal oil is more effective than ALA-rich sources (flaxseed, chia) for this genotype."
+    return {"label": label, "risk_level": "elevated", "risk_note": note}
+
+
+def _interp_actn3(vmap: dict) -> dict:
+    v = vmap.get("rs1815739")
+    if not _has_geno(v):
+        return {"label": None, "risk_level": None,
+                "risk_note": "ACTN3 rs1815739 (R577X) was not found in this genome file."}
+    n = _count_alt(v)
+    if n == 0:
+        label, note = "ACTN3 RR (power)", "Both ACTN3 alleles produce alpha-actinin-3 in fast-twitch fibres. Associated with sprint and power performance. Responds well to high-load, low-rep strength protocols."
+    elif n == 1:
+        label, note = "ACTN3 RX (mixed)", "One functional ACTN3 allele. Mixed power/endurance profile. Responds well to both strength and endurance training."
+    else:
+        label, note = "ACTN3 XX (endurance)", "No alpha-actinin-3 in fast-twitch fibres. Associated with endurance phenotype. Zone 2 aerobic work and sustained efforts play to this genotype’s strengths."
+    return {"label": label, "risk_level": "low", "risk_note": note}
+
+
+def _interp_cyp1a2(vmap: dict) -> dict:
+    v = vmap.get("rs762551")
+    if not _has_geno(v):
+        return {"label": None, "risk_level": None,
+                "risk_note": "CYP1A2 rs762551 was not found in this genome file."}
+    n = _count_alt(v)
+    if n == 2:
+        label, note = "CYP1A2 AA (fast metaboliser)", "Fast caffeine metaboliser. Pre-exercise caffeine is associated with improved performance. Cardiovascular impact of caffeine is lower at typical doses."
+    elif n == 1:
+        label, note = "CYP1A2 AC (intermediate)", "Intermediate caffeine metaboliser. Moderate intake is well tolerated; high doses late in the day may impair sleep."
+    else:
+        label, note = "CYP1A2 CC (slow metaboliser)", "Slow caffeine metaboliser. Higher plasma caffeine levels persist longer. Associated with elevated cardiovascular risk at high intake. Lower doses and an earlier daily cutoff are advisable."
+    return {"label": label, "risk_level": "low", "risk_note": note}
+
+
+_PANEL_INTERP = {
+    "apoe": _interp_apoe,
+    "mthfr": _interp_mthfr,
+    "vdr": _interp_vdr,
+    "fads": _interp_fads,
+    "actn3": _interp_actn3,
+    "cyp1a2": _interp_cyp1a2,
+}
+
+
+_ALLELE_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
+
+
+def _normalize_vcf_gt(gt: str, vcf_ref: str, vcf_alt: str, reg_ref: str, reg_alt: str) -> str:
+    # Handles both direct-orientation and complement-strand VCF files by flipping 0↔1 when REF/ALT are swapped vs the registry
+    vr, va = vcf_ref.upper(), vcf_alt.upper()
+    rr, ra = reg_ref.upper(), reg_alt.upper()
+    for test_ref, test_alt in [(vr, va), (vr.translate(_ALLELE_COMPLEMENT), va.translate(_ALLELE_COMPLEMENT))]:
+        if test_ref == rr and test_alt == ra:
+            return gt
+        if test_ref == ra and test_alt == rr:
+            return gt.replace("0", "X").replace("1", "0").replace("X", "1")
+    return gt
+
+
+def _load_variant_registry() -> dict:
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT * FROM variant_registry").fetchall()
+        conn.close()
+        result = {}
+        for row in rows:
+            entry = dict(row)
+            entry["genotypes"] = json.loads(entry["genotypes"])
+            result[entry["rs_id"]] = entry
+        return result
+    except Exception:
+        return {}
+
+
+def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
+    registry = _load_variant_registry()
     with open(path, "rb") as _fcheck:
         is_gz = _fcheck.read(2) == b"\x1f\x8b"
     open_fn = (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace")) if is_gz else (lambda p: open(p, "rt", encoding="utf-8", errors="replace"))
@@ -3535,6 +5130,8 @@ def _parse_vcf(path: Path) -> dict:
     rs_count = 0
     chromosomes: set[str] = set()
     header_found = False
+    extracted: dict[str, dict] = {}
+    found_variants: dict[str, dict] = {}
     with open_fn(path) as fh:
         for line in fh:
             if line.startswith("##"):
@@ -3542,7 +5139,7 @@ def _parse_vcf(path: Path) -> dict:
             if line.startswith("#CHROM"):
                 header_found = True
                 continue
-            parts = line.split("\t", 3)
+            parts = line.split("\t", 9)
             if len(parts) < 3:
                 continue
             variant_count += 1
@@ -3552,12 +5149,58 @@ def _parse_vcf(path: Path) -> dict:
             rs_id = parts[2].strip()
             if rs_id and rs_id != ".":
                 rs_count += 1
+                if extract_rs and rs_id in extract_rs and rs_id not in extracted:
+                    cols = line.split("\t")
+                    if len(cols) >= 10:
+                        ref = cols[3].strip()
+                        alt = cols[4].strip()
+                        pos_str = cols[1].strip()
+                        gt = _resolve_gt(cols[8].strip(), cols[9].strip(), ref, alt)
+                        extracted[rs_id] = {
+                            "chrom": chrom,
+                            "pos": int(pos_str) if pos_str.lstrip("-").isdigit() else None,
+                            "ref": ref,
+                            "alt": alt,
+                            "genotype": gt,
+                        }
+                if rs_id in registry and rs_id not in found_variants:
+                    entry = registry[rs_id]
+                    vcf_ref = parts[3].strip() if len(parts) > 3 else ""
+                    vcf_alt = parts[4].strip() if len(parts) > 4 else ""
+                    gt = None
+                    if len(parts) > 9:
+                        fmt_str = parts[8].strip()
+                        sample_str = parts[9].strip()
+                        fmt_fields = fmt_str.split(":")
+                        sample_fields = sample_str.split(":")
+                        gt_idx = fmt_fields.index("GT") if "GT" in fmt_fields else -1
+                        if gt_idx >= 0 and gt_idx < len(sample_fields):
+                            raw = sample_fields[gt_idx].replace("|", "/")
+                            if raw == "1/0":
+                                raw = "0/1"
+                            gt = raw
+                    if gt and "." not in gt and entry.get("ref") and entry.get("alt"):
+                        gt = _normalize_vcf_gt(gt, vcf_ref, vcf_alt, entry["ref"], entry["alt"])
+                    if gt and "." not in gt and gt in entry.get("genotypes", {}):
+                        ginfo = entry["genotypes"][gt]
+                        found_variants[rs_id] = {
+                            "rs_id": rs_id,
+                            "gene": entry.get("gene", ""),
+                            "variant_name": entry.get("variant_name", ""),
+                            "domain": entry.get("domain", ""),
+                            "genotype": gt,
+                            "zygosity": ginfo.get("zygosity", ""),
+                            "impact_label": ginfo.get("label", ""),
+                            "interpretation": ginfo.get("interpretation", ""),
+                        }
     if not header_found and variant_count == 0:
         raise ValueError("not a valid VCF file")
     return {
         "variant_count": variant_count,
         "rs_count": rs_count,
         "chromosomes": sorted(chromosomes, key=_chrom_sort_key),
+        "targeted_variants": extracted,
+        "variants": list(found_variants.values()),
     }
 
 
@@ -3572,6 +5215,7 @@ class GenomeUploadIn(BaseModel):
     rs_count: int = 0
     chromosomes: list[str] = []
     notes: Optional[str] = None
+    variants: list[dict] = []
 
 
 def _row_to_genome_upload(row: sqlite3.Row) -> dict:
@@ -3630,7 +5274,38 @@ def create_genome_upload(body: GenomeUploadIn):
             "UPDATE uploads SET genome_upload_id = ? WHERE id = ? AND kind = 'genome'",
             (genome_id, body.source_upload_id),
         )
+    for v in body.variants:
+        conn.execute(
+            """INSERT INTO genome_variants
+               (genome_upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                genome_id, v.get("rs_id", ""), v.get("gene", ""), v.get("variant_name", ""),
+                v.get("domain", ""), v.get("genotype", ""), v.get("zygosity", ""),
+                v.get("impact_label", ""), v.get("interpretation", ""), now,
+            ),
+        )
     conn.commit()
+    if body.source_upload_id is not None:
+        try:
+            urow = conn.execute(
+                "SELECT filename FROM uploads WHERE id = ?", (body.source_upload_id,)
+            ).fetchone()
+            if urow:
+                path = (UPLOADS_DIR / urow["filename"]).resolve()
+                if str(path).startswith(str(UPLOADS_DIR.resolve())) and path.is_file():
+                    vcf_data = _parse_vcf(path, extract_rs=_TARGET_RS_IDS)
+                    for rs_id, vdata in vcf_data["targeted_variants"].items():
+                        conn.execute(
+                            """INSERT INTO genome_variants
+                               (genome_upload_id, rs_id, chrom, pos, ref_allele, alt_allele, genotype, created_at)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (genome_id, rs_id, vdata["chrom"], vdata["pos"],
+                             vdata["ref"], vdata["alt"], vdata["genotype"], now),
+                        )
+                    conn.commit()
+        except Exception:
+            pass
     row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
     conn.close()
     return _row_to_genome_upload(row)
@@ -3672,6 +5347,402 @@ def delete_genome_upload(genome_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# --- Genotype × phenotype convergence ---
+
+def _bloodwork_analytes(conn: sqlite3.Connection, patterns: list) -> list:
+    if not patterns:
+        return []
+    seen: dict = {}
+    for pattern in patterns:
+        rows = conn.execute(
+            """SELECT bp.date, br.analyte, br.value, br.unit, br.flag
+               FROM bloodwork_results br
+               JOIN bloodwork_panels bp ON bp.id = br.panel_id
+               WHERE UPPER(br.analyte) LIKE UPPER(?)
+               ORDER BY bp.date DESC LIMIT 20""",
+            (f"%{pattern}%",),
+        ).fetchall()
+        for r in rows:
+            key = (r["date"], r["analyte"].lower())
+            if key not in seen:
+                seen[key] = dict(r)
+    return sorted(seen.values(), key=lambda x: x["date"])
+
+
+def _weekly_volume(conn: sqlite3.Connection, weeks: int = 12) -> list:
+    cutoff = (date.today() - timedelta(weeks=weeks)).isoformat()
+    rows = conn.execute(
+        """SELECT strftime('%Y-%W', w.date) AS week,
+                  MIN(w.date) AS week_start,
+                  COUNT(DISTINCT w.id) AS sessions,
+                  ROUND(SUM(CASE WHEN ws.set_type='working'
+                            THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0) AS volume_kg
+           FROM workouts w
+           LEFT JOIN workout_sets ws ON ws.workout_id = w.id
+           WHERE w.date >= ?
+           GROUP BY week
+           ORDER BY week""",
+        (cutoff,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _omega3_supplements(conn: sqlite3.Connection) -> list:
+    rows = conn.execute(
+        """SELECT name FROM supplements
+           WHERE UPPER(name) LIKE '%OMEGA%' OR UPPER(name) LIKE '%FISH OIL%'
+           OR UPPER(name) LIKE '% EPA%' OR UPPER(name) LIKE '% DHA%'"""
+    ).fetchall()
+    return [r["name"] for r in rows]
+
+
+@app.get("/api/orient/genotype-phenotype")
+def get_genotype_phenotype():
+    conn = get_db()
+    genome_row = conn.execute(
+        "SELECT id FROM genome_uploads ORDER BY date DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if not genome_row:
+        conn.close()
+        return {"has_genome": False, "panels": []}
+    variant_rows = conn.execute(
+        "SELECT rs_id, ref_allele, alt_allele, genotype "
+        "FROM genome_variants WHERE genome_upload_id = ?",
+        (genome_row["id"],),
+    ).fetchall()
+    vmap = {r["rs_id"]: dict(r) for r in variant_rows}
+    panels = []
+    for pdef in _CONV_PANELS:
+        pid = pdef["id"]
+        interp = _PANEL_INTERP[pid](vmap)
+        found_variants = [
+            {"rs_id": rsid, "genotype": vmap[rsid].get("genotype")}
+            for rsid in pdef["rs_ids"] if rsid in vmap
+        ]
+        bloodwork = _bloodwork_analytes(conn, pdef["analyte_patterns"])
+        wearable = None
+        if pid == "actn3":
+            wearable = {"type": "weekly_volume", "data": _weekly_volume(conn)}
+        elif pid == "fads" and not bloodwork:
+            names = _omega3_supplements(conn)
+            wearable = {"type": "supplements", "names": names}
+        panels.append({
+            "id": pid,
+            "label": pdef["label"],
+            "description": pdef["description"],
+            "rs_ids": pdef["rs_ids"],
+            "variants_found": found_variants,
+            "interpretation": interp.get("label"),
+            "risk_level": interp.get("risk_level"),
+            "risk_note": interp.get("risk_note"),
+            "bloodwork": bloodwork,
+            "wearable": wearable,
+        })
+    conn.close()
+    return {"has_genome": True, "panels": panels}
+
+
+# --- Pharmacogenomics (CYP450 × caffeine / supplements) ---
+
+
+def _compute_caffeine_curve(
+    intakes: list[dict],
+    half_life_h: float,
+    day_date: str,
+) -> list[dict]:
+    day_start = datetime.strptime(day_date, "%Y-%m-%d")
+    kel = math.log(2) / half_life_h
+    points = []
+    for h in range(5, 25):  # 05:00 → 24:00 (midnight)
+        t_point = day_start + timedelta(hours=h)
+        total_mg = 0.0
+        for intake in intakes:
+            t_str = (intake["time"] or "07:00")[:5]
+            intake_dt = datetime.strptime(f"{intake['date']}T{t_str}", "%Y-%m-%dT%H:%M")
+            hours_elapsed = (t_point - intake_dt).total_seconds() / 3600
+            if hours_elapsed < 0:
+                continue
+            total_mg += intake["mg"] * math.exp(-kel * hours_elapsed)
+        hour_label = h % 24
+        points.append({
+            "hours_since_midnight": hour_label,
+            "time": f"{hour_label:02d}:00",
+            "concentration_mg": round(max(0.0, total_mg), 1),
+        })
+    return points
+
+
+@app.get("/api/pharmacogenomics/profile")
+def get_pharmacogenomics_profile():
+    conn = get_db()
+    phenotype_rows = {
+        r["cyp"]: dict(r)
+        for r in conn.execute("SELECT * FROM cyp_phenotypes").fetchall()
+    }
+    has_genome = conn.execute("SELECT 1 FROM genome_uploads LIMIT 1").fetchone() is not None
+    conn.close()
+    cyps = []
+    for cyp, cyp_data in CYP_PHARMACOGENOMICS.items():
+        user_row = phenotype_rows.get(cyp)
+        phenotype = user_row["phenotype"] if user_row else cyp_data["default_phenotype"]
+        pheno_info = cyp_data["phenotypes"].get(
+            phenotype, cyp_data["phenotypes"][cyp_data["default_phenotype"]]
+        )
+        cyps.append({
+            "cyp": cyp,
+            "label": cyp_data["label"],
+            "substrates": cyp_data["substrates"],
+            "phenotype": phenotype,
+            "phenotype_source": user_row["source"] if user_row else "default",
+            "phenotype_id": user_row["id"] if user_row else None,
+            "phenotype_label": pheno_info["label"],
+            "description": pheno_info["description"],
+            "half_life_hours": pheno_info["half_life_hours"],
+            "is_default": user_row is None,
+            "all_phenotypes": [
+                {
+                    "key": k,
+                    "label": v["label"],
+                    "description": v["description"],
+                    "half_life_hours": v["half_life_hours"],
+                }
+                for k, v in cyp_data["phenotypes"].items()
+            ],
+        })
+    return {"has_genome": has_genome, "cyps": cyps}
+
+
+class CypPhenotypeIn(BaseModel):
+    cyp: str
+    phenotype: str
+    source: str = "manual"
+    notes: Optional[str] = None
+
+
+@app.post("/api/pharmacogenomics/phenotypes")
+def upsert_cyp_phenotype(body: CypPhenotypeIn):
+    if body.cyp not in CYP_PHARMACOGENOMICS:
+        raise HTTPException(status_code=422, detail=f"Unknown CYP: {body.cyp!r}")
+    valid_phenotypes = set(CYP_PHARMACOGENOMICS[body.cyp]["phenotypes"].keys())
+    if body.phenotype not in valid_phenotypes:
+        raise HTTPException(status_code=422, detail=f"Invalid phenotype {body.phenotype!r} for {body.cyp}")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO cyp_phenotypes (cyp, phenotype, source, notes, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(cyp) DO UPDATE SET
+            phenotype  = excluded.phenotype,
+            source     = excluded.source,
+            notes      = excluded.notes,
+            created_at = excluded.created_at
+        """,
+        (body.cyp, body.phenotype, body.source, body.notes, now),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM cyp_phenotypes WHERE cyp = ?", (body.cyp,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/api/pharmacogenomics/phenotypes/{cyp}")
+def delete_cyp_phenotype(cyp: str):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM cyp_phenotypes WHERE cyp = ?", (cyp,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="phenotype not found")
+    conn.execute("DELETE FROM cyp_phenotypes WHERE cyp = ?", (cyp,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+class CaffeineIntakeIn(BaseModel):
+    date: str
+    time: Optional[str] = None
+    mg: float
+    source: Optional[str] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/caffeine-intake")
+def list_caffeine_intake(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM caffeine_intake WHERE date >= ? AND date <= ? ORDER BY date DESC, time ASC, id DESC",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/caffeine-intake")
+def create_caffeine_intake(body: CaffeineIntakeIn):
+    if body.mg <= 0:
+        raise HTTPException(status_code=422, detail="mg must be positive")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO caffeine_intake (date, time, mg, source, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (body.date, body.time, body.mg, body.source, body.notes, now),
+    )
+    intake_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute("SELECT * FROM caffeine_intake WHERE id = ?", (intake_id,)).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/api/caffeine-intake/{intake_id}")
+def delete_caffeine_intake(intake_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM caffeine_intake WHERE id = ?", (intake_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="intake not found")
+    conn.execute("DELETE FROM caffeine_intake WHERE id = ?", (intake_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/pharmacogenomics/concentration-curve")
+def get_concentration_curve(date: Optional[str] = None):
+    target_date = date or datetime.utcnow().date().isoformat()
+    prev_date = (datetime.strptime(target_date, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    conn = get_db()
+    pheno_row = conn.execute(
+        "SELECT phenotype FROM cyp_phenotypes WHERE cyp = 'CYP1A2'"
+    ).fetchone()
+    phenotype = pheno_row["phenotype"] if pheno_row else "extensive"
+    intakes = [
+        dict(r) for r in conn.execute(
+            "SELECT * FROM caffeine_intake WHERE date IN (?, ?) ORDER BY date, time",
+            (prev_date, target_date),
+        ).fetchall()
+    ]
+    conn.close()
+    cyp1a2 = CYP_PHARMACOGENOMICS["CYP1A2"]
+    half_life = cyp1a2["phenotypes"][phenotype]["half_life_hours"]
+    baseline_hl = cyp1a2["phenotypes"]["extensive"]["half_life_hours"]
+    curve = _compute_caffeine_curve(intakes, half_life, target_date)
+    baseline = (
+        _compute_caffeine_curve(intakes, baseline_hl, target_date)
+        if phenotype != "extensive"
+        else None
+    )
+    return {
+        "date": target_date,
+        "cyp1a2_phenotype": phenotype,
+        "half_life_hours": half_life,
+        "is_default": pheno_row is None,
+        "curve": curve,
+        "baseline_curve": baseline,
+        "intakes": [i for i in intakes if i["date"] == target_date],
+    }
+
+
+# --- Genome variant interpretation ---
+
+_DOMAIN_ORDER = ["performance", "nutrition", "longevity", "pharmacogenomics", "recovery"]
+
+
+@app.get("/api/genome/variants/{upload_id}")
+def get_genome_variants(upload_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM genome_uploads WHERE id = ?", (upload_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    rows = conn.execute(
+        """SELECT rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation
+           FROM genome_variants
+           WHERE genome_upload_id = ? AND interpretation IS NOT NULL
+           ORDER BY domain, gene, rs_id""",
+        (upload_id,),
+    ).fetchall()
+    conn.close()
+    grouped: dict = {}
+    for row in rows:
+        domain = row["domain"] or "other"
+        grouped.setdefault(domain, []).append({
+            "rs_id": row["rs_id"],
+            "gene": row["gene"],
+            "variant_name": row["variant_name"],
+            "domain": domain,
+            "genotype": row["genotype"],
+            "zygosity": row["zygosity"],
+            "impact_label": row["impact_label"],
+            "interpretation": row["interpretation"],
+        })
+    ordered: dict = {}
+    for d in _DOMAIN_ORDER:
+        if d in grouped:
+            ordered[d] = grouped.pop(d)
+    ordered.update(grouped)
+    return ordered
+
+
+@app.get("/api/genome/registry")
+def list_variant_registry():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT rs_id, gene, variant_name, domain, ref, alt, genotypes FROM variant_registry ORDER BY domain, gene, rs_id"
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        entry = dict(row)
+        entry["genotypes"] = json.loads(entry["genotypes"])
+        result.append(entry)
+    return result
+
+
+@app.post("/api/genome/registry")
+def upsert_variant_registry_entry(body: dict):
+    required = {"rs_id", "gene", "variant_name", "domain", "ref", "alt", "genotypes"}
+    missing = required - body.keys()
+    if missing:
+        raise HTTPException(status_code=422, detail=f"missing fields: {', '.join(sorted(missing))}")
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO variant_registry (rs_id, gene, variant_name, domain, ref, alt, genotypes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(rs_id) DO UPDATE SET
+            gene=excluded.gene, variant_name=excluded.variant_name,
+            domain=excluded.domain, ref=excluded.ref, alt=excluded.alt,
+            genotypes=excluded.genotypes
+        """,
+        (
+            body["rs_id"], body["gene"], body["variant_name"], body["domain"],
+            body["ref"], body["alt"], json.dumps(body["genotypes"]),
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM variant_registry WHERE rs_id = ?", (body["rs_id"],)).fetchone()
+    conn.close()
+    entry = dict(row)
+    entry["genotypes"] = json.loads(entry["genotypes"])
+    return entry
+
+
+@app.delete("/api/genome/registry/{rs_id}")
+def delete_variant_registry_entry(rs_id: str):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM variant_registry WHERE rs_id = ?", (rs_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="variant not found")
+    conn.execute("DELETE FROM variant_registry WHERE rs_id = ?", (rs_id,))
+    conn.commit()
+    conn.close()
+    return {"deleted": rs_id}
 
 
 # --- Body composition estimates (CRUD) ---

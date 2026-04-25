@@ -4,7 +4,7 @@ A personal health dashboard that aggregates data from **Garmin Connect**, the **
 
 ## Current status
 
-All four sync sources are wrapped as **plugins** that the backend schedules and runs on an interval (APScheduler). The UI has five routes (Observe / Orient / Decide / Act / Settings). The database holds ~4.3 years of daily health metrics plus journal, supplements, nutrition, and water logs.
+All four sync sources are wrapped as **plugins** that the backend schedules and runs on an interval (APScheduler). The UI has five routes (Observe / Orient / Decide / Act / Settings). The database holds ~4.3 years of daily health metrics plus journal, supplements, nutrition, water, and cognitive processing-speed logs.
 
 ### Data in the database
 
@@ -63,6 +63,7 @@ All four sync sources are wrapped as **plugins** that the backend schedules and 
             ├── NutritionPage.tsx      # Act → Meals & water
             ├── TodayMetrics.tsx       # Observe → Today's metrics
             ├── JournalPage.tsx        # embedded in DailyPage (yesterday's journal)
+            ├── ProcessingSpeedTask.tsx # Act → Today processing-speed test
             ├── ProtocolsSection.tsx   # Act → Protocols (quick-log + CRUD)
             ├── BloodworkSection.tsx   # Act → Bloodwork
             ├── GenomeSection.tsx      # Act → Genome
@@ -154,7 +155,7 @@ python3 sync_eufy.py --all       # full history
 
 ## Backend — `backend/app.py`
 
-A single FastAPI file serving 51 routes from `vitalscope.db`. CORS is open to `http://localhost:5173` for the Vite dev server. On startup it creates the app-owned tables (journal, supplements, nutrition, water, plugin state) and starts the plugin scheduler.
+A single FastAPI file serving routes from `vitalscope.db`. CORS is open to `http://localhost:5173` for the Vite dev server. On startup it creates the app-owned tables (journal, supplements, nutrition, water, processing-speed, plugin state) and starts the plugin scheduler.
 
 **Route groups**:
 
@@ -166,6 +167,7 @@ A single FastAPI file serving 51 routes from `vitalscope.db`. CORS is open to `h
 | Workouts (Strong) | `GET /api/workouts`, `/api/workouts/stats`, `/api/workouts/weekly-volume`, `/api/workouts/recent`, `/api/workouts/{id}` |
 | Activities (Garmin) | `GET /api/activities`, `/api/activities/stats`, `/api/activities/weekly`, `/api/activities/recent` |
 | Journal | `GET/POST /api/journal`, `GET /api/journal/{date}`, `GET/POST /api/journal/{date}/supplements` |
+| Cognition processing speed | `POST /api/cognition/processing-speed/session`, `GET /api/cognition/processing-speed/daily`, `GET /api/cognition/processing-speed/baseline` |
 | Supplements | `GET/POST/PUT/DELETE /api/supplements[/{id}]` |
 | Protocols | `GET/POST/PUT/DELETE /api/protocols[/{id}]`, `GET/POST/PUT/DELETE /api/protocol-events[/{id}]` |
 | Nutrition | `GET/POST/PUT/DELETE /api/meals[/{id}]`, `GET /api/nutrition/daily`, `GET/POST/DELETE /api/water[/{id}]`, `GET /api/water/daily`, `GET/POST /api/nutrients/definitions`, `DELETE /api/nutrients/definitions/{key}` |
@@ -198,7 +200,7 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).
   - **Plan** — tabs for Supplements (the master list grouped Morning/Noon/Evening, drives the Journal check-off), Food (placeholder), Activity (placeholder).
 - **`/act` Act** — what to do today?
-  - **Today** — `TodayDashboard`: quick snapshot + recent activity card.
+  - **Today** — `TodayDashboard`: quick snapshot + recent activity card + 75-second processing-speed task in the journal card.
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
   - **Meals & water** — `NutritionPage`: log meals for a date with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). Water is logged as separate per-drink entries with a running daily total.
   - **Protocols** — `ProtocolsSection`: define and log intervention protocols (drugs, peptides, PEDs, supplement stacks, hormesis sessions, fasting windows, training blocks). Quick-log cards for Zone 2, sauna (°C + min), cold plunge (°C + min), and TRE window (start/end time). Active protocols show a running day-count; one-tap event logging with dose auto-fill.

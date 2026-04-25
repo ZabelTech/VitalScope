@@ -25,6 +25,7 @@ export function GenomeParseDraft({ result, uploadId, fallbackDate, onSaved, onCa
       rs_count: result.rs_count,
       chromosomes: result.chromosomes,
       notes: notes.trim() || null,
+      variants: result.variants ?? [],
     };
     setSaving(true);
     try {
