@@ -1,5 +1,8 @@
 import { ActivityHistory } from "./ActivityHistory";
+import { CognitionSection } from "./CognitionSection";
 import { FormCheckTimeline } from "./FormCheckTimeline";
+import { GenotypePhenotypeSection } from "./GenotypePhenotypeSection";
+import { MorningBriefing } from "./MorningBriefing";
 import { OodaPage } from "./OodaPage";
 import { OrientAiAnalysis } from "./OrientAiAnalysis";
 import { TrendsPage } from "./TrendsPage";
@@ -8,10 +11,17 @@ export function OrientPage() {
   return (
     <OodaPage
       sections={[
+        { id: "briefing", label: "Morning briefing", content: <MorningBriefing /> },
         { id: "ai-analysis", label: "AI Analysis", content: <OrientAiAnalysis /> },
         { id: "trends", label: "Trends", content: <TrendsPage /> },
         { id: "visual-record", label: "Visual record", content: <FormCheckTimeline /> },
+        { id: "cognition", label: "Cognition", content: <CognitionSection /> },
         { id: "activity", label: "Activity history", content: <ActivityHistory /> },
+        {
+          id: "genotype-phenotype",
+          label: "Genotype × phenotype",
+          content: <GenotypePhenotypeSection />,
+        },
       ]}
     />
   );

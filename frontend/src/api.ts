@@ -2,10 +2,13 @@ import type {
   AiSettings,
   AiSettingsUpdate,
   BloodworkAnalysisResult,
+  GenotypePhenotypeData,
   BloodworkPanel,
   BloodworkPanelInput,
   BodyCompositionEstimate,
   BodyCompositionEstimateInput,
+  CaffeineIntake,
+  ConcentrationCurve,
   FormCheckAnalysisResult,
   FormCheckHistoryItem,
   GenomeParseResult,
@@ -19,9 +22,15 @@ import type {
   NutrientDef,
   NutrientCategory,
   NutrientGoals,
+  MorningBriefing,
+  NightBriefing,
   NutritionDailyTotals,
   OrientAnalysis,
+  PharmacogenomicsProfile,
   PlannedActivity,
+  ProcessingSpeedDaily,
+  ProcessingSpeedSessionInput,
+  ProcessingSpeedSessionResult,
   Supplement,
   SupplementIntake,
   TimeOfDay,
@@ -91,6 +100,28 @@ export async function submitJournalEntry(entry: JournalEntry): Promise<void> {
     body: JSON.stringify(entry),
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function submitProcessingSpeedSession(
+  payload: ProcessingSpeedSessionInput
+): Promise<ProcessingSpeedSessionResult> {
+  const res = await apiFetch("/api/cognition/processing-speed/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchProcessingSpeedDaily(
+  start: string,
+  end: string
+): Promise<ProcessingSpeedDaily[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/cognition/processing-speed/daily?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 export interface SupplementInput {
@@ -517,6 +548,44 @@ export async function deleteGenomeUpload(id: number): Promise<void> {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
+// --- Morning briefing ---
+
+export async function getMorningBriefing(regenerate = false): Promise<MorningBriefing> {
+  const res = await apiFetch("/api/briefing/morning", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ regenerate }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// --- Night briefing ---
+
+export async function analyzeNightBriefing(date: string, regenerate = false): Promise<NightBriefing> {
+  const res = await apiFetch("/api/briefing/night", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date, regenerate }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// --- Genotype × phenotype convergence ---
+
+export async function fetchGenotypePhenotype(): Promise<GenotypePhenotypeData> {
+  const res = await apiFetch("/api/orient/genotype-phenotype");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 // --- Orient AI analysis ---
 
 export async function analyzeOrient(window_days = 14): Promise<OrientAnalysis> {
@@ -597,6 +666,68 @@ export async function runPluginNow(name: string, full = false): Promise<{ status
 
 export async function listPluginRuns(name: string, limit = 10): Promise<PluginRun[]> {
   const res = await apiFetch(`/api/plugins/${name}/runs?limit=${limit}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Pharmacogenomics ---
+
+export async function fetchPharmacogenomicsProfile(): Promise<PharmacogenomicsProfile> {
+  const res = await apiFetch("/api/pharmacogenomics/profile");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function setCypPhenotype(body: {
+  cyp: string;
+  phenotype: string;
+  notes?: string;
+}): Promise<void> {
+  const res = await apiFetch("/api/pharmacogenomics/phenotypes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function deleteCypPhenotype(cyp: string): Promise<void> {
+  const res = await apiFetch(`/api/pharmacogenomics/phenotypes/${encodeURIComponent(cyp)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function listCaffeineIntake(start: string, end: string): Promise<CaffeineIntake[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/caffeine-intake?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createCaffeineIntake(body: {
+  date: string;
+  time?: string | null;
+  mg: number;
+  source?: string | null;
+  notes?: string | null;
+}): Promise<CaffeineIntake> {
+  const res = await apiFetch("/api/caffeine-intake", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteCaffeineIntake(id: number): Promise<void> {
+  const res = await apiFetch(`/api/caffeine-intake/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchConcentrationCurve(date: string): Promise<ConcentrationCurve> {
+  const res = await apiFetch(`/api/pharmacogenomics/concentration-curve?date=${date}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
