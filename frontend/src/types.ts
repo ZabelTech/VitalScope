@@ -498,6 +498,66 @@ export interface OrientAnalysis {
   topics: OrientTopic[];
 }
 
+export interface BiologicalAgeEntry {
+  id: number;
+  date: string;
+  clock_name: string;
+  value: number;
+  chronological_age: number | null;
+  rate_of_ageing: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface BiologicalAgeEntryInput {
+  date: string;
+  clock_name: string;
+  value: number;
+  chronological_age?: number | null;
+  rate_of_ageing?: number | null;
+  notes?: string | null;
+}
+
+export interface LongevityAnalyteHistory {
+  date: string;
+  value: number;
+  unit: string | null;
+  flag: string | null;
+}
+
+export interface LongevityAnalyte {
+  analyte: string;
+  category: string;
+  unit: string | null;
+  last_date: string;
+  last_value: number;
+  last_flag: string | null;
+  baseline_value: number | null;
+  delta: number | null;
+  history: LongevityAnalyteHistory[];
+}
+
+export interface GripStrengthEntry {
+  id: number;
+  date: string;
+  hand: "left" | "right" | "both";
+  strength_kg: number;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface GripStrengthEntryInput {
+  date: string;
+  hand: "left" | "right" | "both";
+  strength_kg: number;
+  notes?: string | null;
+}
+
+export interface Vo2MaxEntry {
+  date: string;
+  value: number;
+}
+
 export interface MorningBriefing {
   recovery_readout: string;
   yesterday_carryover: string;
