@@ -1725,6 +1725,54 @@ input[type="range"]::-moz-range-thumb {
   margin-bottom: 12px;
 }
 
+.bloodwork-narrative {
+  background: #0f2235;
+  border-left: 3px solid #3b82f6;
+  border-radius: 4px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+
+.bloodwork-narrative-label {
+  display: block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #3b82f6;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.bloodwork-narrative p {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.bloodwork-delta {
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.bloodwork-delta--up {
+  color: #f59e0b;
+}
+
+.bloodwork-delta--down {
+  color: #22c55e;
+}
+
+.bloodwork-delta--flat {
+  color: #64748b;
+}
+
+.bloodwork-sparkline {
+  display: inline-flex;
+  align-items: center;
+  vertical-align: middle;
+}
+
 .genome-parse-stats {
   display: flex;
   gap: 16px;
@@ -3621,6 +3669,267 @@ input[type="range"]::-moz-range-thumb {
 
 .mkt-final .mkt-actions { justify-content: center; }
 
+/* ===== Longevity section ===== */
+
+.longevity-disclaimer {
+  font-size: 0.8rem;
+  color: #64748b;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin-bottom: 20px;
+  line-height: 1.5;
+}
+
+.longevity-section-note {
+  font-size: 0.875rem;
+  color: #64748b;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.longevity-empty {
+  color: #64748b;
+  font-size: 0.875rem;
+  padding: 20px 0 8px;
+}
+
+/* Entry form */
+
+.longevity-form {
+  margin-bottom: 20px;
+}
+
+.longevity-form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.longevity-form-row input,
+.longevity-form-row select {
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 6px;
+  color: #e2e8f0;
+  padding: 10px 12px;
+  min-height: 44px;
+  flex: 1 1 140px;
+}
+
+.longevity-form-row input[type="date"] {
+  flex: 0 1 140px;
+}
+
+.longevity-form-row select {
+  flex: 0 1 160px;
+}
+
+.longevity-form-row input[type="number"] {
+  flex: 0 1 160px;
+}
+
+.longevity-form-row input::placeholder {
+  color: #475569;
+}
+
+.longevity-add-btn {
+  background: #3b82f6;
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 20px;
+  min-height: 44px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.longevity-add-btn:hover {
+  background: #2563eb;
+}
+
+.longevity-form-error {
+  color: #ef4444;
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+
+/* Clock charts */
+
+.longevity-clock-chart {
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 14px;
+  margin-bottom: 16px;
+}
+
+@media (min-width: 640px) {
+  .longevity-clock-chart { padding: 16px; }
+}
+
+.longevity-clock-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.longevity-clock-header h3 {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.longevity-dunedin-note {
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+/* Entry rows below chart */
+
+.longevity-entry-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.longevity-entry-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #1e293b;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  flex-wrap: wrap;
+}
+
+.longevity-entry-date {
+  color: #94a3b8;
+  flex: 0 0 auto;
+  min-width: 88px;
+}
+
+.longevity-entry-value {
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.longevity-entry-meta {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.longevity-delete-btn {
+  background: none;
+  border: none;
+  color: #475569;
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin-left: auto;
+  min-height: 0;
+  line-height: 1;
+}
+
+.longevity-delete-btn:hover {
+  color: #ef4444;
+  background: #1e293b;
+}
+
+/* Longevity analytes grid */
+
+.longevity-analytes-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (min-width: 640px) {
+  .longevity-analytes-grid { grid-template-columns: repeat(3, 1fr); }
+}
+
+@media (min-width: 1024px) {
+  .longevity-analytes-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+.longevity-analyte-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.longevity-analyte-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.longevity-analyte-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #e2e8f0;
+  line-height: 1.2;
+}
+
+.longevity-analyte-category {
+  font-size: 0.7rem;
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.longevity-analyte-value {
+  font-size: 1.2rem;
+  font-weight: 700;
+  line-height: 1;
+  margin-top: 4px;
+}
+
+.longevity-analyte-unit {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: #94a3b8;
+}
+
+.longevity-analyte-delta {
+  font-size: 0.78rem;
+  font-weight: 500;
+}
+
+.longevity-analyte-delta.delta-up {
+  color: #f97316;
+}
+
+.longevity-analyte-delta.delta-down {
+  color: #22c55e;
+}
+
+.longevity-analyte-date {
+  font-size: 0.72rem;
+  color: #475569;
+}
+
+.longevity-sparkline {
+  width: 100%;
+  height: 48px;
+  margin-top: 6px;
+}
+
 /* ── Pharmacogenomics / Metaboliser profile ── */
 .metaboliser-profile {
   display: flex;
@@ -3882,3 +4191,273 @@ input[type="range"]::-moz-range-thumb {
 }
 .btn-ghost:hover { border-color: #94a3b8; color: #e2e8f0; }
 .btn-ghost:disabled { opacity: 0.5; cursor: default; }
+
+/* ── Form-check timeline (Orient → Visual record) ── */
+
+.form-check-empty {
+  color: #64748b;
+  font-size: 0.9rem;
+  padding: 24px 0;
+}
+
+.form-check-timeline { }
+
+.form-check-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.form-check-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+@media (min-width: 640px) {
+  .form-check-grid { grid-template-columns: repeat(4, 1fr); }
+}
+
+@media (min-width: 1024px) {
+  .form-check-grid { grid-template-columns: repeat(5, 1fr); }
+}
+
+.form-check-thumb {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.form-check-thumb:hover { border-color: #3b82f6; }
+
+.form-check-thumb--selected { border-color: #8b5cf6; }
+
+.form-check-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.form-check-thumb-date {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.75);
+  color: #e2e8f0;
+  font-size: 0.7rem;
+  text-align: center;
+  padding: 3px 4px;
+}
+
+.form-check-thumb-badge {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(59, 130, 246, 0.85);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.form-check-thumb-select-label {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: #8b5cf6;
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Detail and compare views */
+
+.form-check-detail { }
+
+.form-check-side-by-side {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 12px;
+}
+
+@media (min-width: 640px) {
+  .form-check-side-by-side {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+}
+
+.form-check-photo-col { flex: 0 0 auto; }
+
+.form-check-photo {
+  max-width: 100%;
+  max-height: 420px;
+  border-radius: 10px;
+  object-fit: contain;
+  display: block;
+}
+
+@media (min-width: 640px) {
+  .form-check-photo { max-width: 300px; }
+}
+
+.form-check-date {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  margin-top: 6px;
+  text-align: center;
+}
+
+.form-check-estimate-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.form-check-no-estimate {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.form-check-estimate {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-check-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.875rem;
+}
+
+.form-check-table td {
+  padding: 5px 8px;
+  border-bottom: 1px solid #1e293b;
+  color: #e2e8f0;
+}
+
+.form-check-table td:first-child {
+  color: #94a3b8;
+  width: 50%;
+}
+
+.form-check-obs-note {
+  font-size: 0.875rem;
+  color: #cbd5e1;
+  margin: 2px 0;
+  line-height: 1.45;
+}
+
+.form-check-obs-note .stat-label {
+  display: inline;
+  margin-right: 4px;
+}
+
+.form-check-summary-note {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  margin: 6px 0 0;
+  line-height: 1.5;
+  border-top: 1px solid #1e293b;
+  padding-top: 8px;
+}
+
+.form-check-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  margin-top: 12px;
+}
+
+@media (min-width: 640px) {
+  .form-check-compare {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+}
+
+.form-check-compare-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.form-check-compare-label {
+  font-size: 0.875rem;
+  color: #94a3b8;
+  font-weight: 600;
+}
+
+/* Progress photo strip in TodayMetrics */
+
+.progress-photo-strip {
+  margin-top: 16px;
+  padding: 14px 0 0;
+  border-top: 1px solid #1e293b;
+}
+
+.progress-photo-strip-title {
+  font-size: 0.8rem;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 10px;
+}
+
+.progress-photo-strip-photos {
+  display: flex;
+  gap: 8px;
+}
+
+.progress-photo-strip-item {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0f172a;
+  flex-shrink: 0;
+}
+
+.progress-photo-strip-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.progress-photo-strip-item-date {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(15, 23, 42, 0.75);
+  color: #e2e8f0;
+  font-size: 0.6rem;
+  text-align: center;
+  padding: 2px 3px;
+}

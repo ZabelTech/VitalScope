@@ -386,6 +386,13 @@ export interface BodyCompositionEstimateInput {
   confidence?: "low" | "medium" | "high" | null;
 }
 
+export interface FormCheckHistoryItem {
+  upload_id: number;
+  date: string;
+  created_at: string;
+  estimate: BodyCompositionEstimate | null;
+}
+
 export interface PlannedActivity {
   id: number;
   date: string;
@@ -393,6 +400,27 @@ export interface PlannedActivity {
   target_distance_m: number | null;
   target_duration_sec: number | null;
   notes: string | null;
+}
+
+export interface MealTemplate {
+  id: number;
+  name: string;
+  notes: string | null;
+  created_at: string;
+  nutrients: MealNutrient[];
+}
+
+export type PlannedSessionKind = "zone2" | "strength" | "hiit" | "mobility" | "rest" | "sauna" | "cold";
+
+export interface PlannedSession {
+  id: number;
+  date: string;
+  kind: PlannedSessionKind;
+  title: string | null;
+  target_minutes: number | null;
+  target_load: string | null;
+  notes: string | null;
+  created_at: string;
 }
 
 export type NutrientGoals = Record<string, number>;
@@ -429,9 +457,18 @@ export interface BloodworkPanel {
   lab_name: string | null;
   notes: string | null;
   confidence: "low" | "medium" | "high" | null;
+  narrative: string | null;
   created_at: string;
   result_count?: number;
   results?: BloodworkResult[];
+}
+
+export interface AnalyteDataPoint {
+  panel_id: number;
+  date: string;
+  value: number | null;
+  value_text: string | null;
+  unit: string | null;
 }
 
 export interface BloodworkPanelInput {
@@ -459,6 +496,66 @@ export interface OrientAnalysis {
   window_days: number;
   overall_summary: string;
   topics: OrientTopic[];
+}
+
+export interface BiologicalAgeEntry {
+  id: number;
+  date: string;
+  clock_name: string;
+  value: number;
+  chronological_age: number | null;
+  rate_of_ageing: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface BiologicalAgeEntryInput {
+  date: string;
+  clock_name: string;
+  value: number;
+  chronological_age?: number | null;
+  rate_of_ageing?: number | null;
+  notes?: string | null;
+}
+
+export interface LongevityAnalyteHistory {
+  date: string;
+  value: number;
+  unit: string | null;
+  flag: string | null;
+}
+
+export interface LongevityAnalyte {
+  analyte: string;
+  category: string;
+  unit: string | null;
+  last_date: string;
+  last_value: number;
+  last_flag: string | null;
+  baseline_value: number | null;
+  delta: number | null;
+  history: LongevityAnalyteHistory[];
+}
+
+export interface GripStrengthEntry {
+  id: number;
+  date: string;
+  hand: "left" | "right" | "both";
+  strength_kg: number;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface GripStrengthEntryInput {
+  date: string;
+  hand: "left" | "right" | "both";
+  strength_kg: number;
+  notes?: string | null;
+}
+
+export interface Vo2MaxEntry {
+  date: string;
+  value: number;
 }
 
 export interface MorningBriefing {
@@ -599,6 +696,36 @@ export interface AiSettingsUpdate {
   anthropic_api_key?: string | null;
   openai_api_key?: string | null;
   openrouter_api_key?: string | null;
+}
+
+export type GlucoseTrend =
+  | "falling_fast"
+  | "falling"
+  | "falling_slowly"
+  | "flat"
+  | "rising_slowly"
+  | "rising"
+  | "rising_fast"
+  | "unknown"
+  | null;
+
+export interface GlucoseReading {
+  timestamp: string;
+  date: string;
+  mgdl: number;
+  trend: GlucoseTrend;
+  source: string | null;
+}
+
+export interface GlucoseDaily {
+  date: string;
+  avg_mgdl: number | null;
+  min_mgdl: number | null;
+  max_mgdl: number | null;
+  std_dev: number | null;
+  cv_percent: number | null;
+  tir_pct: number | null;
+  readings_count: number | null;
 }
 
 export interface CaffeineIntake {

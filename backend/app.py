@@ -639,6 +639,41 @@ def ensure_daily_landing_tables() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_date ON planned_activities(date)")
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS meal_templates (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL,
+            notes      TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meal_template_nutrients (
+            template_id  INTEGER NOT NULL REFERENCES meal_templates(id) ON DELETE CASCADE,
+            nutrient_key TEXT NOT NULL,
+            amount       REAL NOT NULL,
+            PRIMARY KEY (template_id, nutrient_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS planned_sessions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            date           TEXT NOT NULL,
+            kind           TEXT NOT NULL CHECK (kind IN ('zone2','strength','hiit','mobility','rest','sauna','cold')),
+            title          TEXT,
+            target_minutes INTEGER,
+            target_load    TEXT,
+            notes          TEXT,
+            created_at     TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_planned_sessions_date ON planned_sessions(date)")
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS uploads (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
@@ -733,6 +768,7 @@ def ensure_daily_landing_tables() -> None:
             lab_name          TEXT,
             notes             TEXT,
             confidence        TEXT,
+            narrative         TEXT,
             created_at        TEXT NOT NULL,
             FOREIGN KEY (source_upload_id) REFERENCES uploads(id) ON DELETE SET NULL
         )
@@ -763,6 +799,9 @@ def ensure_daily_landing_tables() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_bloodwork_results_analyte ON bloodwork_results(analyte)"
     )
+    _bp_existing = {r[1] for r in conn.execute("PRAGMA table_info(bloodwork_panels)")}
+    if "narrative" not in _bp_existing:
+        conn.execute("ALTER TABLE bloodwork_panels ADD COLUMN narrative TEXT")
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS genome_uploads (
@@ -828,6 +867,41 @@ def ensure_daily_landing_tables() -> None:
             value TEXT NOT NULL
         )
         """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS biological_age_entries (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            date               TEXT NOT NULL,
+            clock_name         TEXT NOT NULL,
+            value              REAL NOT NULL,
+            chronological_age  REAL,
+            rate_of_ageing     REAL,
+            notes              TEXT,
+            created_at         TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bio_age_date ON biological_age_entries(date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bio_age_clock ON biological_age_entries(clock_name)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grip_strength_entries (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            date         TEXT NOT NULL,
+            hand         TEXT NOT NULL DEFAULT 'both' CHECK(hand IN ('left','right','both')),
+            strength_kg  REAL NOT NULL,
+            notes        TEXT,
+            created_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_grip_strength_date ON grip_strength_entries(date)"
     )
     conn.execute(
         """
@@ -1035,6 +1109,26 @@ CREATE TABLE IF NOT EXISTS garmin_activities (
     raw_json         TEXT
 );
 
+CREATE TABLE IF NOT EXISTS glucose_readings (
+    timestamp   TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    mgdl        INTEGER NOT NULL,
+    trend       TEXT,
+    source      TEXT DEFAULT 'libre',
+    PRIMARY KEY (date, timestamp)
+);
+
+CREATE TABLE IF NOT EXISTS glucose_daily (
+    date            TEXT PRIMARY KEY,
+    avg_mgdl        REAL,
+    min_mgdl        INTEGER,
+    max_mgdl        INTEGER,
+    std_dev         REAL,
+    cv_percent      REAL,
+    tir_pct         REAL,
+    readings_count  INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS workouts (
     id           TEXT PRIMARY KEY,
     date         TEXT NOT NULL,
@@ -1113,6 +1207,14 @@ CREATE VIEW IF NOT EXISTS v_workouts AS
 SELECT 'strong' AS source,
        id, date, end_date, name, duration_sec, notes
 FROM workouts;
+
+CREATE VIEW IF NOT EXISTS v_glucose_daily AS
+SELECT date, avg_mgdl, min_mgdl, max_mgdl, std_dev, cv_percent, tir_pct, readings_count
+FROM glucose_daily;
+
+CREATE VIEW IF NOT EXISTS v_glucose_readings AS
+SELECT timestamp, date, mgdl, trend, source
+FROM glucose_readings;
 
 CREATE VIEW IF NOT EXISTS v_workout_sets AS
 SELECT workout_id, exercise, set_order, set_type,
@@ -1301,6 +1403,55 @@ def weight_stats(start: Optional[str] = None, end: Optional[str] = None):
 def steps_stats(start: Optional[str] = None, end: Optional[str] = None):
     s, e = default_range(start, end)
     return {"total_steps": stats_for_column("v_steps_daily", "total_steps", s, e)}
+
+
+# --- Glucose (CGM) ---
+
+@app.get("/api/glucose/daily")
+def glucose_daily(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    return query_daily("v_glucose_daily", s, e)
+
+
+@app.get("/api/glucose/readings")
+def glucose_readings(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM v_glucose_readings WHERE date >= ? AND date <= ? ORDER BY timestamp",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/glucose/stats")
+def glucose_stats(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    return {
+        "avg_mgdl": stats_for_column("v_glucose_daily", "avg_mgdl", s, e),
+        "tir_pct": stats_for_column("v_glucose_daily", "tir_pct", s, e),
+        "cv_percent": stats_for_column("v_glucose_daily", "cv_percent", s, e),
+    }
+
+
+@app.get("/api/glucose/postprandial")
+def glucose_postprandial(meal_time: str, window_minutes: int = 120):
+    """Return glucose readings from meal_time for the next window_minutes minutes."""
+    try:
+        start_dt = datetime.fromisoformat(meal_time)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="meal_time must be ISO 8601 (e.g. 2024-01-15T13:00:00)")
+    end_dt = start_dt + timedelta(minutes=window_minutes)
+    start_ts = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    end_ts = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM v_glucose_readings WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
+        (start_ts, end_ts),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # --- Date range ---
@@ -1993,6 +2144,25 @@ class WaterIn(BaseModel):
     amount_ml: int
 
 
+class MealTemplateIn(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    nutrients: list[MealNutrientIn] = []
+
+
+class MealTemplateLogBody(BaseModel):
+    date: str
+
+
+class PlannedSessionIn(BaseModel):
+    date: str
+    kind: Literal["zone2", "strength", "hiit", "mobility", "rest", "sauna", "cold"]
+    title: Optional[str] = None
+    target_minutes: Optional[int] = None
+    target_load: Optional[str] = None
+    notes: Optional[str] = None
+
+
 def _row_to_nutrient_def(row: sqlite3.Row) -> dict:
     return {
         "key": row["key"],
@@ -2175,6 +2345,101 @@ def delete_meal(meal_id: int):
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Meal not found")
     return {"status": "ok"}
+
+
+# --- Meal templates ---
+
+def _fetch_meal_templates(conn: sqlite3.Connection, where: str, params: tuple) -> list[dict]:
+    rows = conn.execute(
+        f"SELECT * FROM meal_templates {where} ORDER BY name, id", params
+    ).fetchall()
+    if not rows:
+        return []
+    tids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(tids))
+    nutrient_rows = conn.execute(
+        f"SELECT template_id, nutrient_key, amount FROM meal_template_nutrients WHERE template_id IN ({placeholders})",
+        tids,
+    ).fetchall()
+    by_tid: dict[int, list[dict]] = {tid: [] for tid in tids}
+    for r in nutrient_rows:
+        by_tid[r["template_id"]].append({"key": r["nutrient_key"], "amount": r["amount"]})
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "notes": r["notes"],
+            "created_at": r["created_at"],
+            "nutrients": by_tid.get(r["id"], []),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/meal-templates")
+def list_meal_templates():
+    conn = get_db()
+    result = _fetch_meal_templates(conn, "", ())
+    conn.close()
+    return result
+
+
+@app.post("/api/meal-templates")
+def create_meal_template(body: MealTemplateIn):
+    if not body.name.strip():
+        raise HTTPException(status_code=422, detail="Template name is required")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        "INSERT INTO meal_templates (name, notes, created_at) VALUES (?, ?, ?)",
+        (body.name.strip(), body.notes, now),
+    )
+    tid = cur.lastrowid
+    for n in body.nutrients:
+        conn.execute(
+            "INSERT INTO meal_template_nutrients (template_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (tid, n.nutrient_key, n.amount),
+        )
+    conn.commit()
+    result = _fetch_meal_templates(conn, "WHERE id = ?", (tid,))
+    conn.close()
+    return result[0]
+
+
+@app.delete("/api/meal-templates/{template_id}")
+def delete_meal_template(template_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM meal_templates WHERE id = ?", (template_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"status": "ok"}
+
+
+@app.post("/api/meal-templates/{template_id}/log")
+def log_meal_template(template_id: int, body: MealTemplateLogBody):
+    conn = get_db()
+    templates = _fetch_meal_templates(conn, "WHERE id = ?", (template_id,))
+    if not templates:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Template not found")
+    tmpl = templates[0]
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO meals (date, time, name, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+        (body.date, None, tmpl["name"], tmpl["notes"], now),
+    )
+    meal_id = cur.lastrowid
+    for n in tmpl["nutrients"]:
+        conn.execute(
+            "INSERT INTO meal_nutrients (meal_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (meal_id, n["key"], n["amount"]),
+        )
+    conn.commit()
+    result = _fetch_meals(conn, "WHERE id = ?", (meal_id,))
+    conn.close()
+    return result[0]
 
 
 @app.get("/api/nutrition/daily")
@@ -2487,7 +2752,7 @@ def put_nutrition_goals(body: NutritionGoalsBody):
     return {"status": "ok", "count": len(body.goals)}
 
 
-# --- Planned activities (read-only in this version) ---
+# --- Planned activities (legacy read-only) ---
 
 @app.get("/api/planned")
 def list_planned(start: Optional[str] = None, end: Optional[str] = None):
@@ -2500,6 +2765,53 @@ def list_planned(start: Optional[str] = None, end: Optional[str] = None):
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# --- Planned sessions ---
+
+@app.get("/api/planned-sessions")
+def list_planned_sessions(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, date, kind, title, target_minutes, target_load, notes, created_at "
+        "FROM planned_sessions WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/planned-sessions")
+def create_planned_session(body: PlannedSessionIn):
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """
+        INSERT INTO planned_sessions (date, kind, title, target_minutes, target_load, notes, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (body.date, body.kind, body.title, body.target_minutes, body.target_load, body.notes, now),
+    )
+    row_id = cur.lastrowid
+    conn.commit()
+    row = conn.execute(
+        "SELECT id, date, kind, title, target_minutes, target_load, notes, created_at FROM planned_sessions WHERE id = ?",
+        (row_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+@app.delete("/api/planned-sessions/{session_id}")
+def delete_planned_session(session_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM planned_sessions WHERE id = ?", (session_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "ok"}
 
 
 # --- Uploads (meal + form-check images + bloodwork PDFs/images) ---
@@ -2923,6 +3235,8 @@ class DemoProvider(AIProvider):
     ) -> dict:
         await asyncio.sleep(0.4)
         tool_name = tool.get("name")
+        if tool_name == "record_panel_comparison":
+            return _demo_comparison_payload()
         if tool_name == "record_health_orientation":
             return _demo_orient_payload()
         if tool_name == "record_morning_briefing":
@@ -2997,6 +3311,17 @@ def _demo_bloodwork_payload() -> dict:
             {"analyte": "Ferritin", "value": 120, "value_text": None, "unit": "ng/mL",
              "reference_low": 30, "reference_high": 400, "reference_text": None, "flag": "normal"},
         ],
+    }
+
+
+def _demo_comparison_payload() -> dict:
+    return {
+        "narrative": (
+            "Compared to your panel from roughly 6 months ago, LDL Cholesterol has risen "
+            "from 118 to 135 mg/dL — a 14% increase worth monitoring. Vitamin D has dropped "
+            "slightly from 32 to 28 ng/mL, now sitting just below the optimal range. "
+            "Haemoglobin, Fasting Glucose, and TSH are all stable. HDL remains strong at 58 mg/dL."
+        )
     }
 
 
@@ -3516,6 +3841,44 @@ _BLOODWORK_TOOL = {
         "additionalProperties": False,
     },
 }
+
+_BLOODWORK_COMPARE_TOOL = {
+    "name": "record_panel_comparison",
+    "description": (
+        "Write a short narrative comparing a new blood panel to the user's prior results. "
+        "Focus on what changed vs the user's own baseline, not vs population reference ranges."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "narrative": {
+                "type": "string",
+                "description": (
+                    "2-5 sentences in plain English. Describe analytes that moved meaningfully "
+                    "since prior panels, direction and magnitude of change. Skip stable analytes. "
+                    "Do not comment on whether values are within reference ranges."
+                ),
+            },
+        },
+        "required": ["narrative"],
+        "additionalProperties": False,
+    },
+}
+
+
+@app.get("/api/bloodwork/analyte/{key}")
+def get_analyte_history(key: str):
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT r.value, r.value_text, r.unit, p.date, p.id AS panel_id
+           FROM bloodwork_results r
+           JOIN bloodwork_panels p ON r.panel_id = p.id
+           WHERE r.analyte = ?
+           ORDER BY p.date ASC, p.id ASC""",
+        (key,),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 @app.post("/api/bloodwork/analyze-upload")
@@ -4475,6 +4838,7 @@ def _row_to_panel(row: sqlite3.Row, results: Optional[list[sqlite3.Row]] = None)
         "lab_name": row["lab_name"],
         "notes": row["notes"],
         "confidence": row["confidence"],
+        "narrative": row["narrative"],
         "created_at": row["created_at"],
     }
     if results is not None:
@@ -4482,8 +4846,58 @@ def _row_to_panel(row: sqlite3.Row, results: Optional[list[sqlite3.Row]] = None)
     return out
 
 
+def _fetch_prior_panels_for_comparison(
+    conn: sqlite3.Connection, current_panel_id: int, panel_date: str, n: int = 4
+) -> list[dict]:
+    panels = conn.execute(
+        "SELECT id, date FROM bloodwork_panels "
+        "WHERE (date < ? OR (date = ? AND id < ?)) AND id != ? "
+        "ORDER BY date DESC, id DESC LIMIT ?",
+        (panel_date, panel_date, current_panel_id, current_panel_id, n),
+    ).fetchall()
+    out = []
+    for p in panels:
+        results = conn.execute(
+            "SELECT analyte, value, value_text, unit FROM bloodwork_results "
+            "WHERE panel_id = ? ORDER BY sort_order, id",
+            (p["id"],),
+        ).fetchall()
+        out.append({"date": p["date"], "results": [dict(r) for r in results]})
+    return out
+
+
+async def _generate_comparison_narrative(
+    new_results: list,
+    prior_panels: list[dict],
+) -> str:
+    lines = ["New panel analytes:"]
+    for r in new_results:
+        val = r.value if r.value is not None else r.value_text
+        unit = r.unit or ""
+        lines.append(f"  {r.analyte}: {val} {unit}".rstrip())
+    lines.append("")
+    for p in prior_panels:
+        lines.append(f"Panel dated {p['date']}:")
+        for r in p["results"]:
+            val = r["value"] if r["value"] is not None else r["value_text"]
+            unit = r["unit"] or ""
+            lines.append(f"  {r['analyte']}: {val} {unit}".rstrip())
+        lines.append("")
+    payload = await _call_ai_text_tool(
+        system=(
+            "You are a health-data assistant helping a user understand how their "
+            "bloodwork has shifted over time. Compare only the user's own values — "
+            "do not reference population reference ranges."
+        ),
+        user_text="\n".join(lines),
+        tool=_BLOODWORK_COMPARE_TOOL,
+        timeout_sec=BLOODWORK_AI_TIMEOUT_SEC,
+    )
+    return payload.get("narrative") or ""
+
+
 @app.post("/api/bloodwork-panels")
-def create_bloodwork_panel(body: BloodworkPanelIn):
+async def create_bloodwork_panel(body: BloodworkPanelIn):
     now = datetime.utcnow().isoformat(timespec="seconds")
     conn = get_db()
     try:
@@ -4514,6 +4928,21 @@ def create_bloodwork_panel(body: BloodworkPanelIn):
                 (panel_id, body.source_upload_id),
             )
         conn.commit()
+        if AI_AVAILABLE and body.results:
+            try:
+                prior = _fetch_prior_panels_for_comparison(conn, panel_id, body.date)
+                if prior:
+                    narrative = await _generate_comparison_narrative(body.results, prior)
+                    if narrative:
+                        conn.execute(
+                            "UPDATE bloodwork_panels SET narrative = ? WHERE id = ?",
+                            (narrative, panel_id),
+                        )
+                        conn.commit()
+            except Exception:
+                _ai_logger.warning(
+                    "Failed to generate bloodwork comparison narrative", exc_info=True
+                )
         panel_row = conn.execute(
             "SELECT * FROM bloodwork_panels WHERE id = ?", (panel_id,)
         ).fetchone()
@@ -4577,6 +5006,230 @@ def delete_bloodwork_panel(panel_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# --- Biological age / longevity markers ---
+
+# Lookup: analyte name (lowercased) → canonical label + category.
+# Used to tag bloodwork_results as longevity-relevant without a schema change.
+_LONGEVITY_ANALYTES: dict[str, dict] = {
+    "apob": {"label": "ApoB", "category": "cardiovascular"},
+    "apolipoprotein b": {"label": "ApoB", "category": "cardiovascular"},
+    "lp(a)": {"label": "Lp(a)", "category": "cardiovascular"},
+    "lipoprotein(a)": {"label": "Lp(a)", "category": "cardiovascular"},
+    "lipoprotein a": {"label": "Lp(a)", "category": "cardiovascular"},
+    "hs-crp": {"label": "hs-CRP", "category": "inflammation"},
+    "hscrp": {"label": "hs-CRP", "category": "inflammation"},
+    "high sensitivity crp": {"label": "hs-CRP", "category": "inflammation"},
+    "high-sensitivity crp": {"label": "hs-CRP", "category": "inflammation"},
+    "high sensitivity c-reactive protein": {"label": "hs-CRP", "category": "inflammation"},
+    "crp (high sensitivity)": {"label": "hs-CRP", "category": "inflammation"},
+    "fasting insulin": {"label": "Fasting Insulin", "category": "metabolic"},
+    "insulin, fasting": {"label": "Fasting Insulin", "category": "metabolic"},
+    "insulin fasting": {"label": "Fasting Insulin", "category": "metabolic"},
+    "homa-ir": {"label": "HOMA-IR", "category": "metabolic"},
+    "homocysteine": {"label": "Homocysteine", "category": "hemostasis"},
+    "fibrinogen": {"label": "Fibrinogen", "category": "hemostasis"},
+    "d-dimer": {"label": "D-Dimer", "category": "hemostasis"},
+    "d dimer": {"label": "D-Dimer", "category": "hemostasis"},
+    "pt": {"label": "PT/INR", "category": "hemostasis"},
+    "inr": {"label": "PT/INR", "category": "hemostasis"},
+    "pt/inr": {"label": "PT/INR", "category": "hemostasis"},
+    "prothrombin time": {"label": "PT/INR", "category": "hemostasis"},
+    "igf-1": {"label": "IGF-1", "category": "metabolic"},
+    "igf1": {"label": "IGF-1", "category": "metabolic"},
+    "igf 1": {"label": "IGF-1", "category": "metabolic"},
+    "insulin-like growth factor 1": {"label": "IGF-1", "category": "metabolic"},
+    "insulin-like growth factor-1": {"label": "IGF-1", "category": "metabolic"},
+}
+
+# Pre-compute label → category for O(1) lookups when building the response.
+_LONGEVITY_LABEL_CATEGORY: dict[str, str] = {
+    v["label"]: v["category"] for v in _LONGEVITY_ANALYTES.values()
+}
+
+_CLOCK_NAMES = ["GrimAge", "Horvath", "PhenoAge", "DunedinPACE", "TelomereLength"]
+
+
+class BiologicalAgeEntryIn(BaseModel):
+    date: str
+    clock_name: str
+    value: float
+    chronological_age: Optional[float] = None
+    rate_of_ageing: Optional[float] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/biological-age")
+def list_biological_age(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM biological_age_entries WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/biological-age")
+def create_biological_age_entry(body: BiologicalAgeEntryIn):
+    now = _utcnow()
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO biological_age_entries
+               (date, clock_name, value, chronological_age, rate_of_ageing, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (body.date, body.clock_name, body.value, body.chronological_age,
+             body.rate_of_ageing, body.notes, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM biological_age_entries WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+@app.delete("/api/biological-age/{entry_id}")
+def delete_biological_age_entry(entry_id: int):
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM biological_age_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="entry not found")
+    conn.execute("DELETE FROM biological_age_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/longevity/analytes")
+def longevity_analytes():
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT r.analyte, r.value, r.unit, r.flag, p.date
+           FROM bloodwork_results r
+           JOIN bloodwork_panels p ON p.id = r.panel_id
+           WHERE r.value IS NOT NULL
+           ORDER BY p.date, r.sort_order, r.id"""
+    ).fetchall()
+    conn.close()
+
+    by_label: dict[str, list] = {}
+    label_unit: dict[str, Optional[str]] = {}
+    for row in rows:
+        entry = _LONGEVITY_ANALYTES.get(row["analyte"].lower().strip())
+        if entry is None:
+            continue
+        label = entry["label"]
+        if label not in by_label:
+            by_label[label] = []
+        by_label[label].append({
+            "date": row["date"],
+            "value": row["value"],
+            "unit": row["unit"],
+            "flag": row["flag"],
+        })
+        label_unit[label] = row["unit"]
+
+    result = []
+    for label, history in by_label.items():
+        history.sort(key=lambda x: x["date"])
+        last = history[-1]
+        baseline = history[0]["value"] if len(history) > 1 else None
+        delta = round(last["value"] - baseline, 4) if baseline is not None else None
+        result.append({
+            "analyte": label,
+            "category": _LONGEVITY_LABEL_CATEGORY.get(label, "other"),
+            "unit": label_unit.get(label),
+            "last_date": last["date"],
+            "last_value": last["value"],
+            "last_flag": last["flag"],
+            "baseline_value": baseline,
+            "delta": delta,
+            "history": history,
+        })
+
+    result.sort(key=lambda x: (x["category"], x["analyte"]))
+    return result
+
+
+class GripStrengthEntryIn(BaseModel):
+    date: str
+    hand: Literal["left", "right", "both"] = "both"
+    strength_kg: float
+    notes: Optional[str] = None
+
+
+@app.get("/api/grip-strength")
+def list_grip_strength(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM grip_strength_entries WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/grip-strength")
+def create_grip_strength_entry(body: GripStrengthEntryIn):
+    now = _utcnow()
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO grip_strength_entries (date, hand, strength_kg, notes, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (body.date, body.hand, body.strength_kg, body.notes, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM grip_strength_entries WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+@app.delete("/api/grip-strength/{entry_id}")
+def delete_grip_strength_entry(entry_id: int):
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM grip_strength_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="entry not found")
+    conn.execute("DELETE FROM grip_strength_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/longevity/vo2max")
+def longevity_vo2max(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT date, json_extract(raw_json, '$.vo2MaxValue') AS vo2max
+           FROM garmin_activities
+           WHERE date >= ? AND date <= ?
+             AND json_extract(raw_json, '$.vo2MaxValue') IS NOT NULL
+           ORDER BY date""",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    seen: dict[str, float] = {}
+    for r in rows:
+        if r["vo2max"] is not None:
+            seen[r["date"]] = r["vo2max"]
+    return [{"date": d, "value": v} for d, v in sorted(seen.items())]
 
 
 # --- Genome uploads (VCF parse + CRUD) ---
@@ -5587,6 +6240,52 @@ def delete_body_composition_estimate(estimate_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+@app.get("/api/form-checks/history")
+def list_form_check_history():
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT u.id AS upload_id, u.date, u.created_at,
+               bce.id AS estimate_id,
+               bce.body_fat_pct, bce.muscle_mass_category, bce.water_retention,
+               bce.visible_definition, bce.posture_note, bce.symmetry_note,
+               bce.fatigue_signs, bce.hydration_signs, bce.general_vigor_note,
+               bce.notes AS estimate_notes, bce.confidence,
+               bce.created_at AS estimate_created_at
+        FROM uploads u
+        LEFT JOIN body_composition_estimates bce
+          ON bce.id = u.body_composition_estimate_id
+        WHERE u.kind = 'form'
+        ORDER BY u.id DESC
+        """
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        estimate = None
+        if r["estimate_id"] is not None:
+            estimate = {
+                "id": r["estimate_id"],
+                "date": r["date"],
+                "source": "form-check-ai",
+                "source_upload_id": r["upload_id"],
+                "body_fat_pct": r["body_fat_pct"],
+                "muscle_mass_category": r["muscle_mass_category"],
+                "water_retention": r["water_retention"],
+                "visible_definition": r["visible_definition"],
+                "posture_note": r["posture_note"],
+                "symmetry_note": r["symmetry_note"],
+                "fatigue_signs": r["fatigue_signs"],
+                "hydration_signs": r["hydration_signs"],
+                "general_vigor_note": r["general_vigor_note"],
+                "notes": r["estimate_notes"],
+                "confidence": r["confidence"],
+                "created_at": r["estimate_created_at"],
+            }
+        result.append({"upload_id": r["upload_id"], "date": r["date"], "created_at": r["created_at"], "estimate": estimate})
+    return result
 
 
 # --- Plugins ---
