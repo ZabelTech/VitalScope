@@ -1035,6 +1035,26 @@ CREATE TABLE IF NOT EXISTS garmin_activities (
     raw_json         TEXT
 );
 
+CREATE TABLE IF NOT EXISTS glucose_readings (
+    timestamp   TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    mgdl        INTEGER NOT NULL,
+    trend       TEXT,
+    source      TEXT DEFAULT 'libre',
+    PRIMARY KEY (date, timestamp)
+);
+
+CREATE TABLE IF NOT EXISTS glucose_daily (
+    date            TEXT PRIMARY KEY,
+    avg_mgdl        REAL,
+    min_mgdl        INTEGER,
+    max_mgdl        INTEGER,
+    std_dev         REAL,
+    cv_percent      REAL,
+    tir_pct         REAL,
+    readings_count  INTEGER
+);
+
 CREATE TABLE IF NOT EXISTS workouts (
     id           TEXT PRIMARY KEY,
     date         TEXT NOT NULL,
@@ -1113,6 +1133,14 @@ CREATE VIEW IF NOT EXISTS v_workouts AS
 SELECT 'strong' AS source,
        id, date, end_date, name, duration_sec, notes
 FROM workouts;
+
+CREATE VIEW IF NOT EXISTS v_glucose_daily AS
+SELECT date, avg_mgdl, min_mgdl, max_mgdl, std_dev, cv_percent, tir_pct, readings_count
+FROM glucose_daily;
+
+CREATE VIEW IF NOT EXISTS v_glucose_readings AS
+SELECT timestamp, date, mgdl, trend, source
+FROM glucose_readings;
 
 CREATE VIEW IF NOT EXISTS v_workout_sets AS
 SELECT workout_id, exercise, set_order, set_type,
@@ -1301,6 +1329,55 @@ def weight_stats(start: Optional[str] = None, end: Optional[str] = None):
 def steps_stats(start: Optional[str] = None, end: Optional[str] = None):
     s, e = default_range(start, end)
     return {"total_steps": stats_for_column("v_steps_daily", "total_steps", s, e)}
+
+
+# --- Glucose (CGM) ---
+
+@app.get("/api/glucose/daily")
+def glucose_daily(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    return query_daily("v_glucose_daily", s, e)
+
+
+@app.get("/api/glucose/readings")
+def glucose_readings(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM v_glucose_readings WHERE date >= ? AND date <= ? ORDER BY timestamp",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/glucose/stats")
+def glucose_stats(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    return {
+        "avg_mgdl": stats_for_column("v_glucose_daily", "avg_mgdl", s, e),
+        "tir_pct": stats_for_column("v_glucose_daily", "tir_pct", s, e),
+        "cv_percent": stats_for_column("v_glucose_daily", "cv_percent", s, e),
+    }
+
+
+@app.get("/api/glucose/postprandial")
+def glucose_postprandial(meal_time: str, window_minutes: int = 120):
+    """Return glucose readings from meal_time for the next window_minutes minutes."""
+    try:
+        start_dt = datetime.fromisoformat(meal_time)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="meal_time must be ISO 8601 (e.g. 2024-01-15T13:00:00)")
+    end_dt = start_dt + timedelta(minutes=window_minutes)
+    start_ts = start_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    end_ts = end_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM v_glucose_readings WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp",
+        (start_ts, end_ts),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # --- Date range ---

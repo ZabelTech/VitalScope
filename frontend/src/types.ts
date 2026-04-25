@@ -601,6 +601,36 @@ export interface AiSettingsUpdate {
   openrouter_api_key?: string | null;
 }
 
+export type GlucoseTrend =
+  | "falling_fast"
+  | "falling"
+  | "falling_slowly"
+  | "flat"
+  | "rising_slowly"
+  | "rising"
+  | "rising_fast"
+  | "unknown"
+  | null;
+
+export interface GlucoseReading {
+  timestamp: string;
+  date: string;
+  mgdl: number;
+  trend: GlucoseTrend;
+  source: string | null;
+}
+
+export interface GlucoseDaily {
+  date: string;
+  avg_mgdl: number | null;
+  min_mgdl: number | null;
+  max_mgdl: number | null;
+  std_dev: number | null;
+  cv_percent: number | null;
+  tir_pct: number | null;
+  readings_count: number | null;
+}
+
 export interface CaffeineIntake {
   id: number;
   date: string;

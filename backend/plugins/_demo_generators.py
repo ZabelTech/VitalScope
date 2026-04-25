@@ -74,6 +74,13 @@ def generate_strong(conn: sqlite3.Connection, full: bool) -> int:
     return n
 
 
+def generate_cgm(conn: sqlite3.Connection, full: bool) -> int:
+    sd = _seed_module()
+    n = sd.seed_cgm(conn, _dates(full), _rng())
+    conn.commit()
+    return n
+
+
 def generate_genome(conn: sqlite3.Connection, full: bool) -> int:
     sd = _seed_module()
     n = sd.seed_genome(conn)

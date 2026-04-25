@@ -1,17 +1,67 @@
 import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
 import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import {
   createMeal,
   deleteMeal,
+  fetchGlucosePostprandial,
   listMeals,
   listNutrientDefs,
 } from "../api";
-import type { Meal, NutrientCategory, NutrientDef } from "../types";
+import type { GlucoseReading, Meal, NutrientCategory, NutrientDef } from "../types";
 import { MealFormFields, type MealFormOutput } from "./MealFormFields";
 import { WaterQuickLog } from "./WaterQuickLog";
 
 function todayISO(): string {
   return format(new Date(), "yyyy-MM-dd");
+}
+
+function PostprandialCurve({ date, time }: { date: string; time: string }) {
+  const [readings, setReadings] = useState<GlucoseReading[] | null>(null);
+
+  useEffect(() => {
+    const timePart = time.length === 5 ? `${time}:00` : time;
+    const mealTime = `${date}T${timePart}`;
+    fetchGlucosePostprandial(mealTime)
+      .then((r) => setReadings(r.length > 0 ? r : null))
+      .catch(() => setReadings(null));
+  }, [date, time]);
+
+  if (!readings) return null;
+
+  const chartData = readings.map((r) => ({
+    ts: r.timestamp.slice(11, 16),
+    mgdl: r.mgdl,
+  }));
+
+  return (
+    <div className="postprandial-chart">
+      <span className="stat-label">2-hour glucose response</span>
+      <ResponsiveContainer width="100%" height={80}>
+        <LineChart data={chartData} margin={{ top: 4, right: 4, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="2 2" vertical={false} stroke="#334155" />
+          <XAxis dataKey="ts" tick={{ fontSize: 10 }} />
+          <YAxis domain={[60, "auto"]} tick={{ fontSize: 10 }} width={36} />
+          <Tooltip formatter={(v) => [`${v} mg/dL`]} />
+          <Line
+            type="monotone"
+            dataKey="mgdl"
+            stroke="#f59e0b"
+            strokeWidth={1.5}
+            dot={false}
+          />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 export function NutritionPage() {
@@ -109,6 +159,7 @@ export function NutritionPage() {
               )}
             </div>
             {m.notes && <div className="supplement-dosage">{m.notes}</div>}
+            {m.time && <PostprandialCurve date={m.date} time={m.time} />}
           </div>
         ))}
 
