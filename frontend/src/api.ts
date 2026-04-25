@@ -19,6 +19,7 @@ import type {
   NutrientCategory,
   NutrientGoals,
   MorningBriefing,
+  NightBriefing,
   NutritionDailyTotals,
   OrientAnalysis,
   PlannedActivity,
@@ -518,6 +519,21 @@ export async function getMorningBriefing(regenerate = false): Promise<MorningBri
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ regenerate }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// --- Night briefing ---
+
+export async function analyzeNightBriefing(date: string, regenerate = false): Promise<NightBriefing> {
+  const res = await apiFetch("/api/briefing/night", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date, regenerate }),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));

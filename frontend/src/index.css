@@ -2025,6 +2025,79 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   font-style: italic;
 }
 
+/* Night briefing */
+.night-briefing {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.night-briefing-readout {
+  background: #1e293b;
+  border-radius: 10px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.night-briefing-readout p {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: #e2e8f0;
+  margin: 0;
+}
+
+.night-briefing-block {
+  background: #1e293b;
+  border-left: 3px solid #8b5cf6;
+  border-radius: 8px;
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.night-briefing-block-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8b5cf6;
+  margin: 0;
+}
+
+.night-briefing-block-text {
+  font-size: 0.9rem;
+  color: #cbd5e1;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.night-briefing-checklist li {
+  color: #e2e8f0;
+}
+
+.night-briefing-watchouts {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.night-briefing-watchout {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.night-briefing-mitigation {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  line-height: 1.55;
+  margin: 0;
+  padding-left: 12px;
+}
+
 /* Recharts overrides */
 .recharts-text {
   fill: #94a3b8 !important;

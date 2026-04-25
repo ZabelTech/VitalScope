@@ -398,6 +398,22 @@ export interface MorningBriefing {
   cached: boolean;
 }
 
+export interface NightBriefingWatchOut {
+  issue: string;
+  mitigation: string;
+}
+
+export interface NightBriefing {
+  model: string;
+  analysis_date: string;
+  today_readout: string;
+  sleep_debt_posture: string;
+  pre_sleep_checklist: string[];
+  watch_outs: NightBriefingWatchOut[];
+  tomorrow_setup: string[];
+  cached?: boolean;
+}
+
 export interface GenomeParseResult {
   variant_count: number;
   rs_count: number;
