@@ -2,6 +2,7 @@ import type {
   AiSettings,
   AiSettingsUpdate,
   BloodworkAnalysisResult,
+  GenotypePhenotypeData,
   BloodworkPanel,
   BloodworkPanelInput,
   BodyCompositionEstimate,
@@ -539,6 +540,14 @@ export async function analyzeNightBriefing(date: string, regenerate = false): Pr
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail || `API error: ${res.status}`);
   }
+  return res.json();
+}
+
+// --- Genotype × phenotype convergence ---
+
+export async function fetchGenotypePhenotype(): Promise<GenotypePhenotypeData> {
+  const res = await apiFetch("/api/orient/genotype-phenotype");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
 
