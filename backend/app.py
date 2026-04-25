@@ -282,6 +282,67 @@ def ensure_journal_table() -> None:
 ensure_journal_table()
 
 
+def ensure_processing_speed_tables() -> None:
+    conn = get_db()
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cog_processing_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT NOT NULL,
+            duration_ms INTEGER NOT NULL,
+            attempted INTEGER NOT NULL,
+            correct INTEGER NOT NULL,
+            accuracy REAL NOT NULL,
+            median_rt_ms REAL,
+            rt_iqr_ms REAL,
+            throughput_pm REAL NOT NULL,
+            inverse_efficiency REAL,
+            omission_errors INTEGER NOT NULL DEFAULT 0,
+            commission_errors INTEGER NOT NULL DEFAULT 0,
+            fast10_rt_ms REAL,
+            slow10_rt_ms REAL,
+            same_button_streak_max INTEGER NOT NULL DEFAULT 0,
+            interruption_count INTEGER NOT NULL DEFAULT 0,
+            focus_lost_ms_total INTEGER NOT NULL DEFAULT 0,
+            quality_flag TEXT NOT NULL CHECK (quality_flag IN ('ok','low')),
+            quality_reasons_json TEXT NOT NULL DEFAULT '[]',
+            device_info_json TEXT,
+            stimulus_version TEXT NOT NULL DEFAULT 'v1',
+            stimulus_seed TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS cog_processing_trials (
+            session_id INTEGER NOT NULL,
+            trial_index INTEGER NOT NULL,
+            difficulty TEXT NOT NULL CHECK (difficulty IN ('easy','moderate','hard')),
+            target_symbol TEXT NOT NULL,
+            candidate_symbols_json TEXT NOT NULL,
+            correct_answer INTEGER NOT NULL,
+            user_answer INTEGER,
+            is_correct INTEGER NOT NULL,
+            rt_ms INTEGER,
+            timeout INTEGER NOT NULL DEFAULT 0,
+            presented_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, trial_index),
+            FOREIGN KEY (session_id) REFERENCES cog_processing_sessions(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cog_processing_sessions_date ON cog_processing_sessions(date)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cog_processing_sessions_quality_date ON cog_processing_sessions(quality_flag, date)")
+    conn.commit()
+    conn.close()
+
+
+ensure_processing_speed_tables()
+
+
 def ensure_journal_questions_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -1216,6 +1277,276 @@ class JournalEntry(BaseModel):
     subjective_energy: Optional[int] = None
     avg_rt_ms: Optional[float] = None
     rt_trials: Optional[int] = None
+
+
+class ProcessingSpeedTrialIn(BaseModel):
+    trial_index: int
+    difficulty: Literal["easy", "moderate", "hard"]
+    target_symbol: str
+    candidate_symbols: list[str]
+    correct_answer: bool
+    user_answer: Optional[bool] = None
+    is_correct: bool
+    rt_ms: Optional[int] = None
+    timeout: bool = False
+    presented_at: str
+
+
+class ProcessingSpeedSessionIn(BaseModel):
+    date: str
+    started_at: str
+    ended_at: str
+    duration_ms: int
+    stimulus_seed: str
+    stimulus_version: str = "v1"
+    interruption_count: int = 0
+    focus_lost_ms_total: int = 0
+    device_info: dict[str, Any] | None = None
+    trials: list[ProcessingSpeedTrialIn]
+
+
+def _percentile(values: list[int], quantile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    idx = int(round((len(ordered) - 1) * quantile))
+    return float(ordered[idx])
+
+
+def _compute_processing_speed_summary(session: ProcessingSpeedSessionIn) -> dict[str, Any]:
+    attempted = len(session.trials)
+    correct = sum(1 for t in session.trials if t.is_correct and not t.timeout)
+    omission_errors = sum(1 for t in session.trials if t.timeout)
+    commission_errors = attempted - correct - omission_errors
+    accuracy = (correct / attempted) if attempted > 0 else 0.0
+    rt_values = [t.rt_ms for t in session.trials if t.is_correct and t.rt_ms is not None and not t.timeout]
+    rt_values_non_null = [t.rt_ms for t in session.trials if t.rt_ms is not None and not t.timeout]
+    median_rt = float(statistics.median(rt_values)) if rt_values else None
+    rt_iqr = None
+    if len(rt_values) >= 4:
+        rt_iqr = _percentile([int(v) for v in rt_values], 0.75) - _percentile([int(v) for v in rt_values], 0.25)
+    fast10_rt = _percentile([int(v) for v in rt_values_non_null], 0.1) if rt_values_non_null else None
+    slow10_rt = _percentile([int(v) for v in rt_values_non_null], 0.9) if rt_values_non_null else None
+    duration_min = max(session.duration_ms / 60000, 1e-9)
+    throughput_pm = correct / duration_min
+    inverse_eff = (median_rt / accuracy) if (median_rt is not None and accuracy >= 0.01) else None
+    same_button_streak_max = 0
+    streak = 0
+    last_answer: Optional[bool] = None
+    for trial in session.trials:
+        if trial.user_answer is None:
+            continue
+        if last_answer is None or trial.user_answer == last_answer:
+            streak += 1
+        else:
+            streak = 1
+        last_answer = trial.user_answer
+        same_button_streak_max = max(same_button_streak_max, streak)
+    low_reasons: list[str] = []
+    very_fast = [t for t in session.trials if t.rt_ms is not None and t.rt_ms < 150]
+    if attempted > 0 and (len(very_fast) / attempted) > 0.2:
+        low_reasons.append("rt_floor")
+    if attempted > 0 and accuracy < 0.6 and median_rt is not None and median_rt < 300:
+        low_reasons.append("low_accuracy_fast")
+    answered = [t for t in session.trials if t.user_answer is not None]
+    yes_count = sum(1 for t in answered if t.user_answer is True)
+    no_count = sum(1 for t in answered if t.user_answer is False)
+    max_bias = max(yes_count, no_count)
+    if len(answered) >= 10 and (max_bias / max(len(answered), 1)) > 0.9 and accuracy < 0.7:
+        low_reasons.append("response_bias")
+    if session.focus_lost_ms_total > 10000 or session.interruption_count >= 3:
+        low_reasons.append("interrupted")
+    return {
+        "attempted": attempted,
+        "correct": correct,
+        "accuracy": accuracy,
+        "median_rt_ms": median_rt,
+        "rt_iqr_ms": rt_iqr,
+        "throughput_pm": throughput_pm,
+        "inverse_efficiency": inverse_eff,
+        "omission_errors": omission_errors,
+        "commission_errors": commission_errors,
+        "fast10_rt_ms": fast10_rt,
+        "slow10_rt_ms": slow10_rt,
+        "same_button_streak_max": same_button_streak_max,
+        "quality_flag": "low" if low_reasons else "ok",
+        "quality_reasons": low_reasons,
+    }
+
+
+def _processing_speed_baseline(conn: sqlite3.Connection, target_date: str, window: int) -> dict[str, Any]:
+    rows = conn.execute(
+        """
+        SELECT throughput_pm
+        FROM cog_processing_sessions
+        WHERE quality_flag = 'ok'
+          AND date < ?
+          AND date >= date(?, ?)
+        ORDER BY date DESC, created_at DESC
+        """,
+        (target_date, target_date, f"-{window} day"),
+    ).fetchall()
+    values = [float(r["throughput_pm"]) for r in rows]
+    if len(values) < 3:
+        return {"window_days": window, "count": len(values), "mean": None, "std": None, "confidence": "low"}
+    mean = statistics.mean(values)
+    std = statistics.stdev(values) if len(values) >= 2 else 0.0
+    return {"window_days": window, "count": len(values), "mean": mean, "std": std, "confidence": "ok"}
+
+
+@app.post("/api/cognition/processing-speed/session")
+def submit_processing_speed_session(session: ProcessingSpeedSessionIn):
+    if not session.trials:
+        raise HTTPException(status_code=422, detail="At least one trial is required")
+    if session.duration_ms <= 0:
+        raise HTTPException(status_code=422, detail="duration_ms must be > 0")
+    summary = _compute_processing_speed_summary(session)
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    cur = conn.execute(
+        """
+        INSERT INTO cog_processing_sessions (
+            date, started_at, ended_at, duration_ms, attempted, correct, accuracy,
+            median_rt_ms, rt_iqr_ms, throughput_pm, inverse_efficiency,
+            omission_errors, commission_errors, fast10_rt_ms, slow10_rt_ms,
+            same_button_streak_max, interruption_count, focus_lost_ms_total,
+            quality_flag, quality_reasons_json, device_info_json, stimulus_version,
+            stimulus_seed, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            session.date,
+            session.started_at,
+            session.ended_at,
+            session.duration_ms,
+            summary["attempted"],
+            summary["correct"],
+            summary["accuracy"],
+            summary["median_rt_ms"],
+            summary["rt_iqr_ms"],
+            summary["throughput_pm"],
+            summary["inverse_efficiency"],
+            summary["omission_errors"],
+            summary["commission_errors"],
+            summary["fast10_rt_ms"],
+            summary["slow10_rt_ms"],
+            summary["same_button_streak_max"],
+            session.interruption_count,
+            session.focus_lost_ms_total,
+            summary["quality_flag"],
+            json.dumps(summary["quality_reasons"]),
+            json.dumps(session.device_info or {}),
+            session.stimulus_version,
+            session.stimulus_seed,
+            now,
+        ),
+    )
+    session_id = int(cur.lastrowid)
+    for trial in sorted(session.trials, key=lambda t: t.trial_index):
+        conn.execute(
+            """
+            INSERT INTO cog_processing_trials (
+                session_id, trial_index, difficulty, target_symbol, candidate_symbols_json,
+                correct_answer, user_answer, is_correct, rt_ms, timeout, presented_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                trial.trial_index,
+                trial.difficulty,
+                trial.target_symbol,
+                json.dumps(trial.candidate_symbols),
+                int(trial.correct_answer),
+                None if trial.user_answer is None else int(trial.user_answer),
+                int(trial.is_correct),
+                trial.rt_ms,
+                int(trial.timeout),
+                trial.presented_at,
+            ),
+        )
+    baseline = _processing_speed_baseline(conn, session.date, 7)
+    delta_vs_baseline = None
+    z_score = None
+    if baseline["mean"] is not None:
+        delta_vs_baseline = summary["throughput_pm"] - float(baseline["mean"])
+        std = float(baseline["std"] or 0.0)
+        z_score = (delta_vs_baseline / std) if std > 0 else 0.0
+    conn.execute(
+        """
+        UPDATE journal_entries
+        SET avg_rt_ms = ?, rt_trials = ?
+        WHERE date = ?
+        """,
+        (summary["median_rt_ms"], summary["attempted"], session.date),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "session_id": session_id,
+        "summary": summary,
+        "baseline": baseline,
+        "delta_vs_baseline": delta_vs_baseline,
+        "z_score": z_score,
+    }
+
+
+@app.get("/api/cognition/processing-speed/daily")
+def get_processing_speed_daily(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """
+        WITH latest AS (
+          SELECT date, MAX(created_at) AS created_at
+          FROM cog_processing_sessions
+          WHERE date >= ? AND date <= ?
+          GROUP BY date
+        )
+        SELECT s.date, s.attempted, s.correct, s.accuracy, s.median_rt_ms, s.throughput_pm,
+               s.quality_flag, s.created_at
+        FROM cog_processing_sessions s
+        JOIN latest l ON l.date = s.date AND l.created_at = s.created_at
+        ORDER BY s.date
+        """,
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/cognition/processing-speed/baseline")
+def get_processing_speed_baseline(date: str, window: int = Query(7, ge=3, le=30)):
+    conn = get_db()
+    baseline = _processing_speed_baseline(conn, date, window)
+    row = conn.execute(
+        """
+        SELECT throughput_pm
+        FROM cog_processing_sessions
+        WHERE date = ?
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (date,),
+    ).fetchone()
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="No processing-speed session for that date")
+    today_throughput = float(row["throughput_pm"])
+    z_score = None
+    delta_vs_baseline = None
+    if baseline["mean"] is not None:
+        delta_vs_baseline = today_throughput - float(baseline["mean"])
+        std = float(baseline["std"] or 0.0)
+        z_score = (delta_vs_baseline / std) if std > 0 else 0.0
+    return {
+        "date": date,
+        "throughput_pm": today_throughput,
+        "baseline": baseline,
+        "delta_vs_baseline": delta_vs_baseline,
+        "z_score": z_score,
+    }
 
 
 @app.post("/api/journal")

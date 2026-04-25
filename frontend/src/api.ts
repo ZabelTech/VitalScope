@@ -27,6 +27,9 @@ import type {
   OrientAnalysis,
   PharmacogenomicsProfile,
   PlannedActivity,
+  ProcessingSpeedDaily,
+  ProcessingSpeedSessionInput,
+  ProcessingSpeedSessionResult,
   Supplement,
   SupplementIntake,
   TimeOfDay,
@@ -96,6 +99,28 @@ export async function submitJournalEntry(entry: JournalEntry): Promise<void> {
     body: JSON.stringify(entry),
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function submitProcessingSpeedSession(
+  payload: ProcessingSpeedSessionInput
+): Promise<ProcessingSpeedSessionResult> {
+  const res = await apiFetch("/api/cognition/processing-speed/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchProcessingSpeedDaily(
+  start: string,
+  end: string
+): Promise<ProcessingSpeedDaily[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/cognition/processing-speed/daily?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 export interface SupplementInput {
