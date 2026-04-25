@@ -353,9 +353,9 @@ def seed_genome(conn: sqlite3.Connection) -> int:
     for rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation in variants:
         conn.execute(
             "INSERT OR IGNORE INTO genome_variants "
-            "(upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
-            (upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation),
+            "(genome_upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation, now),
         )
     return 1
 
