@@ -588,6 +588,30 @@ def ensure_nutrition_tables() -> None:
 ensure_nutrition_tables()
 
 
+_VARIANT_REGISTRY_PATH = Path(__file__).parent / "variant_registry.json"
+
+
+def _seed_variant_registry(conn: sqlite3.Connection) -> None:
+    try:
+        with open(_VARIANT_REGISTRY_PATH) as f:
+            entries = json.load(f)
+    except Exception:
+        return
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO variant_registry (rs_id, gene, variant_name, domain, ref, alt, genotypes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                e["rs_id"], e["gene"], e["variant_name"], e["domain"],
+                e["ref"], e["alt"], json.dumps(e["genotypes"]),
+            )
+            for e in entries
+        ],
+    )
+
+
 def ensure_daily_landing_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -766,6 +790,12 @@ def ensure_daily_landing_tables() -> None:
             ref_allele       TEXT,
             alt_allele       TEXT,
             genotype         TEXT,
+            gene             TEXT,
+            variant_name     TEXT,
+            domain           TEXT,
+            zygosity         TEXT,
+            impact_label     TEXT,
+            interpretation   TEXT,
             created_at       TEXT NOT NULL,
             FOREIGN KEY (genome_upload_id) REFERENCES genome_uploads(id) ON DELETE CASCADE
         )
@@ -777,6 +807,20 @@ def ensure_daily_landing_tables() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_genome_variants_rs ON genome_variants(rs_id)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS variant_registry (
+            rs_id        TEXT PRIMARY KEY,
+            gene         TEXT NOT NULL,
+            variant_name TEXT NOT NULL,
+            domain       TEXT NOT NULL,
+            ref          TEXT NOT NULL,
+            alt          TEXT NOT NULL,
+            genotypes    TEXT NOT NULL
+        )
+        """
+    )
+    _seed_variant_registry(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ai_config (
@@ -3364,52 +3408,6 @@ _FORM_CHECK_FIELDS = [
 ]
 
 
-@app.get("/api/form-checks/history")
-def list_form_check_history():
-    conn = get_db()
-    rows = conn.execute(
-        """
-        SELECT u.id AS upload_id, u.date, u.created_at,
-               bce.id AS estimate_id,
-               bce.body_fat_pct, bce.muscle_mass_category, bce.water_retention,
-               bce.visible_definition, bce.posture_note, bce.symmetry_note,
-               bce.fatigue_signs, bce.hydration_signs, bce.general_vigor_note,
-               bce.notes AS estimate_notes, bce.confidence,
-               bce.created_at AS estimate_created_at
-        FROM uploads u
-        LEFT JOIN body_composition_estimates bce
-          ON bce.id = u.body_composition_estimate_id
-        WHERE u.kind = 'form'
-        ORDER BY u.id DESC
-        """
-    ).fetchall()
-    conn.close()
-    result = []
-    for r in rows:
-        estimate = None
-        if r["estimate_id"] is not None:
-            estimate = {
-                "id": r["estimate_id"],
-                "date": r["date"],
-                "source": "form-check-ai",
-                "source_upload_id": r["upload_id"],
-                "body_fat_pct": r["body_fat_pct"],
-                "muscle_mass_category": r["muscle_mass_category"],
-                "water_retention": r["water_retention"],
-                "visible_definition": r["visible_definition"],
-                "posture_note": r["posture_note"],
-                "symmetry_note": r["symmetry_note"],
-                "fatigue_signs": r["fatigue_signs"],
-                "hydration_signs": r["hydration_signs"],
-                "general_vigor_note": r["general_vigor_note"],
-                "notes": r["estimate_notes"],
-                "confidence": r["confidence"],
-                "created_at": r["estimate_created_at"],
-            }
-        result.append({"upload_id": r["upload_id"], "date": r["date"], "created_at": r["created_at"], "estimate": estimate})
-    return result
-
-
 @app.post("/api/form-checks/analyze-image")
 async def analyze_form_check_image(body: AnalyzeImageBody):
     if not AI_AVAILABLE:
@@ -4810,7 +4808,38 @@ _PANEL_INTERP = {
 }
 
 
+_ALLELE_COMPLEMENT = str.maketrans("ACGTacgt", "TGCAtgca")
+
+
+def _normalize_vcf_gt(gt: str, vcf_ref: str, vcf_alt: str, reg_ref: str, reg_alt: str) -> str:
+    # Handles both direct-orientation and complement-strand VCF files by flipping 0↔1 when REF/ALT are swapped vs the registry
+    vr, va = vcf_ref.upper(), vcf_alt.upper()
+    rr, ra = reg_ref.upper(), reg_alt.upper()
+    for test_ref, test_alt in [(vr, va), (vr.translate(_ALLELE_COMPLEMENT), va.translate(_ALLELE_COMPLEMENT))]:
+        if test_ref == rr and test_alt == ra:
+            return gt
+        if test_ref == ra and test_alt == rr:
+            return gt.replace("0", "X").replace("1", "0").replace("X", "1")
+    return gt
+
+
+def _load_variant_registry() -> dict:
+    try:
+        conn = get_db()
+        rows = conn.execute("SELECT * FROM variant_registry").fetchall()
+        conn.close()
+        result = {}
+        for row in rows:
+            entry = dict(row)
+            entry["genotypes"] = json.loads(entry["genotypes"])
+            result[entry["rs_id"]] = entry
+        return result
+    except Exception:
+        return {}
+
+
 def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
+    registry = _load_variant_registry()
     with open(path, "rb") as _fcheck:
         is_gz = _fcheck.read(2) == b"\x1f\x8b"
     open_fn = (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace")) if is_gz else (lambda p: open(p, "rt", encoding="utf-8", errors="replace"))
@@ -4819,6 +4848,7 @@ def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
     chromosomes: set[str] = set()
     header_found = False
     extracted: dict[str, dict] = {}
+    found_variants: dict[str, dict] = {}
     with open_fn(path) as fh:
         for line in fh:
             if line.startswith("##"):
@@ -4826,7 +4856,7 @@ def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
             if line.startswith("#CHROM"):
                 header_found = True
                 continue
-            parts = line.split("\t", 3)
+            parts = line.split("\t", 9)
             if len(parts) < 3:
                 continue
             variant_count += 1
@@ -4850,6 +4880,36 @@ def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
                             "alt": alt,
                             "genotype": gt,
                         }
+                if rs_id in registry and rs_id not in found_variants:
+                    entry = registry[rs_id]
+                    vcf_ref = parts[3].strip() if len(parts) > 3 else ""
+                    vcf_alt = parts[4].strip() if len(parts) > 4 else ""
+                    gt = None
+                    if len(parts) > 9:
+                        fmt_str = parts[8].strip()
+                        sample_str = parts[9].strip()
+                        fmt_fields = fmt_str.split(":")
+                        sample_fields = sample_str.split(":")
+                        gt_idx = fmt_fields.index("GT") if "GT" in fmt_fields else -1
+                        if gt_idx >= 0 and gt_idx < len(sample_fields):
+                            raw = sample_fields[gt_idx].replace("|", "/")
+                            if raw == "1/0":
+                                raw = "0/1"
+                            gt = raw
+                    if gt and "." not in gt and entry.get("ref") and entry.get("alt"):
+                        gt = _normalize_vcf_gt(gt, vcf_ref, vcf_alt, entry["ref"], entry["alt"])
+                    if gt and "." not in gt and gt in entry.get("genotypes", {}):
+                        ginfo = entry["genotypes"][gt]
+                        found_variants[rs_id] = {
+                            "rs_id": rs_id,
+                            "gene": entry.get("gene", ""),
+                            "variant_name": entry.get("variant_name", ""),
+                            "domain": entry.get("domain", ""),
+                            "genotype": gt,
+                            "zygosity": ginfo.get("zygosity", ""),
+                            "impact_label": ginfo.get("label", ""),
+                            "interpretation": ginfo.get("interpretation", ""),
+                        }
     if not header_found and variant_count == 0:
         raise ValueError("not a valid VCF file")
     return {
@@ -4857,6 +4917,7 @@ def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
         "rs_count": rs_count,
         "chromosomes": sorted(chromosomes, key=_chrom_sort_key),
         "targeted_variants": extracted,
+        "variants": list(found_variants.values()),
     }
 
 
@@ -4871,6 +4932,7 @@ class GenomeUploadIn(BaseModel):
     rs_count: int = 0
     chromosomes: list[str] = []
     notes: Optional[str] = None
+    variants: list[dict] = []
 
 
 def _row_to_genome_upload(row: sqlite3.Row) -> dict:
@@ -4928,6 +4990,17 @@ def create_genome_upload(body: GenomeUploadIn):
         conn.execute(
             "UPDATE uploads SET genome_upload_id = ? WHERE id = ? AND kind = 'genome'",
             (genome_id, body.source_upload_id),
+        )
+    for v in body.variants:
+        conn.execute(
+            """INSERT INTO genome_variants
+               (genome_upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                genome_id, v.get("rs_id", ""), v.get("gene", ""), v.get("variant_name", ""),
+                v.get("domain", ""), v.get("genotype", ""), v.get("zygosity", ""),
+                v.get("impact_label", ""), v.get("interpretation", ""), now,
+            ),
         )
     conn.commit()
     if body.source_upload_id is not None:
@@ -5291,6 +5364,104 @@ def get_concentration_curve(date: Optional[str] = None):
     }
 
 
+# --- Genome variant interpretation ---
+
+_DOMAIN_ORDER = ["performance", "nutrition", "longevity", "pharmacogenomics", "recovery"]
+
+
+@app.get("/api/genome/variants/{upload_id}")
+def get_genome_variants(upload_id: int):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM genome_uploads WHERE id = ?", (upload_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="genome upload not found")
+    rows = conn.execute(
+        """SELECT rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation
+           FROM genome_variants
+           WHERE genome_upload_id = ? AND interpretation IS NOT NULL
+           ORDER BY domain, gene, rs_id""",
+        (upload_id,),
+    ).fetchall()
+    conn.close()
+    grouped: dict = {}
+    for row in rows:
+        domain = row["domain"] or "other"
+        grouped.setdefault(domain, []).append({
+            "rs_id": row["rs_id"],
+            "gene": row["gene"],
+            "variant_name": row["variant_name"],
+            "domain": domain,
+            "genotype": row["genotype"],
+            "zygosity": row["zygosity"],
+            "impact_label": row["impact_label"],
+            "interpretation": row["interpretation"],
+        })
+    ordered: dict = {}
+    for d in _DOMAIN_ORDER:
+        if d in grouped:
+            ordered[d] = grouped.pop(d)
+    ordered.update(grouped)
+    return ordered
+
+
+@app.get("/api/genome/registry")
+def list_variant_registry():
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT rs_id, gene, variant_name, domain, ref, alt, genotypes FROM variant_registry ORDER BY domain, gene, rs_id"
+    ).fetchall()
+    conn.close()
+    result = []
+    for row in rows:
+        entry = dict(row)
+        entry["genotypes"] = json.loads(entry["genotypes"])
+        result.append(entry)
+    return result
+
+
+@app.post("/api/genome/registry")
+def upsert_variant_registry_entry(body: dict):
+    required = {"rs_id", "gene", "variant_name", "domain", "ref", "alt", "genotypes"}
+    missing = required - body.keys()
+    if missing:
+        raise HTTPException(status_code=422, detail=f"missing fields: {', '.join(sorted(missing))}")
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO variant_registry (rs_id, gene, variant_name, domain, ref, alt, genotypes)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(rs_id) DO UPDATE SET
+            gene=excluded.gene, variant_name=excluded.variant_name,
+            domain=excluded.domain, ref=excluded.ref, alt=excluded.alt,
+            genotypes=excluded.genotypes
+        """,
+        (
+            body["rs_id"], body["gene"], body["variant_name"], body["domain"],
+            body["ref"], body["alt"], json.dumps(body["genotypes"]),
+        ),
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM variant_registry WHERE rs_id = ?", (body["rs_id"],)).fetchone()
+    conn.close()
+    entry = dict(row)
+    entry["genotypes"] = json.loads(entry["genotypes"])
+    return entry
+
+
+@app.delete("/api/genome/registry/{rs_id}")
+def delete_variant_registry_entry(rs_id: str):
+    conn = get_db()
+    exists = conn.execute("SELECT 1 FROM variant_registry WHERE rs_id = ?", (rs_id,)).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="variant not found")
+    conn.execute("DELETE FROM variant_registry WHERE rs_id = ?", (rs_id,))
+    conn.commit()
+    conn.close()
+    return {"deleted": rs_id}
+
+
 # --- Body composition estimates (CRUD) ---
 
 class BodyCompositionEstimateIn(BaseModel):
@@ -5416,6 +5587,52 @@ def delete_body_composition_estimate(estimate_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+@app.get("/api/form-checks/history")
+def list_form_check_history():
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT u.id AS upload_id, u.date, u.created_at,
+               bce.id AS estimate_id,
+               bce.body_fat_pct, bce.muscle_mass_category, bce.water_retention,
+               bce.visible_definition, bce.posture_note, bce.symmetry_note,
+               bce.fatigue_signs, bce.hydration_signs, bce.general_vigor_note,
+               bce.notes AS estimate_notes, bce.confidence,
+               bce.created_at AS estimate_created_at
+        FROM uploads u
+        LEFT JOIN body_composition_estimates bce
+          ON bce.id = u.body_composition_estimate_id
+        WHERE u.kind = 'form'
+        ORDER BY u.id DESC
+        """
+    ).fetchall()
+    conn.close()
+    result = []
+    for r in rows:
+        estimate = None
+        if r["estimate_id"] is not None:
+            estimate = {
+                "id": r["estimate_id"],
+                "date": r["date"],
+                "source": "form-check-ai",
+                "source_upload_id": r["upload_id"],
+                "body_fat_pct": r["body_fat_pct"],
+                "muscle_mass_category": r["muscle_mass_category"],
+                "water_retention": r["water_retention"],
+                "visible_definition": r["visible_definition"],
+                "posture_note": r["posture_note"],
+                "symmetry_note": r["symmetry_note"],
+                "fatigue_signs": r["fatigue_signs"],
+                "hydration_signs": r["hydration_signs"],
+                "general_vigor_note": r["general_vigor_note"],
+                "notes": r["estimate_notes"],
+                "confidence": r["confidence"],
+                "created_at": r["estimate_created_at"],
+            }
+        result.append({"upload_id": r["upload_id"], "date": r["date"], "created_at": r["created_at"], "estimate": estimate})
+    return result
 
 
 # --- Plugins ---

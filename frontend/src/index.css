@@ -1760,6 +1760,60 @@ input[type="range"]::-moz-range-thumb {
   word-break: break-all;
 }
 
+.genome-variants-section {
+  margin-top: 16px;
+}
+
+.genome-domain-group {
+  margin-bottom: 20px;
+}
+
+.genome-domain-label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #8b5cf6;
+  margin: 0 0 8px;
+}
+
+.genome-variants-table td {
+  vertical-align: top;
+}
+
+.genome-variant-gene {
+  display: block;
+  font-weight: 700;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+}
+
+.genome-variant-name {
+  display: block;
+  font-size: 0.78rem;
+  color: #94a3b8;
+}
+
+.genome-variant-rsid {
+  display: block;
+  font-size: 0.72rem;
+  color: #475569;
+  font-family: monospace;
+}
+
+.genome-variant-label {
+  display: block;
+  font-size: 0.82rem;
+  color: #e2e8f0;
+  font-weight: 600;
+}
+
+.genome-variant-interp {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  line-height: 1.45;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

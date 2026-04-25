@@ -7,6 +7,7 @@ import {
 } from "../api";
 import type {
   JournalEntry,
+  MoodTag,
   MorningFeeling,
   SupplementIntake,
   TimeOfDay,
@@ -43,6 +44,12 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   const [drankAlcohol, setDrankAlcohol] = useState(false);
   const [alcoholAmount, setAlcoholAmount] = useState<string | null>(null);
+  const [focus, setFocus] = useState<number | null>(null);
+  const [moodTag, setMoodTag] = useState<MoodTag | null>(null);
+  const [cognitiveLoad, setCognitiveLoad] = useState<number | null>(null);
+  const [subjectiveEnergy, setSubjectiveEnergy] = useState<number | null>(null);
+  const [avgRtMs, setAvgRtMs] = useState<number | null>(null);
+  const [rtTrials, setRtTrials] = useState<number | null>(null);
   const [suppStatus, setSuppStatus] = useState<SaveStatus>("idle");
 
   useEffect(() => {
@@ -58,12 +65,24 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
           setIsWorkDay(entry.is_work_day);
           setDrankAlcohol(entry.drank_alcohol);
           setAlcoholAmount(entry.alcohol_amount);
+          setFocus(entry.focus);
+          setMoodTag(entry.mood_tag);
+          setCognitiveLoad(entry.cognitive_load);
+          setSubjectiveEnergy(entry.subjective_energy);
+          setAvgRtMs(entry.avg_rt_ms);
+          setRtTrials(entry.rt_trials);
         } else {
           setMorningFeeling("normal");
           setNotes("");
           setIsWorkDay(null);
           setDrankAlcohol(false);
           setAlcoholAmount(null);
+          setFocus(null);
+          setMoodTag(null);
+          setCognitiveLoad(null);
+          setSubjectiveEnergy(null);
+          setAvgRtMs(null);
+          setRtTrials(null);
         }
       })
       .catch(() => {});
@@ -90,6 +109,12 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
       morning_feeling: morningFeeling,
       notes: notes.trim() || null,
       is_work_day: isWorkDay,
+      focus,
+      mood_tag: moodTag,
+      cognitive_load: cognitiveLoad,
+      subjective_energy: subjectiveEnergy,
+      avg_rt_ms: avgRtMs,
+      rt_trials: rtTrials,
     };
   }
 
