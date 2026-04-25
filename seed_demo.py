@@ -276,6 +276,90 @@ def seed_supplements(conn: sqlite3.Connection) -> None:
         )
 
 
+def seed_genome(conn: sqlite3.Connection) -> int:
+    existing = conn.execute("SELECT COUNT(*) FROM genome_uploads").fetchone()[0]
+    if existing > 0:
+        return 0
+
+    import json as _json
+
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    today_str = date.today().isoformat()
+    chromosomes = _json.dumps(["chr1", "chr10", "chr11", "chr12", "chr15", "chr19", "chr22"])
+
+    cur = conn.execute(
+        "INSERT INTO genome_uploads (date, source_upload_id, variant_count, rs_count, chromosomes, notes, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (today_str, None, 4523817, 3891244, chromosomes, None, now),
+    )
+    upload_id = cur.lastrowid
+
+    variants = [
+        ("rs1815739", "ACTN3", "R577X", "performance", "0/1", "heterozygous",
+         "RX — Mixed profile",
+         "One R allele and one stop-gain X allele. Balanced fast/slow-twitch distribution; "
+         "no strong predisposition in either direction."),
+        ("rs429358", "APOE", "APOE ε4 marker (rs429358)", "longevity", "0/0", "homozygous_ref",
+         "No ε4 at this locus",
+         "T/T at rs429358. In combination with rs7412, consistent with ε2 or ε3 background. "
+         "Not associated with elevated APOE-linked lipid or Alzheimer risk at this position alone."),
+        ("rs7412", "APOE", "APOE ε2 marker (rs7412)", "longevity", "0/1", "heterozygous",
+         "One ε2 allele at this locus",
+         "C/T at rs7412. One T allele is a component of the APOE ε2 haplotype. ε2 carriers "
+         "typically show lower LDL; rare ε2/ε2 homozygosity carries elevated risk of type III hyperlipoproteinaemia."),
+        ("rs1801133", "MTHFR", "C677T", "nutrition", "0/1", "heterozygous",
+         "CT — Mildly reduced MTHFR activity",
+         "Heterozygous 677CT. Approximately 35% reduction in MTHFR enzyme activity. May benefit "
+         "from methylated folate (5-MTHF) and methylcobalamin over synthetic folic acid."),
+        ("rs1801131", "MTHFR", "A1298C", "nutrition", "0/0", "homozygous_ref",
+         "AA — Normal MTHFR activity at this site",
+         "No 1298C variant. This MTHFR site is unaffected. Impact is generally milder than C677T; "
+         "consider combined status with rs1801133."),
+        ("rs2228570", "VDR", "FokI", "nutrition", "1/1", "homozygous_alt",
+         "ff — Reduced VDR signalling",
+         "Two f alleles. VDR protein is the longer, less transcriptionally active isoform. "
+         "May require higher vitamin D3 intake to achieve equivalent serum 25(OH)D targets."),
+        ("rs1544410", "VDR", "BsmI", "nutrition", "0/1", "heterozygous",
+         "Bb — Intermediate response",
+         "Heterozygous Bb. Intermediate vitamin D responsiveness; most individuals respond normally "
+         "to standard supplementation."),
+        ("rs174537", "FADS1", "FADS1 efficiency", "nutrition", "0/0", "homozygous_ref",
+         "GG — Efficient fatty acid conversion",
+         "Two G alleles. Higher FADS1 (δ5-desaturase) activity; efficient conversion of DGLA to "
+         "arachidonic acid and ALA to EPA. Dietary ALA is relatively well converted."),
+        ("rs1535", "FADS2", "FADS2 efficiency", "nutrition", "0/1", "heterozygous",
+         "GA — Intermediate FADS2 activity",
+         "One G, one A allele. Modest reduction in FADS2 activity. Direct omega-3 sources (EPA/DHA) "
+         "are preferable to relying solely on ALA conversion."),
+        ("rs762551", "CYP1A2", "Caffeine metaboliser", "pharmacogenomics", "1/1", "homozygous_alt",
+         "AA — Fast caffeine metaboliser",
+         "Two A alleles. CYP1A2 is strongly inducible; caffeine is cleared quickly. Lower adverse "
+         "cardiovascular risk at moderate intake. Late caffeine consumption may have less sleep impact "
+         "than in slow metabolisers."),
+        ("rs3892097", "CYP2D6", "*4 allele", "pharmacogenomics", "0/0", "homozygous_ref",
+         "Normal CYP2D6 at *4 locus",
+         "No *4 loss-of-function allele at this position. CYP2D6 activity at this locus is "
+         "unimpaired. Note: full CYP2D6 phenotype requires testing multiple variants and copy-number variation."),
+        ("rs4244285", "CYP2C19", "*2 allele", "pharmacogenomics", "0/0", "homozygous_ref",
+         "Normal CYP2C19 at *2 locus",
+         "No *2 loss-of-function allele. CYP2C19 activity is unimpaired at this site. Drugs "
+         "metabolised by CYP2C19 (clopidogrel, omeprazole, certain antidepressants) are expected to process normally."),
+        ("rs1799853", "CYP2C9", "*2 allele", "pharmacogenomics", "0/0", "homozygous_ref",
+         "Normal CYP2C9 at *2 locus",
+         "No *2 variant. CYP2C9 activity is unimpaired at this position. Warfarin, NSAIDs, and "
+         "other CYP2C9 substrates process normally from this locus."),
+    ]
+
+    for rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation in variants:
+        conn.execute(
+            "INSERT OR IGNORE INTO genome_variants "
+            "(upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            (upload_id, rs_id, gene, variant_name, domain, genotype, zygosity, impact_label, interpretation),
+        )
+    return 1
+
+
 def seed_meals_and_water(conn: sqlite3.Connection) -> None:
     today = date.today()
     now = datetime.utcnow().isoformat(timespec="seconds")
@@ -329,6 +413,7 @@ def main() -> None:
         seed_meals_and_water(conn)
         seed_nutrition_goals(conn)
         seed_planned_activities(conn)
+        seed_genome(conn)
         conn.commit()
         print("seed_demo: done", flush=True)
     finally:

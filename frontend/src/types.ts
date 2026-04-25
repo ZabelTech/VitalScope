@@ -431,10 +431,22 @@ export interface NightBriefing {
   cached?: boolean;
 }
 
+export interface GenomeVariant {
+  rs_id: string;
+  gene: string;
+  variant_name: string;
+  domain: string;
+  genotype: string;
+  zygosity: string;
+  impact_label: string;
+  interpretation: string;
+}
+
 export interface GenomeParseResult {
   variant_count: number;
   rs_count: number;
   chromosomes: string[];
+  variants: GenomeVariant[];
 }
 
 export interface GenomeUpload {
@@ -455,6 +467,7 @@ export interface GenomeUploadInput {
   rs_count: number;
   chromosomes: string[];
   notes?: string | null;
+  variants?: GenomeVariant[];
 }
 
 export interface JournalQuestion {
