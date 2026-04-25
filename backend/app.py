@@ -870,6 +870,41 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS biological_age_entries (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            date               TEXT NOT NULL,
+            clock_name         TEXT NOT NULL,
+            value              REAL NOT NULL,
+            chronological_age  REAL,
+            rate_of_ageing     REAL,
+            notes              TEXT,
+            created_at         TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bio_age_date ON biological_age_entries(date)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bio_age_clock ON biological_age_entries(clock_name)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS grip_strength_entries (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            date         TEXT NOT NULL,
+            hand         TEXT NOT NULL DEFAULT 'both' CHECK(hand IN ('left','right','both')),
+            strength_kg  REAL NOT NULL,
+            notes        TEXT,
+            created_at   TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_grip_strength_date ON grip_strength_entries(date)"
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS briefings (
             date         TEXT NOT NULL,
             kind         TEXT NOT NULL,
@@ -4971,6 +5006,230 @@ def delete_bloodwork_panel(panel_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# --- Biological age / longevity markers ---
+
+# Lookup: analyte name (lowercased) → canonical label + category.
+# Used to tag bloodwork_results as longevity-relevant without a schema change.
+_LONGEVITY_ANALYTES: dict[str, dict] = {
+    "apob": {"label": "ApoB", "category": "cardiovascular"},
+    "apolipoprotein b": {"label": "ApoB", "category": "cardiovascular"},
+    "lp(a)": {"label": "Lp(a)", "category": "cardiovascular"},
+    "lipoprotein(a)": {"label": "Lp(a)", "category": "cardiovascular"},
+    "lipoprotein a": {"label": "Lp(a)", "category": "cardiovascular"},
+    "hs-crp": {"label": "hs-CRP", "category": "inflammation"},
+    "hscrp": {"label": "hs-CRP", "category": "inflammation"},
+    "high sensitivity crp": {"label": "hs-CRP", "category": "inflammation"},
+    "high-sensitivity crp": {"label": "hs-CRP", "category": "inflammation"},
+    "high sensitivity c-reactive protein": {"label": "hs-CRP", "category": "inflammation"},
+    "crp (high sensitivity)": {"label": "hs-CRP", "category": "inflammation"},
+    "fasting insulin": {"label": "Fasting Insulin", "category": "metabolic"},
+    "insulin, fasting": {"label": "Fasting Insulin", "category": "metabolic"},
+    "insulin fasting": {"label": "Fasting Insulin", "category": "metabolic"},
+    "homa-ir": {"label": "HOMA-IR", "category": "metabolic"},
+    "homocysteine": {"label": "Homocysteine", "category": "hemostasis"},
+    "fibrinogen": {"label": "Fibrinogen", "category": "hemostasis"},
+    "d-dimer": {"label": "D-Dimer", "category": "hemostasis"},
+    "d dimer": {"label": "D-Dimer", "category": "hemostasis"},
+    "pt": {"label": "PT/INR", "category": "hemostasis"},
+    "inr": {"label": "PT/INR", "category": "hemostasis"},
+    "pt/inr": {"label": "PT/INR", "category": "hemostasis"},
+    "prothrombin time": {"label": "PT/INR", "category": "hemostasis"},
+    "igf-1": {"label": "IGF-1", "category": "metabolic"},
+    "igf1": {"label": "IGF-1", "category": "metabolic"},
+    "igf 1": {"label": "IGF-1", "category": "metabolic"},
+    "insulin-like growth factor 1": {"label": "IGF-1", "category": "metabolic"},
+    "insulin-like growth factor-1": {"label": "IGF-1", "category": "metabolic"},
+}
+
+# Pre-compute label → category for O(1) lookups when building the response.
+_LONGEVITY_LABEL_CATEGORY: dict[str, str] = {
+    v["label"]: v["category"] for v in _LONGEVITY_ANALYTES.values()
+}
+
+_CLOCK_NAMES = ["GrimAge", "Horvath", "PhenoAge", "DunedinPACE", "TelomereLength"]
+
+
+class BiologicalAgeEntryIn(BaseModel):
+    date: str
+    clock_name: str
+    value: float
+    chronological_age: Optional[float] = None
+    rate_of_ageing: Optional[float] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/biological-age")
+def list_biological_age(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM biological_age_entries WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/biological-age")
+def create_biological_age_entry(body: BiologicalAgeEntryIn):
+    now = _utcnow()
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO biological_age_entries
+               (date, clock_name, value, chronological_age, rate_of_ageing, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (body.date, body.clock_name, body.value, body.chronological_age,
+             body.rate_of_ageing, body.notes, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM biological_age_entries WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+@app.delete("/api/biological-age/{entry_id}")
+def delete_biological_age_entry(entry_id: int):
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM biological_age_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="entry not found")
+    conn.execute("DELETE FROM biological_age_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/longevity/analytes")
+def longevity_analytes():
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT r.analyte, r.value, r.unit, r.flag, p.date
+           FROM bloodwork_results r
+           JOIN bloodwork_panels p ON p.id = r.panel_id
+           WHERE r.value IS NOT NULL
+           ORDER BY p.date, r.sort_order, r.id"""
+    ).fetchall()
+    conn.close()
+
+    by_label: dict[str, list] = {}
+    label_unit: dict[str, Optional[str]] = {}
+    for row in rows:
+        entry = _LONGEVITY_ANALYTES.get(row["analyte"].lower().strip())
+        if entry is None:
+            continue
+        label = entry["label"]
+        if label not in by_label:
+            by_label[label] = []
+        by_label[label].append({
+            "date": row["date"],
+            "value": row["value"],
+            "unit": row["unit"],
+            "flag": row["flag"],
+        })
+        label_unit[label] = row["unit"]
+
+    result = []
+    for label, history in by_label.items():
+        history.sort(key=lambda x: x["date"])
+        last = history[-1]
+        baseline = history[0]["value"] if len(history) > 1 else None
+        delta = round(last["value"] - baseline, 4) if baseline is not None else None
+        result.append({
+            "analyte": label,
+            "category": _LONGEVITY_LABEL_CATEGORY.get(label, "other"),
+            "unit": label_unit.get(label),
+            "last_date": last["date"],
+            "last_value": last["value"],
+            "last_flag": last["flag"],
+            "baseline_value": baseline,
+            "delta": delta,
+            "history": history,
+        })
+
+    result.sort(key=lambda x: (x["category"], x["analyte"]))
+    return result
+
+
+class GripStrengthEntryIn(BaseModel):
+    date: str
+    hand: Literal["left", "right", "both"] = "both"
+    strength_kg: float
+    notes: Optional[str] = None
+
+
+@app.get("/api/grip-strength")
+def list_grip_strength(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT * FROM grip_strength_entries WHERE date >= ? AND date <= ? ORDER BY date, id",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/grip-strength")
+def create_grip_strength_entry(body: GripStrengthEntryIn):
+    now = _utcnow()
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO grip_strength_entries (date, hand, strength_kg, notes, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (body.date, body.hand, body.strength_kg, body.notes, now),
+        )
+        row = conn.execute(
+            "SELECT * FROM grip_strength_entries WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+@app.delete("/api/grip-strength/{entry_id}")
+def delete_grip_strength_entry(entry_id: int):
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM grip_strength_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="entry not found")
+    conn.execute("DELETE FROM grip_strength_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/api/longevity/vo2max")
+def longevity_vo2max(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT date, json_extract(raw_json, '$.vo2MaxValue') AS vo2max
+           FROM garmin_activities
+           WHERE date >= ? AND date <= ?
+             AND json_extract(raw_json, '$.vo2MaxValue') IS NOT NULL
+           ORDER BY date""",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    seen: dict[str, float] = {}
+    for r in rows:
+        if r["vo2max"] is not None:
+            seen[r["date"]] = r["vo2max"]
+    return [{"date": d, "value": v} for d, v in sorted(seen.items())]
 
 
 # --- Genome uploads (VCF parse + CRUD) ---
