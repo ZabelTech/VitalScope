@@ -83,7 +83,9 @@ AUTH_COOKIE = "vitalscope_auth"
 # (which it should be in prod via `flyctl secrets set`). Falls back to a
 # per-process random value in dev, which means restarts invalidate cookies
 # — acceptable for dev.
-SESSION_SECRET = os.environ.get("VITALSCOPE_SESSION_SECRET") or secrets.token_urlsafe(32)
+SESSION_SECRET = os.environ.get("VITALSCOPE_SESSION_SECRET") or hmac.new(
+    AUTH_PASSWORD.encode(), b"vitalscope.session-secret", "sha256"
+).hexdigest()
 
 
 def _auth_token() -> str:
