@@ -115,6 +115,7 @@ export interface StatValues {
 }
 
 export type MorningFeeling = "sleepy" | "energetic" | "normal" | "sick";
+export type MoodTag = "great" | "good" | "flat" | "low" | "irritable" | "anxious";
 
 export interface JournalEntry {
   date: string;
@@ -125,6 +126,82 @@ export interface JournalEntry {
   morning_feeling: MorningFeeling;
   notes: string | null;
   is_work_day: boolean | null;
+  focus: number | null;
+  mood_tag: MoodTag | null;
+  cognitive_load: number | null;
+  subjective_energy: number | null;
+  avg_rt_ms: number | null;
+  rt_trials: number | null;
+}
+
+export interface CognitionDaily {
+  date: string;
+  focus: number | null;
+  mood_tag: MoodTag | null;
+  cognitive_load: number | null;
+  subjective_energy: number | null;
+  avg_rt_ms: number | null;
+  rt_trials: number | null;
+}
+
+export type ProcessingSpeedDifficulty = "easy" | "moderate" | "hard";
+
+export interface ProcessingSpeedTrialInput {
+  trial_index: number;
+  difficulty: ProcessingSpeedDifficulty;
+  target_symbol: string;
+  candidate_symbols: string[];
+  correct_answer: boolean;
+  user_answer: boolean | null;
+  is_correct: boolean;
+  rt_ms: number | null;
+  timeout: boolean;
+  presented_at: string;
+}
+
+export interface ProcessingSpeedSessionInput {
+  date: string;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  stimulus_seed: string;
+  stimulus_version: string;
+  interruption_count: number;
+  focus_lost_ms_total: number;
+  device_info: Record<string, string>;
+  trials: ProcessingSpeedTrialInput[];
+}
+
+export interface ProcessingSpeedSessionResult {
+  session_id: number;
+  summary: {
+    attempted: number;
+    correct: number;
+    accuracy: number;
+    median_rt_ms: number | null;
+    throughput_pm: number;
+    quality_flag: "ok" | "low";
+  };
+  baseline: {
+    window_days: number;
+    count: number;
+    mean: number | null;
+    std: number | null;
+    confidence: "ok" | "low";
+  };
+  delta_vs_baseline: number | null;
+  z_score: number | null;
+}
+
+export interface ProcessingSpeedDaily {
+  date: string;
+  attempted: number;
+  correct: number;
+  accuracy: number;
+  median_rt_ms: number | null;
+  throughput_pm: number;
+  quality_flag: "ok" | "low";
+  created_at: string;
 }
 
 export type NutrientCategory = "macro" | "mineral" | "vitamin" | "bioactive";
@@ -384,10 +461,52 @@ export interface OrientAnalysis {
   topics: OrientTopic[];
 }
 
+export interface MorningBriefing {
+  recovery_readout: string;
+  yesterday_carryover: string;
+  tonight_outlook: string;
+  whats_up: string[];
+  whats_planned: string[];
+  suggestions: string[];
+  model: string;
+  provider: string;
+  generated_at: string;
+  briefing_date: string;
+  cached: boolean;
+}
+
+export interface NightBriefingWatchOut {
+  issue: string;
+  mitigation: string;
+}
+
+export interface NightBriefing {
+  model: string;
+  analysis_date: string;
+  today_readout: string;
+  sleep_debt_posture: string;
+  pre_sleep_checklist: string[];
+  watch_outs: NightBriefingWatchOut[];
+  tomorrow_setup: string[];
+  cached?: boolean;
+}
+
+export interface GenomeVariant {
+  rs_id: string;
+  gene: string;
+  variant_name: string;
+  domain: string;
+  genotype: string;
+  zygosity: string;
+  impact_label: string;
+  interpretation: string;
+}
+
 export interface GenomeParseResult {
   variant_count: number;
   rs_count: number;
   chromosomes: string[];
+  variants: GenomeVariant[];
 }
 
 export interface GenomeUpload {
@@ -408,6 +527,7 @@ export interface GenomeUploadInput {
   rs_count: number;
   chromosomes: string[];
   notes?: string | null;
+  variants?: GenomeVariant[];
 }
 
 export interface JournalQuestion {
@@ -425,6 +545,43 @@ export interface JournalQuestionResponse {
 
 export type AiProvider = "anthropic" | "openai" | "openrouter";
 export type AiEffort = "low" | "medium" | "high";
+
+export interface ConvVariant {
+  rs_id: string;
+  genotype: string | null;
+}
+
+export interface ConvBloodwork {
+  date: string;
+  analyte: string;
+  value: number | null;
+  unit: string | null;
+  flag: string | null;
+}
+
+export interface ConvWearable {
+  type: "weekly_volume" | "supplements";
+  data?: { week: string; week_start: string; sessions: number; volume_kg: number }[];
+  names?: string[];
+}
+
+export interface ConvergencePanel {
+  id: string;
+  label: string;
+  description: string;
+  rs_ids: string[];
+  variants_found: ConvVariant[];
+  interpretation: string | null;
+  risk_level: "low" | "elevated" | "high" | null;
+  risk_note: string | null;
+  bloodwork: ConvBloodwork[];
+  wearable: ConvWearable | null;
+}
+
+export interface GenotypePhenotypeData {
+  has_genome: boolean;
+  panels: ConvergencePanel[];
+}
 
 export interface AiSettings {
   provider: AiProvider;
@@ -472,4 +629,56 @@ export interface GlucoseDaily {
   cv_percent: number | null;
   tir_pct: number | null;
   readings_count: number | null;
+}
+
+export interface CaffeineIntake {
+  id: number;
+  date: string;
+  time: string | null;
+  mg: number;
+  source: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface CypPhenotypeOption {
+  key: string;
+  label: string;
+  description: string;
+  half_life_hours: number | null;
+}
+
+export interface CypProfileEntry {
+  cyp: string;
+  label: string;
+  substrates: string[];
+  phenotype: string;
+  phenotype_source: "manual" | "genome" | "default";
+  phenotype_id: number | null;
+  phenotype_label: string;
+  description: string;
+  half_life_hours: number | null;
+  is_default: boolean;
+  all_phenotypes: CypPhenotypeOption[];
+}
+
+export interface PharmacogenomicsProfile {
+  has_genome: boolean;
+  cyps: CypProfileEntry[];
+}
+
+export interface ConcentrationPoint {
+  hours_since_midnight: number;
+  time: string;
+  concentration_mg: number;
+}
+
+export interface ConcentrationCurve {
+  date: string;
+  cyp1a2_phenotype: string;
+  half_life_hours: number;
+  is_default: boolean;
+  curve: ConcentrationPoint[];
+  baseline_curve: ConcentrationPoint[] | null;
+  intakes: CaffeineIntake[];
 }
