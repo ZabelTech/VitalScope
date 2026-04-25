@@ -8,8 +8,10 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  ReferenceLine,
 } from "recharts";
 import { fetchNutritionDaily, fetchWaterDaily } from "../api";
+import { useGoals } from "../hooks/useGoals";
 import { MetricCards } from "./MetricCards";
 import type { NutritionDailyTotals, StatValues, WaterDaily } from "../types";
 
@@ -45,6 +47,9 @@ export function NutritionChart({ start, end }: Props) {
   const [nutrition, setNutrition] = useState<NutritionDailyTotals[] | null>(null);
   const [water, setWater] = useState<WaterDaily[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const goals = useGoals();
+  const caloriesGoal = goals?.calories_kcal?.value ?? null;
+  const proteinGoal = goals?.protein_g?.value ?? null;
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +122,12 @@ export function NutritionChart({ start, end }: Props) {
           <YAxis yAxisId="right" orientation="right" />
           <Tooltip />
           <Legend />
+          {caloriesGoal != null && (
+            <ReferenceLine yAxisId="left" y={caloriesGoal} stroke="#f59e0b" strokeDasharray="6 3" label={{ value: `Goal ≤${caloriesGoal}kcal`, fill: "#f59e0b", fontSize: 11 }} />
+          )}
+          {proteinGoal != null && (
+            <ReferenceLine yAxisId="right" y={proteinGoal} stroke="#a78bfa" strokeDasharray="6 3" label={{ value: `Protein ≥${proteinGoal}g`, fill: "#a78bfa", fontSize: 11 }} />
+          )}
           <Line
             yAxisId="left"
             type="monotone"

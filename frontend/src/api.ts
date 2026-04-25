@@ -47,6 +47,7 @@ import type {
   TimeOfDay,
   Upload,
   UploadKind,
+  UserGoals,
   Vo2MaxEntry,
   WaterDaily,
   WaterEntry,
@@ -348,6 +349,34 @@ export async function deleteWater(id: number): Promise<void> {
 export async function fetchWaterDaily(start: string, end: string): Promise<WaterDaily[]> {
   const params = new URLSearchParams({ start, end });
   const res = await apiFetch(`/api/water/daily?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Health goals ---
+
+export async function fetchGoals(): Promise<UserGoals> {
+  const res = await apiFetch("/api/goals");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function setGoal(metric: string, value: number): Promise<void> {
+  const res = await apiFetch(`/api/goals/${metric}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ value }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function deleteGoal(metric: string): Promise<void> {
+  const res = await apiFetch(`/api/goals/${metric}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchGoalDefaults(): Promise<Record<string, number>> {
+  const res = await apiFetch("/api/goals/defaults");
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

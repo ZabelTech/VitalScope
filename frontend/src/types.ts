@@ -698,6 +698,13 @@ export interface AiSettingsUpdate {
   openrouter_api_key?: string | null;
 }
 
+export interface UserGoalEntry {
+  value: number;
+  unit: string;
+  updated_at: string;
+}
+
+export type UserGoals = Record<string, UserGoalEntry>;
 export type GlucoseTrend =
   | "falling_fast"
   | "falling"
