@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { useGoals } from "../hooks/useGoals";
 import { listBodyCompositionEstimates } from "../api";
 import { useMetricData } from "../hooks/useMetricData";
 import { MetricCards } from "./MetricCards";
@@ -28,6 +29,9 @@ type ChartRow = {
 export function WeightChart({ start, end }: Props) {
   const { data, loading } = useMetricData<WeightDaily[]>("weight/daily", start, end);
   const { data: stats } = useMetricData<WeightStats>("weight/stats", start, end);
+  const goals = useGoals();
+  const weightGoal = goals?.weight_kg?.value ?? null;
+  const bodyFatGoal = goals?.body_fat_pct?.value ?? null;
   const [showAiBodyFat, setShowAiBodyFat] = useState(false);
   const [estimates, setEstimates] = useState<BodyCompositionEstimate[]>([]);
 
@@ -88,6 +92,12 @@ export function WeightChart({ start, end }: Props) {
           <YAxis yAxisId="pct" orientation="right" domain={["auto", "auto"]} label={{ value: "% / BMI", angle: 90, position: "insideRight" }} />
           <Tooltip />
           <Legend />
+          {weightGoal != null && (
+            <ReferenceLine yAxisId="kg" y={weightGoal} stroke="#f59e0b" strokeDasharray="6 3" label={{ value: `Goal ${weightGoal}kg`, fill: "#f59e0b", fontSize: 11 }} />
+          )}
+          {bodyFatGoal != null && (
+            <ReferenceLine yAxisId="pct" y={bodyFatGoal} stroke="#fb923c" strokeDasharray="6 3" label={{ value: `Fat ≤${bodyFatGoal}%`, fill: "#fb923c", fontSize: 11 }} />
+          )}
           <Line yAxisId="kg"  type="monotone" dataKey="weight_kg"       name="Weight (kg)" stroke="#3b82f6" dot={false} connectNulls />
           <Line yAxisId="pct" type="monotone" dataKey="bmi"             name="BMI"          stroke="#8b5cf6" dot={false} connectNulls />
           <Line yAxisId="pct" type="monotone" dataKey="body_fat_pct"    name="Body Fat %"   stroke="#ef4444" dot={false} connectNulls />

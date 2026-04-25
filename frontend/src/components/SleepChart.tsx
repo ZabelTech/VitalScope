@@ -1,6 +1,7 @@
 import {
-  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
+  ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from "recharts";
+import { useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
 import { MetricCards } from "./MetricCards";
 import type { SleepDaily, StatValues } from "../types";
@@ -14,6 +15,8 @@ function toHours(sec: number | null): number | null {
 export function SleepChart({ start, end }: Props) {
   const { data, loading } = useMetricData<SleepDaily[]>("sleep/daily", start, end);
   const { data: stats } = useMetricData<{ sleep_score: StatValues; sleep_hours: StatValues }>("sleep/stats", start, end);
+  const goals = useGoals();
+  const sleepGoal = goals?.sleep_hours?.value ?? null;
 
   if (loading) return <div className="chart-loading">Loading sleep...</div>;
 
@@ -45,6 +48,9 @@ export function SleepChart({ start, end }: Props) {
           <Bar yAxisId="hours" dataKey="light" name="Light" stackId="sleep" fill="#60a5fa" />
           <Bar yAxisId="hours" dataKey="rem" name="REM" stackId="sleep" fill="#a78bfa" />
           <Bar yAxisId="hours" dataKey="awake" name="Awake" stackId="sleep" fill="#fbbf24" />
+          {sleepGoal != null && (
+            <ReferenceLine yAxisId="hours" y={sleepGoal} stroke="#f59e0b" strokeDasharray="6 3" label={{ value: `Goal ≥${sleepGoal}h`, fill: "#f59e0b", fontSize: 11 }} />
+          )}
           <Line yAxisId="score" type="monotone" dataKey="score" name="Score" stroke="#ef4444" dot={false} connectNulls />
         </ComposedChart>
       </ResponsiveContainer></div>
