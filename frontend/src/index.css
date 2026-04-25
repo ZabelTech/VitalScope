@@ -2648,6 +2648,212 @@ input[type="range"]::-moz-range-thumb {
   padding-top: 4px;
 }
 
+.orient-anomalies-section {
+  margin-bottom: 20px;
+  padding: 14px 16px;
+  background: #0f1f35;
+  border: 1px solid #1e3a5f;
+  border-radius: 10px;
+}
+
+.orient-anomalies-header {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.orient-anomalies-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.orient-anomalies-subtitle {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.orient-anomalies-loading {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.orient-ai-spinner--sm {
+  width: 14px;
+  height: 14px;
+}
+
+.orient-anomalies-none {
+  font-size: 12px;
+  color: #64748b;
+  margin: 0;
+}
+
+.orient-anomaly-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.orient-anomaly-row {
+  border-radius: 8px;
+  background: #1e293b;
+  overflow: hidden;
+}
+
+.orient-anomaly-row-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  flex-wrap: wrap;
+}
+
+.orient-anomaly-metric {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e2e8f0;
+  min-width: 100px;
+}
+
+.orient-anomaly-date {
+  font-size: 11px;
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+
+.orient-anomaly-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.orient-anomaly-badge--high {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.orient-anomaly-badge--low {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.orient-explain-btn {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid #334155;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.orient-explain-btn:hover:not(:disabled) {
+  background: #1e293b;
+  color: #e2e8f0;
+  border-color: #475569;
+}
+
+.orient-explain-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.orient-explain-error {
+  font-size: 12px;
+  color: #ef4444;
+  padding: 6px 12px 8px;
+}
+
+.orient-explain-panel {
+  padding: 10px 12px 12px;
+  border-top: 1px solid #1e3a5f;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.orient-explain-summary {
+  font-size: 13px;
+  color: #cbd5e1;
+  margin: 0;
+  line-height: 1.5;
+}
+
+.orient-explain-contributors {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.orient-explain-contributor {
+  display: grid;
+  grid-template-columns: 120px 70px 1fr;
+  gap: 8px;
+  align-items: start;
+  font-size: 12px;
+}
+
+.orient-explain-factor {
+  font-weight: 600;
+}
+
+.orient-explain-direction {
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  align-self: center;
+}
+
+.orient-explain-direction--elevated {
+  background: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.orient-explain-direction--reduced {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.orient-explain-direction--normal {
+  background: rgba(100, 116, 139, 0.15);
+  color: #64748b;
+}
+
+.orient-explain-evidence {
+  color: #94a3b8;
+  line-height: 1.4;
+}
+
+.orient-explain-watch {
+  font-size: 12px;
+  color: #94a3b8;
+  padding: 8px 10px;
+  background: rgba(59, 130, 246, 0.07);
+  border-left: 2px solid #3b82f6;
+  border-radius: 0 4px 4px 0;
+  line-height: 1.4;
+}
+
+.orient-explain-watch-label {
+  font-weight: 600;
+  color: #3b82f6;
+  margin-right: 4px;
+}
+
 /* Morning briefing */
 .briefing-result {
   display: flex;
