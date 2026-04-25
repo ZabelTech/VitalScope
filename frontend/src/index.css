@@ -686,6 +686,169 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   font-size: 0.8rem;
 }
 
+.stat-sublabel {
+  font-size: 0.8em;
+  color: #64748b;
+  font-weight: 400;
+}
+
+/* Cognition sliders */
+.cognition-sliders {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cognition-slider-row {
+  display: grid;
+  grid-template-columns: 140px 1fr 48px;
+  align-items: center;
+  gap: 10px;
+}
+
+@media (max-width: 480px) {
+  .cognition-slider-row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "label val"
+      "slider slider";
+  }
+  .cognition-slider-row .stat-label { grid-area: label; }
+  .cognition-slider-row input[type="range"] { grid-area: slider; }
+  .cognition-slider-val { grid-area: val; text-align: right; }
+}
+
+.cognition-slider-val {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  text-align: right;
+  white-space: nowrap;
+}
+
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 6px;
+  background: #334155;
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+}
+
+/* Reaction time widget */
+.rt-widget {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.rt-target {
+  min-width: 120px;
+  min-height: 56px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  border: none;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+}
+
+.rt-waiting {
+  background: #334155;
+  color: #94a3b8;
+  cursor: default;
+}
+
+.rt-ready {
+  background: #22c55e;
+  color: #0f172a;
+  cursor: pointer;
+}
+
+.rt-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.rt-avg {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #8b5cf6;
+}
+
+.rt-feedback {
+  font-size: 0.85rem;
+  color: #94a3b8;
+  width: 100%;
+}
+
+.rt-too-early {
+  color: #ef4444;
+}
+
+.rt-cancel {
+  background: transparent;
+  border: 1px solid #334155;
+  color: #64748b;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* Cognition section charts */
+.chart-subhead {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #94a3b8;
+  margin: 16px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chart-empty {
+  color: #64748b;
+  font-size: 0.9rem;
+  padding: 20px 0;
+}
+
+.corr-select {
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
 .journal-supplement-group {
   display: flex;
   flex-direction: column;
