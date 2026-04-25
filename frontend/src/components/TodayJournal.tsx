@@ -1,12 +1,13 @@
-import { useEffect, useState } from "react";
-import { fetchJournalEntry, submitJournalEntry } from "../api";
-import type { JournalEntry, MorningFeeling } from "../types";
+import { useCallback, useEffect, useState } from "react";
+import { createCaffeineIntake, fetchJournalEntry, listCaffeineIntake, submitJournalEntry } from "../api";
+import type { CaffeineIntake, JournalEntry, MorningFeeling } from "../types";
 
 interface Props {
   date: string;
 }
 
 const FEELINGS: MorningFeeling[] = ["sleepy", "energetic", "normal", "sick"];
+const CAFFEINE_QUICK_MG = [80, 100, 150, 200];
 
 // Today-only journal: work/off chip toggle + "how did you feel after
 // waking up?" radios. Both fields auto-save; the full journal entry is
@@ -17,6 +18,12 @@ export function TodayJournal({ date }: Props) {
   const [isWorkDay, setIsWorkDay] = useState<boolean | null>(null);
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
   const [saving, setSaving] = useState(false);
+  const [caffeineIntakes, setCaffeineIntakes] = useState<CaffeineIntake[]>([]);
+  const [caffeineSaving, setCaffeineSaving] = useState(false);
+
+  const reloadCaffeine = useCallback(async () => {
+    setCaffeineIntakes(await listCaffeineIntake(date, date));
+  }, [date]);
 
   useEffect(() => {
     fetchJournalEntry(date)
@@ -30,7 +37,8 @@ export function TodayJournal({ date }: Props) {
         setIsWorkDay(null);
         setMorningFeeling("normal");
       });
-  }, [date]);
+    reloadCaffeine().catch(() => {});
+  }, [date, reloadCaffeine]);
 
   async function save(patch: Partial<JournalEntry>) {
     if (saving) return;
@@ -62,6 +70,21 @@ export function TodayJournal({ date }: Props) {
     setMorningFeeling(next);
     await save({ morning_feeling: next });
   }
+
+  async function logCaffeine(mg: number) {
+    if (caffeineSaving) return;
+    setCaffeineSaving(true);
+    try {
+      const now = new Date();
+      const time = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+      await createCaffeineIntake({ date, time, mg, source: null });
+      await reloadCaffeine();
+    } finally {
+      setCaffeineSaving(false);
+    }
+  }
+
+  const caffeineTotal = caffeineIntakes.reduce((s, i) => s + i.mg, 0);
 
   return (
     <>
@@ -101,6 +124,25 @@ export function TodayJournal({ date }: Props) {
             {f}
           </label>
         ))}
+      </fieldset>
+
+      <fieldset className="journal-field">
+        <legend className="stat-label">
+          Caffeine{caffeineTotal > 0 ? ` — ${caffeineTotal} mg today` : ""}
+        </legend>
+        <div className="caffeine-journal-adds">
+          {CAFFEINE_QUICK_MG.map((mg) => (
+            <button
+              key={mg}
+              type="button"
+              className="quick-action"
+              onClick={() => logCaffeine(mg)}
+              disabled={caffeineSaving}
+            >
+              +{mg} mg
+            </button>
+          ))}
+        </div>
       </fieldset>
     </>
   );

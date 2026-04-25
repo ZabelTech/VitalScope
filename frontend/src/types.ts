@@ -510,3 +510,55 @@ export interface AiSettingsUpdate {
   openai_api_key?: string | null;
   openrouter_api_key?: string | null;
 }
+
+export interface CaffeineIntake {
+  id: number;
+  date: string;
+  time: string | null;
+  mg: number;
+  source: string | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface CypPhenotypeOption {
+  key: string;
+  label: string;
+  description: string;
+  half_life_hours: number | null;
+}
+
+export interface CypProfileEntry {
+  cyp: string;
+  label: string;
+  substrates: string[];
+  phenotype: string;
+  phenotype_source: "manual" | "genome" | "default";
+  phenotype_id: number | null;
+  phenotype_label: string;
+  description: string;
+  half_life_hours: number | null;
+  is_default: boolean;
+  all_phenotypes: CypPhenotypeOption[];
+}
+
+export interface PharmacogenomicsProfile {
+  has_genome: boolean;
+  cyps: CypProfileEntry[];
+}
+
+export interface ConcentrationPoint {
+  hours_since_midnight: number;
+  time: string;
+  concentration_mg: number;
+}
+
+export interface ConcentrationCurve {
+  date: string;
+  cyp1a2_phenotype: string;
+  half_life_hours: number;
+  is_default: boolean;
+  curve: ConcentrationPoint[];
+  baseline_curve: ConcentrationPoint[] | null;
+  intakes: CaffeineIntake[];
+}
