@@ -3725,6 +3725,8 @@ class DemoProvider(AIProvider):
             return _demo_comparison_payload()
         if tool_name == "record_health_orientation":
             return _demo_orient_payload()
+        if tool_name == "record_orient_explanation":
+            return _demo_orient_explain_payload()
         if tool_name == "record_morning_briefing":
             return _demo_morning_briefing_payload()
         if tool_name == "record_night_briefing":
@@ -3863,6 +3865,40 @@ def _demo_orient_payload() -> dict:
                 "recommendations": ["Track protein intake to support muscle retention during training."],
             },
         ],
+    }
+
+
+def _demo_orient_explain_payload() -> dict:
+    return {
+        "summary": (
+            "The HRV dip on this date most likely resulted from a combination of high "
+            "training load the previous day and reduced deep sleep, both of which suppress "
+            "parasympathetic tone and lower overnight HRV readings."
+        ),
+        "likely_contributors": [
+            {
+                "factor": "Training load",
+                "direction": "elevated",
+                "confidence": "high",
+                "evidence": "Volume on the prior day was 9,800 kg — 34% above the 7-day rolling average.",
+            },
+            {
+                "factor": "Sleep quality",
+                "direction": "reduced",
+                "confidence": "medium",
+                "evidence": "Deep sleep the night before was 0.7 h vs your 1.2 h average.",
+            },
+            {
+                "factor": "Stress",
+                "direction": "elevated",
+                "confidence": "low",
+                "evidence": "Average stress score was 38 — slightly above baseline (32) but within normal range.",
+            },
+        ],
+        "what_to_watch": (
+            "Track HRV for the next 2–3 nights. If it hasn't rebounded toward your baseline "
+            "by day 3, reduce training intensity until recovery normalises."
+        ),
     }
 
 
@@ -4674,6 +4710,239 @@ async def orient_analyze(body: OrientAnalyzeBody):
         "window_days": metrics["window_days"],
         "overall_summary": str(payload.get("overall_summary") or ""),
         "topics": topics,
+    }
+
+
+# --- Orient anomaly detection ---
+
+_ANOMALY_METRICS = [
+    ("hrv", "HRV", "last_night_avg", "hrv_daily", "ms"),
+    ("rhr", "Resting HR", "resting_hr", "heart_rate_daily", "bpm"),
+    ("sleep_score", "Sleep Score", "sleep_score", "sleep_daily", "pts"),
+    ("stress", "Avg Stress", "avg_stress", "stress_daily", "pts"),
+    ("body_battery", "Body Battery", "charged", "body_battery_daily", "%"),
+]
+
+
+def _detect_orient_anomalies(conn: sqlite3.Connection, window_days: int = 14) -> list[dict]:
+    today = date.today()
+    start_date = (today - timedelta(days=window_days)).isoformat()
+    end_date = today.isoformat()
+
+    anomalies = []
+    for metric_key, metric_label, col, table, unit in _ANOMALY_METRICS:
+        rows = conn.execute(
+            f"SELECT date, {col} AS value FROM {table} "
+            f"WHERE date BETWEEN ? AND ? AND {col} IS NOT NULL ORDER BY date",
+            (start_date, end_date),
+        ).fetchall()
+        if len(rows) < 3:
+            continue
+        values = [r["value"] for r in rows]
+        mean = statistics.mean(values)
+        stdev = statistics.stdev(values)
+        if stdev == 0:
+            continue
+        for r in rows:
+            z = (r["value"] - mean) / stdev
+            if abs(z) >= 1.5:
+                anomalies.append({
+                    "metric": metric_key,
+                    "metric_label": metric_label,
+                    "date": r["date"],
+                    "value": round(r["value"], 1),
+                    "z_score": round(z, 2),
+                    "direction": "high" if z > 0 else "low",
+                    "unit": unit,
+                    "mean": round(mean, 1),
+                    "stdev": round(stdev, 1),
+                })
+    anomalies.sort(key=lambda a: (a["date"], a["metric"]))
+    return anomalies
+
+
+@app.get("/api/orient/anomalies")
+async def orient_anomalies(window_days: int = 14):
+    conn = get_db()
+    try:
+        window = max(7, min(30, window_days))
+        result = _detect_orient_anomalies(conn, window)
+    finally:
+        conn.close()
+    return {"anomalies": result, "window_days": window}
+
+
+# --- Orient explain endpoint ---
+
+_ORIENT_EXPLAIN_TOOL = {
+    "name": "record_orient_explanation",
+    "description": (
+        "Record a structured explanation for a metric anomaly, grounded in the "
+        "time-aligned context data provided. Do not speculate beyond what the data shows."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "summary": {"type": "string"},
+            "likely_contributors": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "factor": {"type": "string"},
+                        "direction": {"type": "string", "enum": ["elevated", "reduced", "normal"]},
+                        "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                        "evidence": {"type": "string"},
+                    },
+                    "required": ["factor", "direction", "confidence", "evidence"],
+                    "additionalProperties": False,
+                },
+            },
+            "what_to_watch": {"type": "string"},
+        },
+        "required": ["summary", "likely_contributors", "what_to_watch"],
+        "additionalProperties": False,
+    },
+}
+
+
+def _gather_explain_context(
+    conn: sqlite3.Connection, metric: str, target_date: str, window_days: int = 3
+) -> dict:
+    try:
+        td = date.fromisoformat(target_date)
+    except ValueError:
+        td = date.today()
+    start = (td - timedelta(days=window_days)).isoformat()
+    end = (td + timedelta(days=window_days)).isoformat()
+
+    def rows_to_list(rows: list) -> list[dict]:
+        return [dict(r) for r in rows]
+
+    hr = rows_to_list(conn.execute(
+        "SELECT date, resting_hr FROM heart_rate_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start, end),
+    ).fetchall())
+    hrv = rows_to_list(conn.execute(
+        "SELECT date, weekly_avg, last_night_avg, baseline_balanced_low, baseline_balanced_upper "
+        "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start, end),
+    ).fetchall())
+    sleep = rows_to_list(conn.execute(
+        "SELECT date, sleep_score, sleep_score_quality, "
+        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, avg_spo2, avg_sleep_stress "
+        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start, end),
+    ).fetchall())
+    stress = rows_to_list(conn.execute(
+        "SELECT date, avg_stress, max_stress FROM stress_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start, end),
+    ).fetchall())
+    body_battery = rows_to_list(conn.execute(
+        "SELECT date, charged, drained FROM body_battery_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+        (start, end),
+    ).fetchall())
+    workouts = rows_to_list(conn.execute(
+        "SELECT w.date, w.name, "
+        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+        "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date",
+        (start, end),
+    ).fetchall())
+    supplements = rows_to_list(conn.execute(
+        "SELECT i.date, s.name, s.dosage, s.time_of_day, i.taken "
+        "FROM journal_supplement_intake i JOIN supplements s ON s.id = i.supplement_id "
+        "WHERE i.date BETWEEN ? AND ? ORDER BY i.date, s.sort_order",
+        (start, end),
+    ).fetchall())
+    meals = rows_to_list(conn.execute(
+        "SELECT m.date, m.name, m.time, "
+        "MAX(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount END) AS calories_kcal, "
+        "MAX(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount END) AS protein_g, "
+        "MAX(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount END) AS carbs_g "
+        "FROM meals m LEFT JOIN meal_nutrients mn ON mn.meal_id = m.id "
+        "WHERE m.date BETWEEN ? AND ? GROUP BY m.id ORDER BY m.date, m.time",
+        (start, end),
+    ).fetchall())
+
+    return {
+        "target_date": target_date,
+        "metric": metric,
+        "context_window": f"{start} to {end}",
+        "heart_rate": hr,
+        "hrv": hrv,
+        "sleep": sleep,
+        "stress": stress,
+        "body_battery": body_battery,
+        "workouts": workouts,
+        "supplements": supplements,
+        "meals": meals,
+    }
+
+
+class OrientExplainBody(BaseModel):
+    metric: str
+    date: str
+
+
+@app.post("/api/orient/explain")
+async def orient_explain(body: OrientExplainBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    allowed_metrics = {m[0] for m in _ANOMALY_METRICS}
+    if body.metric not in allowed_metrics:
+        raise HTTPException(status_code=400, detail=f"unknown metric: {body.metric}")
+
+    conn = get_db()
+    try:
+        context = _gather_explain_context(conn, body.metric, body.date)
+    finally:
+        conn.close()
+
+    metric_label = next(m[1] for m in _ANOMALY_METRICS if m[0] == body.metric)
+    context_json = json.dumps(context, indent=2, default=str)
+    payload = await _call_ai_text_tool(
+        system=(
+            "You are a personal health analyst interpreting wearable and lifestyle data. "
+            "You have been given a short context window (±3 days) around a flagged anomaly "
+            "in one metric. Identify what most plausibly caused the anomaly by looking at "
+            "correlated changes in the other metrics."
+        ),
+        user_text=(
+            f"On {body.date}, the metric '{metric_label}' was a statistical outlier "
+            f"(≥1.5σ from the 14-day mean). Using the ±3-day context window below, "
+            f"explain what likely caused it.\n\nContext (JSON):\n{context_json}"
+        ),
+        tool=_ORIENT_EXPLAIN_TOOL,
+        timeout_sec=ORIENT_AI_TIMEOUT_SEC,
+    )
+    contributors = []
+    for c in (payload.get("likely_contributors") or []):
+        if not isinstance(c, dict):
+            continue
+        contributors.append({
+            "factor": str(c.get("factor") or ""),
+            "direction": str(c.get("direction") or ""),
+            "confidence": str(c.get("confidence") or ""),
+            "evidence": str(c.get("evidence") or ""),
+        })
+
+    return {
+        "metric": body.metric,
+        "metric_label": metric_label,
+        "date": body.date,
+        "model": AI_MODEL,
+        "summary": str(payload.get("summary") or ""),
+        "likely_contributors": contributors,
+        "what_to_watch": str(payload.get("what_to_watch") or ""),
     }
 
 
