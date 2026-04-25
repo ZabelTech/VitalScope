@@ -1,0 +1,327 @@
+[
+  {
+    "rs_id": "rs1815739",
+    "gene": "ACTN3",
+    "variant_name": "R577X",
+    "domain": "performance",
+    "ref": "C",
+    "alt": "T",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "RR — Power/sprint profile",
+        "interpretation": "Two R alleles. Associated with greater fast-twitch (Type IIx) fibre density. Favours explosive, power-based, and sprint sports."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "RX — Mixed profile",
+        "interpretation": "One R allele and one stop-gain X allele. Balanced fast/slow-twitch distribution; no strong predisposition in either direction."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "XX — Endurance profile",
+        "interpretation": "Two X stop-gain alleles; α-actinin-3 protein is absent. Associated with greater Type I oxidative-fibre efficiency. Favours endurance events."
+      }
+    }
+  },
+  {
+    "rs_id": "rs429358",
+    "gene": "APOE",
+    "variant_name": "APOE ε4 marker (rs429358)",
+    "domain": "longevity",
+    "ref": "T",
+    "alt": "C",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "No ε4 at this locus",
+        "interpretation": "T/T at rs429358. In combination with rs7412, consistent with ε2 or ε3 background. Not associated with elevated APOE-linked lipid or Alzheimer risk at this position alone."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "One ε4 allele at this locus",
+        "interpretation": "T/C at rs429358. One C allele is a component of the APOE ε4 haplotype. Full ε status requires combining with rs7412. Heterozygous ε3/ε4 is associated with moderately elevated LDL and cardiovascular risk."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "Two ε4 alleles at this locus",
+        "interpretation": "C/C at rs429358. Consistent with ε4/ε4 homozygosity (confirm with rs7412). Associated with significantly elevated LDL, higher cardiovascular risk, and increased lifetime risk of late-onset Alzheimer disease."
+      }
+    }
+  },
+  {
+    "rs_id": "rs7412",
+    "gene": "APOE",
+    "variant_name": "APOE ε2 marker (rs7412)",
+    "domain": "longevity",
+    "ref": "C",
+    "alt": "T",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "No ε2 at this locus",
+        "interpretation": "C/C at rs7412. In combination with rs429358, consistent with ε3 or ε4 background. Full APOE ε genotype requires combining both SNPs."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "One ε2 allele at this locus",
+        "interpretation": "C/T at rs7412. One T allele is a component of the APOE ε2 haplotype. ε2 carriers typically show lower LDL; rare ε2/ε2 homozygosity carries elevated risk of type III hyperlipoproteinaemia."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "Two ε2 alleles at this locus",
+        "interpretation": "T/T at rs7412. Consistent with ε2/ε2 homozygosity (confirm with rs429358). Associated with lower LDL on average, but ε2/ε2 carries elevated risk of type III hyperlipoproteinaemia."
+      }
+    }
+  },
+  {
+    "rs_id": "rs1801133",
+    "gene": "MTHFR",
+    "variant_name": "C677T",
+    "domain": "nutrition",
+    "ref": "G",
+    "alt": "A",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "CC — Normal MTHFR activity",
+        "interpretation": "No 677T variant. MTHFR enzyme activity is normal. Standard folate and B12 supplementation is appropriate."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "CT — Mildly reduced MTHFR activity",
+        "interpretation": "Heterozygous 677CT. Approximately 35% reduction in MTHFR enzyme activity. May benefit from methylated folate (5-MTHF) and methylcobalamin over synthetic folic acid."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "TT — Significantly reduced MTHFR activity",
+        "interpretation": "Homozygous 677TT. Approximately 70% reduction in MTHFR activity. Elevated homocysteine risk. Supplementing with methylated folate and methylcobalamin is commonly recommended; discuss with a healthcare provider."
+      }
+    }
+  },
+  {
+    "rs_id": "rs1801131",
+    "gene": "MTHFR",
+    "variant_name": "A1298C",
+    "domain": "nutrition",
+    "ref": "T",
+    "alt": "G",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "AA — Normal MTHFR activity at this site",
+        "interpretation": "No 1298C variant. This MTHFR site is unaffected. Impact is generally milder than C677T; consider combined status with rs1801133."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "AC — Mildly reduced MTHFR activity",
+        "interpretation": "Heterozygous 1298AC. Moderately reduced MTHFR activity at this site, especially in compound heterozygosity with C677T. Methylated folate supplementation may be beneficial."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "CC — Moderately reduced MTHFR activity",
+        "interpretation": "Homozygous 1298CC. Moderately reduced enzyme activity. Less severe than 677TT alone, but combined with any 677T variant can substantially impair methylation capacity."
+      }
+    }
+  },
+  {
+    "rs_id": "rs2228570",
+    "gene": "VDR",
+    "variant_name": "FokI",
+    "domain": "nutrition",
+    "ref": "C",
+    "alt": "T",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "FF — Standard VDR signalling",
+        "interpretation": "Two F alleles. VDR protein is the shorter, more transcriptionally active form. Standard vitamin D response; typical supplementation thresholds apply."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "Ff — Intermediate VDR signalling",
+        "interpretation": "One F and one f allele. Intermediate VDR activity; modest supplementation adjustment is unlikely to be necessary without clinical guidance."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "ff — Reduced VDR signalling",
+        "interpretation": "Two f alleles. VDR protein is the longer, less transcriptionally active isoform. May require higher vitamin D3 intake to achieve equivalent serum 25(OH)D targets."
+      }
+    }
+  },
+  {
+    "rs_id": "rs1544410",
+    "gene": "VDR",
+    "variant_name": "BsmI",
+    "domain": "nutrition",
+    "ref": "G",
+    "alt": "A",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "BB — Normal vitamin D response",
+        "interpretation": "Homozygous B allele. Associated with adequate calcium absorption and normal bone mineral density response to vitamin D supplementation."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "Bb — Intermediate response",
+        "interpretation": "Heterozygous Bb. Intermediate vitamin D responsiveness; most individuals respond normally to standard supplementation."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "bb — Attenuated vitamin D response",
+        "interpretation": "Homozygous b allele. Associated with modestly reduced intestinal calcium absorption efficiency; may be relevant when optimising bone health and vitamin D protocol."
+      }
+    }
+  },
+  {
+    "rs_id": "rs174537",
+    "gene": "FADS1",
+    "variant_name": "FADS1 efficiency",
+    "domain": "nutrition",
+    "ref": "G",
+    "alt": "T",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "GG — Efficient fatty acid conversion",
+        "interpretation": "Two G alleles. Higher FADS1 (δ5-desaturase) activity; efficient conversion of DGLA to arachidonic acid and ALA to EPA. Dietary ALA is relatively well converted."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "GT — Intermediate conversion",
+        "interpretation": "One G, one T allele. Intermediate FADS1 activity. Pre-formed EPA/DHA from oily fish or supplements remains the most reliable source."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "TT — Reduced fatty acid conversion",
+        "interpretation": "Two T alleles. Reduced FADS1 activity; less efficient conversion of short-chain omega-3 (ALA) to long-chain EPA/DHA. Pre-formed EPA/DHA supplementation is particularly relevant."
+      }
+    }
+  },
+  {
+    "rs_id": "rs1535",
+    "gene": "FADS2",
+    "variant_name": "FADS2 efficiency",
+    "domain": "nutrition",
+    "ref": "G",
+    "alt": "A",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "GG — Efficient FADS2 activity",
+        "interpretation": "Two G alleles. Normal δ6-desaturase activity; efficient conversion of linoleic acid to DGLA and ALA to stearidonic acid."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "GA — Intermediate FADS2 activity",
+        "interpretation": "One G, one A allele. Modest reduction in FADS2 activity. Direct omega-3 sources (EPA/DHA) are preferable to relying solely on ALA conversion."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "AA — Reduced FADS2 activity",
+        "interpretation": "Two A alleles. Reduced δ6-desaturase activity; impaired elongation of short-chain fatty acids. Supplementing with pre-formed EPA/DHA rather than ALA (e.g., flaxseed oil) is recommended."
+      }
+    }
+  },
+  {
+    "rs_id": "rs762551",
+    "gene": "CYP1A2",
+    "variant_name": "Caffeine metaboliser",
+    "domain": "pharmacogenomics",
+    "ref": "C",
+    "alt": "A",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "CC — Slow caffeine metaboliser",
+        "interpretation": "Two C alleles. CYP1A2 induction is lower; caffeine is cleared more slowly. Higher plasma caffeine exposure per dose. Associated with elevated cardiovascular risk at high intake in some studies."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "CA — Intermediate caffeine metaboliser",
+        "interpretation": "One C, one A allele. Intermediate CYP1A2 induction. Caffeine clearance rate is between slow and fast phenotypes."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "AA — Fast caffeine metaboliser",
+        "interpretation": "Two A alleles. CYP1A2 is strongly inducible; caffeine is cleared quickly. Lower adverse cardiovascular risk at moderate intake. Late caffeine consumption may have less sleep impact than in slow metabolisers."
+      }
+    }
+  },
+  {
+    "rs_id": "rs3892097",
+    "gene": "CYP2D6",
+    "variant_name": "*4 allele",
+    "domain": "pharmacogenomics",
+    "ref": "G",
+    "alt": "A",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "Normal CYP2D6 at *4 locus",
+        "interpretation": "No *4 loss-of-function allele at this position. CYP2D6 activity at this locus is unimpaired. Note: full CYP2D6 phenotype requires testing multiple variants and copy-number variation."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "One *4 allele — possible intermediate metaboliser",
+        "interpretation": "One CYP2D6 *4 loss-of-function allele. Intermediate metaboliser status is possible. Drugs metabolised by CYP2D6 (codeine, tamoxifen, many antidepressants, beta-blockers) may have altered efficacy or tolerability."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "Two *4 alleles — likely poor metaboliser",
+        "interpretation": "Two CYP2D6 *4 loss-of-function alleles. Likely poor metaboliser status at this locus. Many CYP2D6-substrate drugs will have markedly reduced clearance; dose adjustment or drug substitution is often warranted — consult a pharmacist or physician."
+      }
+    }
+  },
+  {
+    "rs_id": "rs4244285",
+    "gene": "CYP2C19",
+    "variant_name": "*2 allele",
+    "domain": "pharmacogenomics",
+    "ref": "G",
+    "alt": "A",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "Normal CYP2C19 at *2 locus",
+        "interpretation": "No *2 loss-of-function allele. CYP2C19 activity is unimpaired at this site. Drugs metabolised by CYP2C19 (clopidogrel, omeprazole, certain antidepressants) are expected to process normally."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "One *2 allele — intermediate metaboliser",
+        "interpretation": "One CYP2C19 *2 loss-of-function allele. Intermediate metaboliser. Clopidogrel activation may be reduced; omeprazole exposure higher. Clinical significance depends on the drug and indication."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "Two *2 alleles — poor metaboliser",
+        "interpretation": "Two CYP2C19 *2 alleles. Poor metaboliser of CYP2C19 substrates. Clopidogrel has markedly impaired antiplatelet activation; alternative antiplatelet therapy is guideline-recommended. Discuss implications with your prescribing clinician."
+      }
+    }
+  },
+  {
+    "rs_id": "rs1799853",
+    "gene": "CYP2C9",
+    "variant_name": "*2 allele",
+    "domain": "pharmacogenomics",
+    "ref": "C",
+    "alt": "T",
+    "genotypes": {
+      "0/0": {
+        "zygosity": "homozygous_ref",
+        "label": "Normal CYP2C9 at *2 locus",
+        "interpretation": "No *2 variant. CYP2C9 activity is unimpaired at this position. Warfarin, NSAIDs, and other CYP2C9 substrates process normally from this locus."
+      },
+      "0/1": {
+        "zygosity": "heterozygous",
+        "label": "One *2 allele — intermediate metaboliser",
+        "interpretation": "One CYP2C9 *2 allele. Intermediate metaboliser. Warfarin dose requirements are typically lower; NSAID exposure may be higher. Monitor closely if starting anticoagulation."
+      },
+      "1/1": {
+        "zygosity": "homozygous_alt",
+        "label": "Two *2 alleles — significantly reduced metabolism",
+        "interpretation": "Two CYP2C9 *2 alleles. Substantially reduced CYP2C9 activity. Warfarin and other narrow-therapeutic-index drugs require careful dose reduction and monitoring. Consult a clinician before initiating affected medications."
+      }
+    }
+  }
+]
