@@ -1,4 +1,5 @@
 import { ActivityHistory } from "./ActivityHistory";
+import { GenotypePhenotypeSection } from "./GenotypePhenotypeSection";
 import { MorningBriefing } from "./MorningBriefing";
 import { OodaPage } from "./OodaPage";
 import { OrientAiAnalysis } from "./OrientAiAnalysis";
@@ -12,6 +13,11 @@ export function OrientPage() {
         { id: "ai-analysis", label: "AI Analysis", content: <OrientAiAnalysis /> },
         { id: "trends", label: "Trends", content: <TrendsPage /> },
         { id: "activity", label: "Activity history", content: <ActivityHistory /> },
+        {
+          id: "genotype-phenotype",
+          label: "Genotype × phenotype",
+          content: <GenotypePhenotypeSection />,
+        },
       ]}
     />
   );

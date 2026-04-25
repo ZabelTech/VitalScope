@@ -608,6 +608,28 @@ def ensure_daily_landing_tables() -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_genome_uploads_date ON genome_uploads(date)")
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS genome_variants (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            genome_upload_id INTEGER NOT NULL,
+            rs_id            TEXT NOT NULL,
+            chrom            TEXT,
+            pos              INTEGER,
+            ref_allele       TEXT,
+            alt_allele       TEXT,
+            genotype         TEXT,
+            created_at       TEXT NOT NULL,
+            FOREIGN KEY (genome_upload_id) REFERENCES genome_uploads(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_variants_upload ON genome_variants(genome_upload_id)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_variants_rs ON genome_variants(rs_id)"
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS ai_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -4015,12 +4037,234 @@ def delete_bloodwork_panel(panel_id: int):
 
 # --- Genome uploads (VCF parse + CRUD) ---
 
+_TARGET_RS_IDS: frozenset = frozenset({
+    "rs429358", "rs7412",       # APOE ε2/ε3/ε4
+    "rs1801133", "rs1801131",   # MTHFR C677T, A1298C
+    "rs731236", "rs1544410",    # VDR TaqI, BsmI
+    "rs174546", "rs1535",       # FADS1, FADS2
+    "rs1815739",                # ACTN3 R577X
+    "rs762551",                 # CYP1A2 *1F
+})
+
+_CONV_PANELS = [
+    {
+        "id": "apoe",
+        "label": "APOE × Lipids",
+        "description": "APOE genotype is the strongest common genetic determinant of LDL-C, ApoB, and cardiovascular risk.",
+        "rs_ids": ["rs429358", "rs7412"],
+        "analyte_patterns": ["LDL", "ApoB", "Apolipoprotein B", "Lp(a)", "Lipoprotein(a)"],
+    },
+    {
+        "id": "mthfr",
+        "label": "MTHFR × Methylation",
+        "description": "MTHFR variants reduce folate-to-methylfolate conversion, affecting homocysteine, B12, and methylation capacity.",
+        "rs_ids": ["rs1801133", "rs1801131"],
+        "analyte_patterns": ["Homocysteine", "Vitamin B12", "B12", "Cobalamin", "Folate", "Folic Acid"],
+    },
+    {
+        "id": "vdr",
+        "label": "VDR × Vitamin D",
+        "description": "VDR variants affect vitamin D receptor sensitivity and 25(OH)D utilisation.",
+        "rs_ids": ["rs731236", "rs1544410"],
+        "analyte_patterns": ["25-OH", "25(OH)", "Vitamin D", "25-Hydroxy", "Calcidiol"],
+    },
+    {
+        "id": "fads",
+        "label": "FADS × Omega-3",
+        "description": "FADS1/FADS2 variants reduce fatty acid desaturation efficiency, affecting conversion of ALA to EPA/DHA.",
+        "rs_ids": ["rs174546", "rs1535"],
+        "analyte_patterns": ["Omega-3", "Omega 3", "EPA", "DHA", "Fatty Acid Index"],
+    },
+    {
+        "id": "actn3",
+        "label": "ACTN3 × Training",
+        "description": "ACTN3 R577X determines alpha-actinin-3 expression in fast-twitch fibres, influencing power versus endurance phenotype.",
+        "rs_ids": ["rs1815739"],
+        "analyte_patterns": [],
+    },
+    {
+        "id": "cyp1a2",
+        "label": "CYP1A2 × Caffeine",
+        "description": "CYP1A2 controls caffeine metabolism rate. Slow metabolisers retain caffeine longer, with greater cardiovascular impact.",
+        "rs_ids": ["rs762551"],
+        "analyte_patterns": [],
+    },
+]
+
+
 def _chrom_sort_key(c: str) -> tuple:
     stripped = c.lstrip("chr").lstrip("Chr")
     return (0, int(stripped), "") if stripped.isdigit() else (1, 0, stripped)
 
 
-def _parse_vcf(path: Path) -> dict:
+def _resolve_gt(format_str: str, sample_str: str, ref: str, alt_str: str) -> Optional[str]:
+    try:
+        fmt_fields = format_str.split(":")
+        samp_fields = sample_str.split(":")
+        gt_idx = fmt_fields.index("GT") if "GT" in fmt_fields else 0
+        gt_raw = samp_fields[gt_idx] if gt_idx < len(samp_fields) else ""
+        indices = gt_raw.replace("|", "/").split("/")
+        allele_list = [ref] + alt_str.split(",")
+        allele_map = {str(i): nuc for i, nuc in enumerate(allele_list)}
+        allele_map["."] = None
+        resolved = [allele_map.get(idx) for idx in indices]
+        if any(a is None for a in resolved):
+            return None
+        return "/".join(sorted(resolved))
+    except Exception:
+        return None
+
+
+def _count_alt(v: Optional[dict]) -> int:
+    if not v:
+        return 0
+    geno = v.get("genotype") or ""
+    alt = (v.get("alt_allele") or "").split(",")[0]
+    if not alt or not geno:
+        return 0
+    return geno.split("/").count(alt)
+
+
+def _has_geno(v: Optional[dict]) -> bool:
+    return bool(v and v.get("genotype"))
+
+
+def _interp_apoe(vmap: dict) -> dict:
+    v1 = vmap.get("rs429358")
+    v2 = vmap.get("rs7412")
+    if not (_has_geno(v1) and _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "APOE ε2/ε3/ε4 status requires both rs429358 and rs7412; one or both were absent from this genome file."}
+    e4 = _count_alt(v1)
+    e2 = _count_alt(v2)
+    e3 = max(0, 2 - e4 - e2)
+    alleles = sorted(["ε4"] * e4 + ["ε3"] * e3 + ["ε2"] * e2)
+    label = f"APOE {alleles[0]}/{alleles[1]}" if len(alleles) == 2 else f"APOE {'/'.join(alleles)}"
+    if e4 == 2:
+        return {"label": label, "risk_level": "high",
+                "risk_note": "Homozygous APOE ε4/ε4 substantially elevates LDL-C, ApoB, and lifetime cardiovascular risk. Statin therapy and aggressive lipid management are typically indicated."}
+    if e4 == 1:
+        return {"label": label, "risk_level": "elevated",
+                "risk_note": "One APOE ε4 allele increases LDL-C and cardiovascular risk above the ε3/ε3 baseline. Dietary fat quality matters more than quantity; lipid response to diet may be blunted."}
+    if e2 == 2:
+        return {"label": label, "risk_level": "low",
+                "risk_note": "APOE ε2/ε2 typically lowers LDL-C but can elevate Lp(a) and triglycerides. Monitor the full lipid panel rather than LDL alone."}
+    if e2 == 1:
+        return {"label": label, "risk_level": "low",
+                "risk_note": "APOE ε2/ε3 is typically associated with lower LDL-C and mildly elevated triglycerides in some individuals."}
+    return {"label": label, "risk_level": "low",
+            "risk_note": "APOE ε3/ε3 (most common genotype) — standard lipid response to diet; routine monitoring sufficient."}
+
+
+def _interp_mthfr(vmap: dict) -> dict:
+    v1 = vmap.get("rs1801133")
+    v2 = vmap.get("rs1801131")
+    if not (_has_geno(v1) or _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "MTHFR variants rs1801133 (C677T) and rs1801131 (A1298C) were not found in this genome file."}
+    parts = []
+    risk = "low"
+    if _has_geno(v1):
+        n = _count_alt(v1)
+        if n == 1:
+            parts.append("C677T heterozygous")
+            risk = "elevated"
+        elif n == 2:
+            parts.append("C677T homozygous")
+            risk = "high"
+    if _has_geno(v2):
+        n = _count_alt(v2)
+        if n == 1:
+            parts.append("A1298C heterozygous")
+            if risk == "low":
+                risk = "elevated"
+        elif n == 2:
+            parts.append("A1298C homozygous")
+            if risk == "low":
+                risk = "elevated"
+    label = f"MTHFR {', '.join(parts)}" if parts else "MTHFR wild-type"
+    if not parts:
+        note = "No common MTHFR variants detected. Folate-to-methylfolate conversion appears unimpaired."
+    elif risk == "high":
+        note = "Homozygous MTHFR C677T substantially reduces enzyme activity (~30% of normal). Active methylfolate (5-MTHF) is typically more effective than standard folic acid. Monitor homocysteine; B12 and folate status are key."
+    else:
+        note = "Reduced MTHFR enzyme activity detected. Ensure adequate B12 and folate intake; consider methylated forms. Elevated homocysteine is possible — especially under low B12/folate conditions."
+    return {"label": label, "risk_level": risk if parts else "low", "risk_note": note}
+
+
+def _interp_vdr(vmap: dict) -> dict:
+    v1 = vmap.get("rs731236")
+    v2 = vmap.get("rs1544410")
+    if not (_has_geno(v1) or _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "VDR variants rs731236 (TaqI) and rs1544410 (BsmI) were not found in this genome file."}
+    parts = []
+    if _has_geno(v1):
+        parts.append(f"TaqI {v1['genotype']}")
+    if _has_geno(v2):
+        parts.append(f"BsmI {v2['genotype']}")
+    label = f"VDR {' · '.join(parts)}"
+    note = "VDR variants can reduce vitamin D receptor sensitivity, meaning higher 25(OH)D levels may be needed for equivalent biological effect. Target serum 25(OH)D at the higher end of the optimal range (50–80 ng/mL)."
+    return {"label": label, "risk_level": "elevated", "risk_note": note}
+
+
+def _interp_fads(vmap: dict) -> dict:
+    v1 = vmap.get("rs174546")
+    v2 = vmap.get("rs1535")
+    if not (_has_geno(v1) or _has_geno(v2)):
+        return {"label": None, "risk_level": None,
+                "risk_note": "FADS1/FADS2 variants rs174546 and rs1535 were not found in this genome file."}
+    parts = []
+    if _has_geno(v1):
+        parts.append(f"FADS1 {v1['genotype']}")
+    if _has_geno(v2):
+        parts.append(f"FADS2 {v2['genotype']}")
+    label = f"FADS {' · '.join(parts)}"
+    note = "FADS variants reduce conversion of ALA to EPA/DHA. Pre-formed EPA/DHA from fish oil or algal oil is more effective than ALA-rich sources (flaxseed, chia) for this genotype."
+    return {"label": label, "risk_level": "elevated", "risk_note": note}
+
+
+def _interp_actn3(vmap: dict) -> dict:
+    v = vmap.get("rs1815739")
+    if not _has_geno(v):
+        return {"label": None, "risk_level": None,
+                "risk_note": "ACTN3 rs1815739 (R577X) was not found in this genome file."}
+    n = _count_alt(v)
+    if n == 0:
+        label, note = "ACTN3 RR (power)", "Both ACTN3 alleles produce alpha-actinin-3 in fast-twitch fibres. Associated with sprint and power performance. Responds well to high-load, low-rep strength protocols."
+    elif n == 1:
+        label, note = "ACTN3 RX (mixed)", "One functional ACTN3 allele. Mixed power/endurance profile. Responds well to both strength and endurance training."
+    else:
+        label, note = "ACTN3 XX (endurance)", "No alpha-actinin-3 in fast-twitch fibres. Associated with endurance phenotype. Zone 2 aerobic work and sustained efforts play to this genotype’s strengths."
+    return {"label": label, "risk_level": "low", "risk_note": note}
+
+
+def _interp_cyp1a2(vmap: dict) -> dict:
+    v = vmap.get("rs762551")
+    if not _has_geno(v):
+        return {"label": None, "risk_level": None,
+                "risk_note": "CYP1A2 rs762551 was not found in this genome file."}
+    n = _count_alt(v)
+    if n == 2:
+        label, note = "CYP1A2 AA (fast metaboliser)", "Fast caffeine metaboliser. Pre-exercise caffeine is associated with improved performance. Cardiovascular impact of caffeine is lower at typical doses."
+    elif n == 1:
+        label, note = "CYP1A2 AC (intermediate)", "Intermediate caffeine metaboliser. Moderate intake is well tolerated; high doses late in the day may impair sleep."
+    else:
+        label, note = "CYP1A2 CC (slow metaboliser)", "Slow caffeine metaboliser. Higher plasma caffeine levels persist longer. Associated with elevated cardiovascular risk at high intake. Lower doses and an earlier daily cutoff are advisable."
+    return {"label": label, "risk_level": "low", "risk_note": note}
+
+
+_PANEL_INTERP = {
+    "apoe": _interp_apoe,
+    "mthfr": _interp_mthfr,
+    "vdr": _interp_vdr,
+    "fads": _interp_fads,
+    "actn3": _interp_actn3,
+    "cyp1a2": _interp_cyp1a2,
+}
+
+
+def _parse_vcf(path: Path, extract_rs: Optional[frozenset] = None) -> dict:
     with open(path, "rb") as _fcheck:
         is_gz = _fcheck.read(2) == b"\x1f\x8b"
     open_fn = (lambda p: gzip.open(p, "rt", encoding="utf-8", errors="replace")) if is_gz else (lambda p: open(p, "rt", encoding="utf-8", errors="replace"))
@@ -4028,6 +4272,7 @@ def _parse_vcf(path: Path) -> dict:
     rs_count = 0
     chromosomes: set[str] = set()
     header_found = False
+    extracted: dict[str, dict] = {}
     with open_fn(path) as fh:
         for line in fh:
             if line.startswith("##"):
@@ -4045,12 +4290,27 @@ def _parse_vcf(path: Path) -> dict:
             rs_id = parts[2].strip()
             if rs_id and rs_id != ".":
                 rs_count += 1
+                if extract_rs and rs_id in extract_rs and rs_id not in extracted:
+                    cols = line.split("\t")
+                    if len(cols) >= 10:
+                        ref = cols[3].strip()
+                        alt = cols[4].strip()
+                        pos_str = cols[1].strip()
+                        gt = _resolve_gt(cols[8].strip(), cols[9].strip(), ref, alt)
+                        extracted[rs_id] = {
+                            "chrom": chrom,
+                            "pos": int(pos_str) if pos_str.lstrip("-").isdigit() else None,
+                            "ref": ref,
+                            "alt": alt,
+                            "genotype": gt,
+                        }
     if not header_found and variant_count == 0:
         raise ValueError("not a valid VCF file")
     return {
         "variant_count": variant_count,
         "rs_count": rs_count,
         "chromosomes": sorted(chromosomes, key=_chrom_sort_key),
+        "targeted_variants": extracted,
     }
 
 
@@ -4124,6 +4384,26 @@ def create_genome_upload(body: GenomeUploadIn):
             (genome_id, body.source_upload_id),
         )
     conn.commit()
+    if body.source_upload_id is not None:
+        try:
+            urow = conn.execute(
+                "SELECT filename FROM uploads WHERE id = ?", (body.source_upload_id,)
+            ).fetchone()
+            if urow:
+                path = (UPLOADS_DIR / urow["filename"]).resolve()
+                if str(path).startswith(str(UPLOADS_DIR.resolve())) and path.is_file():
+                    vcf_data = _parse_vcf(path, extract_rs=_TARGET_RS_IDS)
+                    for rs_id, vdata in vcf_data["targeted_variants"].items():
+                        conn.execute(
+                            """INSERT INTO genome_variants
+                               (genome_upload_id, rs_id, chrom, pos, ref_allele, alt_allele, genotype, created_at)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (genome_id, rs_id, vdata["chrom"], vdata["pos"],
+                             vdata["ref"], vdata["alt"], vdata["genotype"], now),
+                        )
+                    conn.commit()
+        except Exception:
+            pass
     row = conn.execute("SELECT * FROM genome_uploads WHERE id = ?", (genome_id,)).fetchone()
     conn.close()
     return _row_to_genome_upload(row)
@@ -4165,6 +4445,101 @@ def delete_genome_upload(genome_id: int):
     conn.commit()
     conn.close()
     return {"status": "ok"}
+
+
+# --- Genotype × phenotype convergence ---
+
+def _bloodwork_analytes(conn: sqlite3.Connection, patterns: list) -> list:
+    if not patterns:
+        return []
+    seen: dict = {}
+    for pattern in patterns:
+        rows = conn.execute(
+            """SELECT bp.date, br.analyte, br.value, br.unit, br.flag
+               FROM bloodwork_results br
+               JOIN bloodwork_panels bp ON bp.id = br.panel_id
+               WHERE UPPER(br.analyte) LIKE UPPER(?)
+               ORDER BY bp.date DESC LIMIT 20""",
+            (f"%{pattern}%",),
+        ).fetchall()
+        for r in rows:
+            key = (r["date"], r["analyte"].lower())
+            if key not in seen:
+                seen[key] = dict(r)
+    return sorted(seen.values(), key=lambda x: x["date"])
+
+
+def _weekly_volume(conn: sqlite3.Connection, weeks: int = 12) -> list:
+    cutoff = (date.today() - timedelta(weeks=weeks)).isoformat()
+    rows = conn.execute(
+        """SELECT strftime('%Y-%W', w.date) AS week,
+                  MIN(w.date) AS week_start,
+                  COUNT(DISTINCT w.id) AS sessions,
+                  ROUND(SUM(CASE WHEN ws.set_type='working'
+                            THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0) AS volume_kg
+           FROM workouts w
+           LEFT JOIN workout_sets ws ON ws.workout_id = w.id
+           WHERE w.date >= ?
+           GROUP BY week
+           ORDER BY week""",
+        (cutoff,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _omega3_supplements(conn: sqlite3.Connection) -> list:
+    rows = conn.execute(
+        """SELECT name FROM supplements
+           WHERE UPPER(name) LIKE '%OMEGA%' OR UPPER(name) LIKE '%FISH OIL%'
+           OR UPPER(name) LIKE '% EPA%' OR UPPER(name) LIKE '% DHA%'"""
+    ).fetchall()
+    return [r["name"] for r in rows]
+
+
+@app.get("/api/orient/genotype-phenotype")
+def get_genotype_phenotype():
+    conn = get_db()
+    genome_row = conn.execute(
+        "SELECT id FROM genome_uploads ORDER BY date DESC, id DESC LIMIT 1"
+    ).fetchone()
+    if not genome_row:
+        conn.close()
+        return {"has_genome": False, "panels": []}
+    variant_rows = conn.execute(
+        "SELECT rs_id, ref_allele, alt_allele, genotype "
+        "FROM genome_variants WHERE genome_upload_id = ?",
+        (genome_row["id"],),
+    ).fetchall()
+    vmap = {r["rs_id"]: dict(r) for r in variant_rows}
+    panels = []
+    for pdef in _CONV_PANELS:
+        pid = pdef["id"]
+        interp = _PANEL_INTERP[pid](vmap)
+        found_variants = [
+            {"rs_id": rsid, "genotype": vmap[rsid].get("genotype")}
+            for rsid in pdef["rs_ids"] if rsid in vmap
+        ]
+        bloodwork = _bloodwork_analytes(conn, pdef["analyte_patterns"])
+        wearable = None
+        if pid == "actn3":
+            wearable = {"type": "weekly_volume", "data": _weekly_volume(conn)}
+        elif pid == "fads" and not bloodwork:
+            names = _omega3_supplements(conn)
+            wearable = {"type": "supplements", "names": names}
+        panels.append({
+            "id": pid,
+            "label": pdef["label"],
+            "description": pdef["description"],
+            "rs_ids": pdef["rs_ids"],
+            "variants_found": found_variants,
+            "interpretation": interp.get("label"),
+            "risk_level": interp.get("risk_level"),
+            "risk_note": interp.get("risk_note"),
+            "bloodwork": bloodwork,
+            "wearable": wearable,
+        })
+    conn.close()
+    return {"has_genome": True, "panels": panels}
 
 
 # --- Body composition estimates (CRUD) ---
