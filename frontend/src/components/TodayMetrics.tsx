@@ -1,6 +1,6 @@
 import { format, subDays } from "date-fns";
 import { useEffect, useState } from "react";
-import { apiFetch } from "../api";
+import { apiFetch, fetchUploads, uploadImageUrl } from "../api";
 import { useMetricData } from "../hooks/useMetricData";
 import type {
   BodyBatteryDaily,
@@ -8,6 +8,7 @@ import type {
   HrvDaily,
   SleepDaily,
   StressDaily,
+  Upload,
   WeightDaily,
 } from "../types";
 
@@ -149,6 +150,13 @@ export function TodayMetrics() {
     apiFetch("/api/body-battery/current")
       .then((r) => r.json())
       .then((d) => setBbCurrent(d && d.date ? d : null))
+      .catch(() => {});
+  }, []);
+
+  const [recentPhotos, setRecentPhotos] = useState<Upload[]>([]);
+  useEffect(() => {
+    fetchUploads("form")
+      .then((uploads) => setRecentPhotos(uploads.slice(0, 3)))
       .catch(() => {});
   }, []);
 
@@ -345,6 +353,20 @@ export function TodayMetrics() {
           </div>
         </div>
       </div>
+
+      {recentPhotos.length > 0 && (
+        <div className="progress-photo-strip">
+          <div className="progress-photo-strip-title">Recent progress photos</div>
+          <div className="progress-photo-strip-photos">
+            {recentPhotos.map((photo) => (
+              <div key={photo.id} className="progress-photo-strip-item">
+                <img src={uploadImageUrl(photo.id)} alt={photo.date} />
+                <div className="progress-photo-strip-item-date">{photo.date}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

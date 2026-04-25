@@ -1,6 +1,7 @@
 import type {
   AiSettings,
   AiSettingsUpdate,
+  AnalyteDataPoint,
   BloodworkAnalysisResult,
   GenotypePhenotypeData,
   BloodworkPanel,
@@ -10,15 +11,18 @@ import type {
   CaffeineIntake,
   ConcentrationCurve,
   FormCheckAnalysisResult,
+  FormCheckHistoryItem,
   GenomeParseResult,
   GenomeUpload,
   GenomeUploadInput,
   GenomeVariant,
+  GlucoseReading,
   JournalEntry,
   JournalQuestion,
   JournalQuestionResponse,
   Meal,
   MealAnalysisResult,
+  MealTemplate,
   NutrientDef,
   NutrientCategory,
   NutrientGoals,
@@ -26,8 +30,12 @@ import type {
   NightBriefing,
   NutritionDailyTotals,
   OrientAnalysis,
+  OrientAnomaliesResponse,
+  OrientExplain,
   PharmacogenomicsProfile,
   PlannedActivity,
+  PlannedSession,
+  PlannedSessionKind,
   ProcessingSpeedDaily,
   ProcessingSpeedSessionInput,
   ProcessingSpeedSessionResult,
@@ -366,6 +374,78 @@ export async function fetchPlanned(start: string, end: string): Promise<PlannedA
   return res.json();
 }
 
+// --- Meal templates ---
+
+export async function listMealTemplates(): Promise<MealTemplate[]> {
+  const res = await apiFetch("/api/meal-templates");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export interface MealTemplateInput {
+  name: string;
+  notes: string | null;
+  nutrients: { nutrient_key: string; amount: number }[];
+}
+
+export async function createMealTemplate(body: MealTemplateInput): Promise<MealTemplate> {
+  const res = await apiFetch("/api/meal-templates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteMealTemplate(id: number): Promise<void> {
+  const res = await apiFetch(`/api/meal-templates/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function logMealTemplate(id: number, date: string): Promise<Meal> {
+  const res = await apiFetch(`/api/meal-templates/${id}/log`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Planned sessions ---
+
+export async function listPlannedSessions(start: string, end: string): Promise<PlannedSession[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/planned-sessions?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export interface PlannedSessionInput {
+  date: string;
+  kind: PlannedSessionKind;
+  title: string | null;
+  target_minutes: number | null;
+  target_load: string | null;
+  notes: string | null;
+}
+
+export async function createPlannedSession(body: PlannedSessionInput): Promise<PlannedSession> {
+  const res = await apiFetch("/api/planned-sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deletePlannedSession(id: number): Promise<void> {
+  const res = await apiFetch(`/api/planned-sessions/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
 // --- Uploads ---
 
 export async function fetchUploads(kind?: UploadKind, date?: string): Promise<Upload[]> {
@@ -470,6 +550,12 @@ export async function deleteBodyCompositionEstimate(id: number): Promise<void> {
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 
+export async function fetchFormCheckHistory(): Promise<FormCheckHistoryItem[]> {
+  const res = await apiFetch("/api/form-checks/history");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 // --- Bloodwork panels ---
 
 export async function createBloodworkPanel(
@@ -503,6 +589,16 @@ export async function getBloodworkPanel(id: number): Promise<BloodworkPanel> {
 export async function deleteBloodworkPanel(id: number): Promise<void> {
   const res = await apiFetch(`/api/bloodwork-panels/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function getAnalyteHistory(
+  analyte: string,
+): Promise<AnalyteDataPoint[]> {
+  const res = await apiFetch(
+    `/api/bloodwork/analyte/${encodeURIComponent(analyte)}`,
+  );
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
 }
 
 // --- Genome uploads ---
@@ -587,6 +683,29 @@ export async function fetchGenomeVariants(upload_id: number): Promise<Record<str
 }
 
 // --- Orient AI analysis ---
+
+
+export async function fetchOrientAnomalies(window_days = 14): Promise<OrientAnomaliesResponse> {
+  const res = await apiFetch(`/api/orient/anomalies?window_days=${window_days}`);
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function explainOrient(metric: string, explainDate: string): Promise<OrientExplain> {
+  const res = await apiFetch("/api/orient/explain", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ metric, date: explainDate }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
 
 export async function analyzeOrient(window_days = 14): Promise<OrientAnalysis> {
   const res = await apiFetch("/api/orient/analyze", {
@@ -750,5 +869,17 @@ export async function updateAiSettings(body: AiSettingsUpdate): Promise<AiSettin
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(detail.detail || `API error: ${res.status}`);
   }
+  return res.json();
+}
+
+// --- Glucose (CGM) ---
+
+export async function fetchGlucosePostprandial(
+  mealTime: string,
+  windowMinutes = 120,
+): Promise<GlucoseReading[]> {
+  const params = new URLSearchParams({ meal_time: mealTime, window_minutes: String(windowMinutes) });
+  const res = await apiFetch(`/api/glucose/postprandial?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

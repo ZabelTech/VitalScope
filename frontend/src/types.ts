@@ -386,6 +386,13 @@ export interface BodyCompositionEstimateInput {
   confidence?: "low" | "medium" | "high" | null;
 }
 
+export interface FormCheckHistoryItem {
+  upload_id: number;
+  date: string;
+  created_at: string;
+  estimate: BodyCompositionEstimate | null;
+}
+
 export interface PlannedActivity {
   id: number;
   date: string;
@@ -393,6 +400,27 @@ export interface PlannedActivity {
   target_distance_m: number | null;
   target_duration_sec: number | null;
   notes: string | null;
+}
+
+export interface MealTemplate {
+  id: number;
+  name: string;
+  notes: string | null;
+  created_at: string;
+  nutrients: MealNutrient[];
+}
+
+export type PlannedSessionKind = "zone2" | "strength" | "hiit" | "mobility" | "rest" | "sauna" | "cold";
+
+export interface PlannedSession {
+  id: number;
+  date: string;
+  kind: PlannedSessionKind;
+  title: string | null;
+  target_minutes: number | null;
+  target_load: string | null;
+  notes: string | null;
+  created_at: string;
 }
 
 export type NutrientGoals = Record<string, number>;
@@ -429,9 +457,18 @@ export interface BloodworkPanel {
   lab_name: string | null;
   notes: string | null;
   confidence: "low" | "medium" | "high" | null;
+  narrative: string | null;
   created_at: string;
   result_count?: number;
   results?: BloodworkResult[];
+}
+
+export interface AnalyteDataPoint {
+  panel_id: number;
+  date: string;
+  value: number | null;
+  value_text: string | null;
+  unit: string | null;
 }
 
 export interface BloodworkPanelInput {
@@ -459,6 +496,41 @@ export interface OrientAnalysis {
   window_days: number;
   overall_summary: string;
   topics: OrientTopic[];
+}
+
+
+export interface OrientAnomaly {
+  metric: string;
+  metric_label: string;
+  date: string;
+  value: number;
+  z_score: number;
+  direction: "high" | "low";
+  unit: string;
+  mean: number;
+  stdev: number;
+}
+
+export interface OrientAnomaliesResponse {
+  anomalies: OrientAnomaly[];
+  window_days: number;
+}
+
+export interface OrientExplainContributor {
+  factor: string;
+  direction: "elevated" | "reduced" | "normal";
+  confidence: "low" | "medium" | "high";
+  evidence: string;
+}
+
+export interface OrientExplain {
+  metric: string;
+  metric_label: string;
+  date: string;
+  model: string;
+  summary: string;
+  likely_contributors: OrientExplainContributor[];
+  what_to_watch: string;
 }
 
 export interface MorningBriefing {
@@ -599,6 +671,36 @@ export interface AiSettingsUpdate {
   anthropic_api_key?: string | null;
   openai_api_key?: string | null;
   openrouter_api_key?: string | null;
+}
+
+export type GlucoseTrend =
+  | "falling_fast"
+  | "falling"
+  | "falling_slowly"
+  | "flat"
+  | "rising_slowly"
+  | "rising"
+  | "rising_fast"
+  | "unknown"
+  | null;
+
+export interface GlucoseReading {
+  timestamp: string;
+  date: string;
+  mgdl: number;
+  trend: GlucoseTrend;
+  source: string | null;
+}
+
+export interface GlucoseDaily {
+  date: string;
+  avg_mgdl: number | null;
+  min_mgdl: number | null;
+  max_mgdl: number | null;
+  std_dev: number | null;
+  cv_percent: number | null;
+  tir_pct: number | null;
+  readings_count: number | null;
 }
 
 export interface CaffeineIntake {
