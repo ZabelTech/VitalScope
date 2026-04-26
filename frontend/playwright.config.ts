@@ -17,12 +17,15 @@ export default defineConfig({
       url: "http://127.0.0.1:8000/api/runtime",
       reuseExistingServer: true,
       cwd: "..",
+      timeout: 30_000,
+      env: { VITALSCOPE_DEMO: "1" },
     },
     {
       command: "npm run dev -- --host 127.0.0.1 --port 5173",
       url: "http://127.0.0.1:5173",
       reuseExistingServer: true,
       cwd: ".",
+      timeout: 30_000,
     },
   ],
   projects: [

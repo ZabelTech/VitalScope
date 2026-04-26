@@ -18,22 +18,22 @@ test("Full ReSync Garmin", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();
 
-  const garmin = pluginCard(page, /Garmin Health/i);
-  await garmin.getByRole("heading", { name: /Garmin Health/i }).click();
+  const garmin = pluginCard(page, /Garmin Connect/i);
+  await garmin.getByRole("heading", { name: /Garmin Connect/i }).click();
   await garmin.getByRole("button", { name: "Full resync" }).click();
 
-  await expect(garmin.getByRole("button", { name: "Running…" })).toBeVisible();
+  await expect(garmin.getByRole("button", { name: "Running…" }).first()).toBeVisible();
 });
 
 test("Pull latest Strong workouts", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();
 
-  const strong = pluginCard(page, /^Strong$/i);
-  await strong.getByRole("heading", { name: /^Strong$/i }).click();
+  const strong = pluginCard(page, /Strong/i);
+  await strong.getByRole("heading", { name: /Strong/i }).click();
   await strong.getByRole("button", { name: "Run now" }).click();
 
-  await expect(strong.getByRole("button", { name: "Running…" })).toBeVisible();
+  await expect(strong.getByRole("button", { name: "Running…" }).first()).toBeVisible();
 });
 
 test("Run daily OODA loop", async ({ page }) => {
@@ -79,8 +79,8 @@ test("Set plugin credentials and automation schedule", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();
 
-  const garmin = pluginCard(page, /Garmin Health/i);
-  await garmin.getByRole("heading", { name: /Garmin Health/i }).click();
+  const garmin = pluginCard(page, /Garmin Connect/i);
+  await garmin.getByRole("heading", { name: /Garmin Connect/i }).click();
 
   await garmin.locator('input[type="number"]').first().fill("90");
   await garmin.locator('input[type="text"]').first().fill("qa@example.com");
