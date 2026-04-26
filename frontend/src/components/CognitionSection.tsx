@@ -1,15 +1,10 @@
 import { useState } from "react";
-import { format, subDays } from "date-fns";
 import {
   ComposedChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
   ResponsiveContainer, Scatter, ScatterChart, ZAxis, Area,
 } from "recharts";
-import { DateRangePicker } from "./DateRangePicker";
 import { useMetricData } from "../hooks/useMetricData";
 import type { CognitionDaily, ProcessingSpeedDaily, SleepDaily } from "../types";
-
-const today = format(new Date(), "yyyy-MM-dd");
-const ninetyDaysAgo = format(subDays(new Date(), 90), "yyyy-MM-dd");
 
 type CorrelationMetric = "deep_sleep_min" | "avg_rt_ms";
 type ProcessingView = "raw" | "adjusted";
@@ -19,9 +14,12 @@ const CORRELATION_LABELS: Record<CorrelationMetric, string> = {
   avg_rt_ms: "Reaction time (ms)",
 };
 
-export function CognitionSection() {
-  const [start, setStart] = useState(ninetyDaysAgo);
-  const [end, setEnd] = useState(today);
+interface Props {
+  start: string;
+  end: string;
+}
+
+export function CognitionSection({ start, end }: Props) {
   const [corrMetric, setCorrMetric] = useState<CorrelationMetric>("deep_sleep_min");
   const [processingView, setProcessingView] = useState<ProcessingView>("raw");
 
@@ -86,9 +84,6 @@ export function CognitionSection() {
   return (
     <div className="chart-section">
       <h2>Cognition</h2>
-      <div className="trends-header">
-        <DateRangePicker start={start} end={end} onChange={(s, e) => { setStart(s); setEnd(e); }} />
-      </div>
 
       {hasCognitionData && (
         <>
