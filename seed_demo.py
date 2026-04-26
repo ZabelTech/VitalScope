@@ -323,6 +323,143 @@ def seed_cgm(conn: sqlite3.Connection, dates: list[date], rng: random.Random) ->
     return count
 
 
+def seed_cog_processing(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    import json as _json
+
+    symbols = ["@", "#", "$", "%", "&", "!", "?", "*", "+", "~"]
+
+    def _pct(vals: list, p: float) -> float:
+        sv = sorted(vals)
+        idx = (len(sv) - 1) * p
+        lo, hi = int(idx), min(int(idx) + 1, len(sv) - 1)
+        return sv[lo] + (sv[hi] - sv[lo]) * (idx - lo)
+
+    def _median(vals: list) -> float:
+        sv = sorted(vals)
+        n = len(sv)
+        mid = n // 2
+        return sv[mid] if n % 2 else (sv[mid - 1] + sv[mid]) / 2
+
+    count = 0
+    num_dates = max(len(dates) - 1, 1)
+
+    for d_idx, d in enumerate(dates):
+        if d.toordinal() % 3 != 0:
+            continue
+        if conn.execute(
+            "SELECT 1 FROM cog_processing_sessions WHERE date = ? AND stimulus_seed = ? LIMIT 1",
+            (d.isoformat(), str(d.toordinal())),
+        ).fetchone():
+            continue
+
+        # Gradual improvement over the date window (simulates practice effect)
+        progress = d_idx / num_dates
+        rt_mean = int(480 - 80 * progress)   # 480 ms → 400 ms
+        acc_base = 0.78 + 0.12 * progress    # 78 % → 90 %
+
+        dur_ms = 90_000 + rng.randint(-10_000, 20_000)
+        started = datetime.combine(d, time(7 + rng.randint(0, 3), rng.randint(0, 59)))
+        ended = started + timedelta(milliseconds=dur_ms)
+        ts = started
+
+        trials = []
+        for i in range(40):
+            difficulty = rng.choices(["easy", "moderate", "hard"], weights=[50, 35, 15], k=1)[0]
+            target = rng.choice(symbols)
+            if rng.random() < 0.5:
+                others = rng.sample([s for s in symbols if s != target], 3)
+                candidates = others + [target]
+                rng.shuffle(candidates)
+                correct_answer = True
+            else:
+                candidates = rng.sample([s for s in symbols if s != target], 4)
+                correct_answer = False
+
+            rt_mod = {"easy": 0.85, "moderate": 1.0, "hard": 1.25}[difficulty]
+            acc_mod = {"easy": 1.05, "moderate": 1.0, "hard": 0.88}[difficulty]
+            rt = max(155, int(rng.gauss(rt_mean * rt_mod, 55)))
+            is_correct = rng.random() < min(acc_base * acc_mod, 0.98)
+            user_answer = correct_answer if is_correct else (not correct_answer)
+
+            trials.append({
+                "i": i, "diff": difficulty, "target": target, "candidates": candidates,
+                "correct_answer": correct_answer, "user_answer": user_answer,
+                "is_correct": is_correct, "rt": rt, "ts": _iso(ts),
+            })
+            ts += timedelta(milliseconds=rt + 500)
+
+        attempted = len(trials)
+        correct_n = sum(1 for t in trials if t["is_correct"])
+        commission = attempted - correct_n
+        accuracy = correct_n / attempted
+        rt_correct = [t["rt"] for t in trials if t["is_correct"]]
+        rt_all = [t["rt"] for t in trials]
+        median_rt = float(_median(rt_correct)) if rt_correct else None
+        rt_iqr = (_pct(rt_correct, 0.75) - _pct(rt_correct, 0.25)) if len(rt_correct) >= 4 else None
+        fast10 = _pct(rt_all, 0.1) if rt_all else None
+        slow10 = _pct(rt_all, 0.9) if rt_all else None
+        throughput_pm = correct_n / (dur_ms / 60_000)
+        inv_eff = (median_rt / accuracy) if (median_rt and accuracy >= 0.01) else None
+
+        streak = streak_max = 0
+        last_ua = None
+        for t in trials:
+            ua = t["user_answer"]
+            if last_ua is None or ua == last_ua:
+                streak += 1
+            else:
+                streak = 1
+            last_ua = ua
+            streak_max = max(streak_max, streak)
+
+        now = datetime.utcnow().isoformat(timespec="seconds")
+        cur = conn.execute(
+            """
+            INSERT INTO cog_processing_sessions (
+                date, started_at, ended_at, duration_ms, attempted, correct, accuracy,
+                median_rt_ms, rt_iqr_ms, throughput_pm, inverse_efficiency,
+                omission_errors, commission_errors, fast10_rt_ms, slow10_rt_ms,
+                same_button_streak_max, interruption_count, focus_lost_ms_total,
+                quality_flag, quality_reasons_json, device_info_json, stimulus_version,
+                stimulus_seed, created_at
+            )
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                d.isoformat(), _iso(started), _iso(ended), dur_ms,
+                attempted, correct_n, accuracy,
+                median_rt, rt_iqr, throughput_pm, inv_eff,
+                0, commission, fast10, slow10,
+                streak_max, 0, 0,
+                "ok", _json.dumps([]), _json.dumps({}), "v1",
+                str(d.toordinal()), now,
+            ),
+        )
+        session_id = cur.lastrowid
+        for t in trials:
+            conn.execute(
+                """
+                INSERT INTO cog_processing_trials (
+                    session_id, trial_index, difficulty, target_symbol, candidate_symbols_json,
+                    correct_answer, user_answer, is_correct, rt_ms, timeout, presented_at
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    session_id, t["i"], t["diff"], t["target"],
+                    _json.dumps(t["candidates"]),
+                    int(t["correct_answer"]), int(t["user_answer"]),
+                    int(t["is_correct"]), t["rt"], 0, t["ts"],
+                ),
+            )
+        conn.execute(
+            "UPDATE journal_entries SET avg_rt_ms = ?, rt_trials = ? WHERE date = ?",
+            (median_rt, attempted, d.isoformat()),
+        )
+        count += 1
+    return count
+
+
 def seed_genome(conn: sqlite3.Connection) -> int:
     existing = conn.execute("SELECT COUNT(*) FROM genome_uploads").fetchone()[0]
     if existing > 0:
@@ -457,6 +594,7 @@ def main() -> None:
         seed_activities(conn, dates, rng)
         seed_workouts(conn, dates, rng)
         seed_cgm(conn, dates, rng)
+        seed_cog_processing(conn, dates, rng)
         seed_supplements(conn)
         seed_meals_and_water(conn)
         seed_nutrition_goals(conn)
