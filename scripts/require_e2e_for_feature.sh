@@ -1,18 +1,28 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TARGET_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-}"
+TARGET_BRANCH="${CI_MERGE_REQUEST_TARGET_BRANCH_NAME:-${GITHUB_BASE_REF:-}}"
 
 if [[ -z "$TARGET_BRANCH" ]]; then
-  echo "No merge-request target branch found; skipping E2E-feature guard."
+  echo "No merge target branch found; skipping E2E-feature guard."
   exit 0
 fi
 
 git fetch origin "$TARGET_BRANCH" --depth=200 >/dev/null 2>&1 || true
 
-CHANGED_FILES="$(git diff --name-only "origin/${TARGET_BRANCH}...HEAD")"
+BASE_REF="origin/${TARGET_BRANCH}"
+if ! git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
+  if git rev-parse --verify --quiet "$TARGET_BRANCH" >/dev/null; then
+    BASE_REF="$TARGET_BRANCH"
+  else
+    echo "Base ref for ${TARGET_BRANCH} not found; skipping E2E-feature guard."
+    exit 0
+  fi
+fi
 
-echo "Changed files vs origin/${TARGET_BRANCH}:"
+CHANGED_FILES="$(git diff --name-only "${BASE_REF}...HEAD")"
+
+echo "Changed files vs ${BASE_REF}:"
 printf '%s\n' "$CHANGED_FILES"
 
 if [[ -z "$CHANGED_FILES" ]]; then
