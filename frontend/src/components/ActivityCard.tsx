@@ -5,7 +5,7 @@ import { apiFetch } from "../api";
 interface Props {
   activities: GarminActivity[];
   workouts: Workout[];
-  title?: string;
+  title?: string | null;
   maxItems?: number;
   emptyHint?: string;
 }
@@ -155,7 +155,7 @@ function StrongDetail({ workoutId }: { workoutId: string }) {
 export function ActivityCard({
   activities,
   workouts,
-  title = "Recent Activity",
+  title,
   maxItems = 8,
   emptyHint,
 }: Props) {
@@ -180,7 +180,7 @@ export function ActivityCard({
     if (!emptyHint) return null;
     return (
       <div className="overview-card" style={{ marginTop: 20 }}>
-        <h3>{title}</h3>
+        {title && <h3>{title}</h3>}
         <div className="overview-card-body">
           <p style={{ opacity: 0.6, margin: 0 }}>{emptyHint}</p>
         </div>
@@ -190,7 +190,7 @@ export function ActivityCard({
 
   return (
     <div className="overview-card" style={{ marginTop: 20 }}>
-      <h3>{title}</h3>
+      {title && <h3>{title}</h3>}
       <div className="overview-card-body activity-list">
         {merged.slice(0, maxItems).map((item) => {
           const id = item.kind === "garmin"

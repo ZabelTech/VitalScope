@@ -8,11 +8,11 @@ export function ActivityHistory() {
   const [workouts, setWorkouts] = useState<Workout[]>([]);
 
   useEffect(() => {
-    apiFetch("/api/activities/recent?limit=30")
+    apiFetch("/api/activities/recent?limit=5")
       .then((r) => r.json())
       .then(setActivities)
       .catch(() => {});
-    apiFetch("/api/workouts/recent?limit=30")
+    apiFetch("/api/workouts/recent?limit=5")
       .then((r) => r.json())
       .then(setWorkouts)
       .catch(() => {});
@@ -22,8 +22,7 @@ export function ActivityHistory() {
     <ActivityCard
       activities={activities}
       workouts={workouts}
-      title="Activity history"
-      maxItems={30}
+      maxItems={5}
       emptyHint="No activity history yet."
     />
   );
