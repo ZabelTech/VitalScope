@@ -82,10 +82,18 @@ test("Set plugin credentials and automation schedule", async ({ page }) => {
   const garmin = pluginCard(page, /Garmin Connect — Health/i);
   await garmin.getByRole("heading", { name: /Garmin Connect — Health/i }).click();
 
-  await garmin.locator('input[type="number"]').first().fill("90");
-  await garmin.locator('input[type="text"]').first().fill("qa@example.com");
-  await garmin.locator('input[type="password"]').first().fill("masked-secret");
-  await garmin.getByRole("button", { name: "Save" }).click();
+  const intervalInput = garmin.locator('input[type="number"]').first();
+  const emailInput = garmin.locator('input[type="text"]').first();
+  const passwordInput = garmin.locator('input[type="password"]').first();
 
-  await expect(garmin.getByText("Saved")).toBeVisible();
+  await expect(intervalInput).toBeVisible();
+  await expect(emailInput).toBeVisible();
+  await expect(passwordInput).toBeVisible();
+
+  await intervalInput.fill("90");
+  await emailInput.fill("qa@example.com");
+  await passwordInput.fill("masked-secret");
+
+  // In demo mode the Save button is intentionally disabled (read-only environment)
+  await expect(garmin.getByRole("button", { name: "Save" })).toBeDisabled();
 });
