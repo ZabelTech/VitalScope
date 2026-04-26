@@ -241,6 +241,18 @@ npm run dev
 
 Open http://localhost:5173. Vite proxies `/api/*` to `http://localhost:8000`.
 
+### E2E use-case tests
+
+The repository includes Playwright end-to-end tests for the investigated user scenarios (login, Garmin full resync flow, Strong run-now flow, OODA navigation, meal logging with postprandial review, and plugin scheduling updates).
+
+```bash
+cd /home/robert/vitalscope/frontend
+npx playwright install chromium    # first run only
+npm run test:e2e
+```
+
+
+
 ## Typical workflow
 
 Day-to-day the scheduler keeps the DB fresh — no manual steps required. If you want to force a refresh:
