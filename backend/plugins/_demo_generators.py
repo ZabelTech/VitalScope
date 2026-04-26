@@ -88,6 +88,13 @@ def generate_genome(conn: sqlite3.Connection, full: bool) -> int:
     return n
 
 
+def generate_cog_processing(conn: sqlite3.Connection, full: bool) -> int:
+    sd = _seed_module()
+    n = sd.seed_cog_processing(conn, _dates(full), _rng())
+    conn.commit()
+    return n
+
+
 def generate_eufy(conn: sqlite3.Connection, full: bool) -> int:
     # Look back further than the other plugins because weight is only
     # written on every other calendar day, and a 7-day window might not

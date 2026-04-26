@@ -1746,7 +1746,11 @@ def submit_processing_speed_session(session: ProcessingSpeedSessionIn):
 
 
 @app.get("/api/cognition/processing-speed/daily")
-def get_processing_speed_daily(start: Optional[str] = None, end: Optional[str] = None):
+def get_processing_speed_daily(
+    start: Optional[str] = None,
+    end: Optional[str] = None,
+    baseline_window: int = Query(7, ge=3, le=30),
+):
     s, e = default_range(start, end)
     conn = get_db()
     rows = conn.execute(
@@ -1766,7 +1770,35 @@ def get_processing_speed_daily(start: Optional[str] = None, end: Optional[str] =
         (s, e),
     ).fetchall()
     conn.close()
-    return [dict(r) for r in rows]
+
+    points: list[dict[str, Any]] = []
+    prior_ok: list[tuple[date, float]] = []
+
+    for row in rows:
+        point = dict(row)
+        row_date = date.fromisoformat(point["date"])
+        window_start = row_date - timedelta(days=baseline_window)
+        window_values = [
+            value for day, value in prior_ok if day >= window_start and day < row_date
+        ]
+        include_in_adjusted = point["quality_flag"] == "ok"
+        point["include_in_quality_adjusted"] = include_in_adjusted
+        point["baseline_confidence"] = "low"
+        point["adjusted_score"] = None
+        if include_in_adjusted and len(window_values) >= 3:
+            mean = statistics.mean(window_values)
+            std = statistics.stdev(window_values) if len(window_values) >= 2 else 0.0
+            point["baseline_confidence"] = "ok"
+            point["adjusted_score"] = (
+                (float(point["throughput_pm"]) - mean) / std if std > 0 else 0.0
+            )
+
+        if include_in_adjusted:
+            prior_ok.append((row_date, float(point["throughput_pm"])))
+
+        points.append(point)
+
+    return points
 
 
 @app.get("/api/cognition/processing-speed/baseline")
