@@ -247,6 +247,17 @@ The repository includes Playwright end-to-end tests for the investigated user sc
 
 ```bash
 cd /home/robert/vitalscope/frontend
+
+## GitLab CI
+
+A `.gitlab-ci.yml` pipeline is included with three jobs:
+
+- `require_e2e_for_feature` — merge-request guard that fails when feature-area files (`frontend/src`, `backend`, `sync_*.py`) change without updating at least one `frontend/e2e/*.spec.ts` test.
+- `frontend_typecheck` — runs `npx tsc --noEmit` in `frontend/`.
+- `e2e_usecases` — runs the Playwright E2E suite (`npm run test:e2e`) in a Playwright image with backend Python dependencies installed from `requirements.txt`.
+
+This enforces the rule that every new feature must include or update an end-to-end test.
+
 npx playwright install chromium    # first run only
 npm run test:e2e
 ```
