@@ -124,6 +124,9 @@ export function TodayJournal({ date }: Props) {
   }
 
   const savedAvgRt = entry?.avg_rt_ms ? Math.round(entry.avg_rt_ms) : null;
+  const baselineConfidence = processingResult?.baseline.confidence ?? "low";
+  const baselineDelta = processingResult?.delta_vs_baseline ?? null;
+  const baselineDirection = baselineDelta == null ? null : baselineDelta > 0 ? "above" : baselineDelta < 0 ? "below" : "at";
 
   return (
     <>
@@ -285,9 +288,19 @@ export function TodayJournal({ date }: Props) {
                 : savedAvgRt != null ? `${savedAvgRt} ms` : "—"}
             </p>
             {processingResult && (
-              <p className="rt-feedback">
-                Accuracy: {Math.round(processingResult.summary.accuracy * 100)}% · Throughput: {processingResult.summary.throughput_pm.toFixed(1)}/min · Quality: {processingResult.summary.quality_flag}
-              </p>
+              <>
+                <p className="rt-feedback">
+                  Accuracy: {Math.round(processingResult.summary.accuracy * 100)}% · Throughput: {processingResult.summary.throughput_pm.toFixed(1)}/min
+                </p>
+                <p className="rt-feedback">
+                  Baseline: {baselineConfidence === "ok" && baselineDelta !== null
+                    ? `${Math.abs(baselineDelta).toFixed(1)} ${baselineDirection} baseline`
+                    : "calibrating (need 3+ high-quality sessions)"}
+                </p>
+                <p className="rt-feedback">
+                  Confidence: {baselineConfidence} · Quality badge: {processingResult.summary.quality_flag === "ok" ? "valid session" : "low-quality session"}
+                </p>
+              </>
             )}
           </div>
         </fieldset>

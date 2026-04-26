@@ -225,7 +225,7 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).
   - **Plan** — tabs for Supplements (the master list grouped Morning/Noon/Evening, drives the Journal check-off), Food (placeholder), Activity (placeholder).
 - **`/act` Act** — what to do today?
-  - **Today** — `TodayDashboard`: quick snapshot + recent activity card + 75-second processing-speed task in the journal card.
+  - **Today** — `TodayDashboard`: quick snapshot + recent activity card + processing-speed task in the journal card (first run includes 6 untimed practice trials, then a 75-second scored run).
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
   - **Meals & water** — `NutritionPage`: log meals for a date with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). If CGM data covers the meal time, the 2-hour postprandial glucose curve is shown inline below the meal. Water is logged as separate per-drink entries with a running daily total.
   - **Protocols** — `ProtocolsSection`: define and log intervention protocols (drugs, peptides, PEDs, supplement stacks, hormesis sessions, fasting windows, training blocks). Quick-log cards for Zone 2, sauna (°C + min), cold plunge (°C + min), and TRE window (start/end time). Active protocols show a running day-count; one-tap event logging with dose auto-fill.
@@ -284,6 +284,8 @@ python3 sync_eufy.py
 ## Per-PR preview deploys
 
 Every pull request gets an ephemeral Fly.io app at `https://vitalscope-pr-<N>.fly.dev`, provisioned by `.github/workflows/preview-deploy.yml` and torn down when the PR closes. Previews run with `VITALSCOPE_DEMO=1` — the scheduler is off, plugin credentials are inaccessible, and the SQLite file is reseeded from `seed_demo.py` on every boot so no real health data ever leaves this machine.
+
+For end-user processing-speed preview signoff, use `PROCESSING_SPEED_VERIFICATION_CHECKLIST.md` before marking the preview-ready issue complete.
 
 ### Manual preview deploys
 
