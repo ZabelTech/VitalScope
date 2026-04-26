@@ -12,6 +12,7 @@ const today = format(new Date(), "yyyy-MM-dd");
 const ninetyDaysAgo = format(subDays(new Date(), 90), "yyyy-MM-dd");
 
 type CorrelationMetric = "deep_sleep_min" | "avg_rt_ms";
+type ProcessingView = "raw" | "adjusted";
 
 const CORRELATION_LABELS: Record<CorrelationMetric, string> = {
   deep_sleep_min: "Deep sleep (min)",
@@ -22,6 +23,7 @@ export function CognitionSection() {
   const [start, setStart] = useState(ninetyDaysAgo);
   const [end, setEnd] = useState(today);
   const [corrMetric, setCorrMetric] = useState<CorrelationMetric>("deep_sleep_min");
+  const [processingView, setProcessingView] = useState<ProcessingView>("raw");
 
   const { data: cognition, loading } = useMetricData<CognitionDaily[]>(
     "journal/cognition", start, end
@@ -56,6 +58,14 @@ export function CognitionSection() {
   const sleepByDate = Object.fromEntries(
     (sleep ?? []).map((s) => [s.date, s])
   );
+
+
+  const processingData = (processing ?? []).map((d) => ({
+    ...d,
+    accuracy_pct: Math.round(d.accuracy * 100),
+    adjusted_plot: d.baseline_confidence === "ok" ? d.adjusted_score : null,
+    low_quality_throughput: d.quality_flag === "low" ? d.throughput_pm : null,
+  }));
 
   const corrData = (cognition ?? [])
     .filter((d): d is CognitionDaily & { focus: number } => d.focus !== null)
@@ -139,37 +149,73 @@ export function CognitionSection() {
 
       {(processing ?? []).length > 0 && (
         <>
-          <h3 className="chart-subhead">Processing speed</h3>
+          <h3 className="chart-subhead">
+            Processing speed
+            <select
+              className="corr-select"
+              value={processingView}
+              onChange={(e) => setProcessingView(e.target.value as ProcessingView)}
+              style={{ marginLeft: 12 }}
+            >
+              <option value="raw">Raw throughput</option>
+              <option value="adjusted">Quality-adjusted z-score</option>
+            </select>
+          </h3>
           <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
-            <ComposedChart data={processing ?? []}>
+            <ComposedChart data={processingData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
-              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} />
+              {processingView === "raw" && <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} />}
               <Tooltip />
               <Legend />
-              <Line
-                yAxisId="left"
-                type="monotone"
-                dataKey="throughput_pm"
-                name="Throughput/min"
-                stroke="#8b5cf6"
-                dot={{ r: 2 }}
-                connectNulls
-              />
-              <Area
-                yAxisId="right"
-                type="monotone"
-                dataKey={(d: ProcessingSpeedDaily) => Math.round(d.accuracy * 100)}
-                name="Accuracy %"
-                stroke="#3b82f6"
-                fill="#3b82f6"
-                fillOpacity={0.15}
-                connectNulls
-              />
+              {processingView === "raw" ? (
+                <>
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="throughput_pm"
+                    name="Throughput/min"
+                    stroke="#8b5cf6"
+                    dot={{ r: 2 }}
+                    connectNulls
+                  />
+                  <Scatter
+                    yAxisId="left"
+                    name="Low-quality sessions"
+                    data={processingData}
+                    dataKey="low_quality_throughput"
+                    fill="#ef4444"
+                  />
+                  <Area
+                    yAxisId="right"
+                    type="monotone"
+                    dataKey="accuracy_pct"
+                    name="Accuracy %"
+                    stroke="#3b82f6"
+                    fill="#3b82f6"
+                    fillOpacity={0.15}
+                    connectNulls
+                  />
+                </>
+              ) : (
+                <>
+                  <Line
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey="adjusted_plot"
+                    name="Adjusted score (z)"
+                    stroke="#22c55e"
+                    dot={{ r: 2 }}
+                    connectNulls
+                  />
+                </>
+              )}
             </ComposedChart>
           </ResponsiveContainer></div>
-          <p className="chart-empty">Low-quality sessions are still shown and marked in the task result card.</p>
+          <p className="chart-empty">
+            Red points mark low-quality sessions in raw view. Adjusted view only plots days with enough prior high-quality baseline history (3+ sessions).
+          </p>
         </>
       )}
     </div>

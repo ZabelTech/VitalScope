@@ -191,6 +191,8 @@ A single FastAPI file serving routes from `vitalscope.db`. CORS is open to `http
 | Activities (Garmin) | `GET /api/activities`, `/api/activities/stats`, `/api/activities/weekly`, `/api/activities/recent` |
 | Journal | `GET/POST /api/journal`, `GET /api/journal/{date}`, `GET/POST /api/journal/{date}/supplements` |
 | Cognition processing speed | `POST /api/cognition/processing-speed/session`, `GET /api/cognition/processing-speed/daily`, `GET /api/cognition/processing-speed/baseline` |
+
+`GET /api/cognition/processing-speed/daily` returns the latest session per day plus quality-adjusted chart helpers: `include_in_quality_adjusted`, `baseline_confidence`, and `adjusted_score` (rolling z-score vs prior high-quality sessions in the selected baseline window).
 | Supplements | `GET/POST/PUT/DELETE /api/supplements[/{id}]` |
 | Protocols | `GET/POST/PUT/DELETE /api/protocols[/{id}]`, `GET/POST/PUT/DELETE /api/protocol-events[/{id}]` |
 | Nutrition | `GET/POST/PUT/DELETE /api/meals[/{id}]`, `GET /api/nutrition/daily`, `GET/POST/DELETE /api/water[/{id}]`, `GET /api/water/daily`, `GET/POST /api/nutrients/definitions`, `DELETE /api/nutrients/definitions/{key}` |

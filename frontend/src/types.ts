@@ -201,6 +201,9 @@ export interface ProcessingSpeedDaily {
   median_rt_ms: number | null;
   throughput_pm: number;
   quality_flag: "ok" | "low";
+  include_in_quality_adjusted: boolean;
+  baseline_confidence: "ok" | "low";
+  adjusted_score: number | null;
   created_at: string;
 }
 
