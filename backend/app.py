@@ -7297,9 +7297,6 @@ def _reload_job(name: str) -> None:
 @app.on_event("startup")
 async def _start_scheduler() -> None:
     global _scheduler
-    if DEMO_MODE:
-        _plugin_logger.info("demo mode: plugin scheduler disabled")
-        return
     _scheduler = AsyncIOScheduler(timezone="UTC")
     _scheduler.start()
     for name in PLUGIN_REGISTRY:

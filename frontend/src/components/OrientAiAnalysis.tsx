@@ -196,7 +196,7 @@ export function OrientAiAnalysis() {
   const anomaliesSection = (
     <div className="orient-anomalies-section">
       <div className="orient-anomalies-header">
-        <span className="orient-anomalies-title">Anomalies</span>
+        <span className="orient-anomalies-title">Anomalies — last 14 days</span>
         <span className="orient-anomalies-subtitle">
           Values ≥1.5σ from 14-day mean
         </span>
@@ -206,7 +206,9 @@ export function OrientAiAnalysis() {
           <div className="orient-ai-spinner orient-ai-spinner--sm" />
         </div>
       ) : anomalies.length === 0 ? (
-        <p className="orient-anomalies-none">No anomalies detected.</p>
+        <p className="orient-anomalies-none">
+          No anomalies in the last 14 days.
+        </p>
       ) : (
         <div className="orient-anomaly-list">
           {anomalies.map((a) => (
