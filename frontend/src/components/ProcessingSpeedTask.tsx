@@ -5,6 +5,9 @@ const SYMBOLS = ["◆", "▲", "■", "●", "★", "✚", "☾", "♣", "♠", 
 const DIFFICULTIES = ["easy", "easy", "easy", "easy", "easy", "easy", "moderate", "moderate", "moderate", "hard"] as const;
 const SESSION_MS = 75000;
 const TRIAL_TIMEOUT_MS = 4000;
+const PRACTICE_TRIALS = 6;
+const PRACTICE_RESET_DAYS = 7;
+const LAST_SESSION_KEY = "processing_speed_last_session_date";
 
 type Difficulty = "easy" | "moderate" | "hard";
 
@@ -27,7 +30,7 @@ interface Props {
   disabled?: boolean;
 }
 
-type Phase = "idle" | "running" | "done";
+type Phase = "idle" | "practice" | "running" | "done";
 
 function hashToSeed(input: string): number {
   let h = 2166136261;
@@ -95,6 +98,7 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [interruptionCount, setInterruptionCount] = useState(0);
   const [focusLostMsTotal, setFocusLostMsTotal] = useState(0);
+  const [practiceDone, setPracticeDone] = useState(false);
 
   const rngRef = useRef<(() => number) | null>(null);
   const sessionStartMsRef = useRef<number>(0);
@@ -104,6 +108,7 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
   const hiddenAtRef = useRef<number | null>(null);
   const startedAtRef = useRef<string>("");
   const trialsRef = useRef<Trial[]>([]);
+  const practiceTrialsRef = useRef<Trial[]>([]);
 
   const summary = useMemo(() => {
     if (trials.length === 0) return null;
@@ -126,6 +131,22 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
       if (trialTimerRef.current) window.clearTimeout(trialTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    const lastDate = window.localStorage.getItem(LAST_SESSION_KEY);
+    if (!lastDate) {
+      setPracticeDone(false);
+      return;
+    }
+    const last = Date.parse(`${lastDate}T00:00:00Z`);
+    const current = Date.parse(`${date}T00:00:00Z`);
+    if (Number.isNaN(last) || Number.isNaN(current)) {
+      setPracticeDone(false);
+      return;
+    }
+    const days = Math.floor((current - last) / (24 * 60 * 60 * 1000));
+    setPracticeDone(days >= 0 && days < PRACTICE_RESET_DAYS);
+  }, [date]);
 
   useEffect(() => {
     function onVisibilityChange() {
@@ -189,6 +210,8 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
     setError(null);
     try {
       await onComplete(payload);
+      window.localStorage.setItem(LAST_SESSION_KEY, date);
+      setPracticeDone(true);
     } catch {
       setError("Could not save this session. You can retry.");
     } finally {
@@ -197,7 +220,7 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
   }
 
   function answer(userAnswer: boolean | null) {
-    if (phase !== "running" || !trial) return;
+    if ((phase !== "running" && phase !== "practice") || !trial) return;
     const elapsed = userAnswer === null ? null : Math.max(Date.now() - trialStartMsRef.current, 1);
     const completed: Trial = {
       ...trial,
@@ -208,9 +231,22 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
     };
     const nextTrials = [...trials, completed];
     setTrials(nextTrials);
-    trialsRef.current = nextTrials;
+    if (phase === "running") {
+      trialsRef.current = nextTrials;
+    } else {
+      practiceTrialsRef.current = nextTrials;
+    }
+    if (phase === "practice" && nextTrials.length >= PRACTICE_TRIALS) {
+      clearTrialTimer();
+      setPhase("idle");
+      setTrial(null);
+      setTrials([]);
+      practiceTrialsRef.current = [];
+      setPracticeDone(true);
+      return;
+    }
     const elapsedSession = Date.now() - sessionStartMsRef.current;
-    if (elapsedSession >= SESSION_MS) {
+    if (phase === "running" && elapsedSession >= SESSION_MS) {
       void finishSession(nextTrials);
       return;
     }
@@ -227,6 +263,7 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
     startedAtRef.current = iso;
     setTrials([]);
     trialsRef.current = [];
+    practiceTrialsRef.current = [];
     setError(null);
     setInterruptionCount(0);
     setFocusLostMsTotal(0);
@@ -243,6 +280,19 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
         void finishSession([...trialsRef.current]);
       }
     }, 100);
+  }
+
+  function startPractice() {
+    const s = `${date}-practice-${Date.now()}`;
+    setSeed(s);
+    rngRef.current = makeRng(s);
+    setTrials([]);
+    setTrial(null);
+    trialsRef.current = [];
+    practiceTrialsRef.current = [];
+    setError(null);
+    setPhase("practice");
+    nextTrial(1);
   }
 
   function reset() {
@@ -267,7 +317,33 @@ export function ProcessingSpeedTask({ date, onComplete, disabled }: Props) {
       {phase === "idle" && (
         <div className="rt-widget">
           <p className="rt-feedback">75-second symbol search style task. Tap yes if the target appears.</p>
-          <button type="button" className="chip" onClick={start} disabled={disabled}>Start task</button>
+          {!practiceDone && (
+            <p className="rt-feedback">Practice is required first: 6 untimed trials.</p>
+          )}
+          {!practiceDone && (
+            <button type="button" className="chip" onClick={startPractice} disabled={disabled}>
+              Start practice
+            </button>
+          )}
+          <button type="button" className="chip" onClick={start} disabled={disabled || !practiceDone}>Start task</button>
+        </div>
+      )}
+      {phase === "practice" && trial && (
+        <div className="processing-speed-task">
+          <p className="rt-feedback">Practice {trials.length + 1}/{PRACTICE_TRIALS}</p>
+          <div className="processing-trial-grid">
+            <div className="processing-target">{trial.target_symbol}</div>
+            <div className="processing-candidates">
+              {trial.candidate_symbols.map((sym, idx) => (
+                <span key={`${sym}-${idx}`} className="processing-candidate">{sym}</span>
+              ))}
+            </div>
+          </div>
+          <div className="workday-buttons">
+            <button type="button" className="chip chip-active" onClick={() => answer(true)}>Yes</button>
+            <button type="button" className="chip" onClick={() => answer(false)}>No</button>
+            <button type="button" className="rt-cancel" onClick={reset}>Cancel</button>
+          </div>
         </div>
       )}
       {phase === "running" && trial && (
