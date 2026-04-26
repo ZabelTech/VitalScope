@@ -18,8 +18,8 @@ test("Full ReSync Garmin", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();
 
-  const garmin = pluginCard(page, /Garmin Connect/i);
-  await garmin.getByRole("heading", { name: /Garmin Connect/i }).click();
+  const garmin = pluginCard(page, /Garmin Connect — Health/i);
+  await garmin.getByRole("heading", { name: /Garmin Connect — Health/i }).click();
   await garmin.getByRole("button", { name: "Full resync" }).click();
 
   await expect(garmin.getByRole("button", { name: "Running…" }).first()).toBeVisible();
@@ -65,7 +65,7 @@ test("Log meal and review postprandial response", async ({ page }) => {
   });
 
   await login(page);
-  await page.getByRole("link", { name: "Act" }).click();
+  await page.getByRole("link", { name: "Act", exact: true }).click();
 
   await page.getByPlaceholder("Name (e.g. Breakfast)").fill("E2E Oatmeal");
   await page.locator('input[type="time"]').first().fill("08:00");
@@ -79,8 +79,8 @@ test("Set plugin credentials and automation schedule", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();
 
-  const garmin = pluginCard(page, /Garmin Connect/i);
-  await garmin.getByRole("heading", { name: /Garmin Connect/i }).click();
+  const garmin = pluginCard(page, /Garmin Connect — Health/i);
+  await garmin.getByRole("heading", { name: /Garmin Connect — Health/i }).click();
 
   await garmin.locator('input[type="number"]').first().fill("90");
   await garmin.locator('input[type="text"]').first().fill("qa@example.com");
