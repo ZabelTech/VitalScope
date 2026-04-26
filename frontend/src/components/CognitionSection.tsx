@@ -37,7 +37,9 @@ export function CognitionSection() {
     (d) => d.focus !== null || d.cognitive_load !== null || d.subjective_energy !== null
   );
 
-  if (!hasCognitionData) {
+  const hasProcessingData = (processing ?? []).length > 0;
+
+  if (!hasCognitionData && !hasProcessingData) {
     return (
       <div className="chart-section">
         <h2>Cognition</h2>
@@ -88,19 +90,23 @@ export function CognitionSection() {
         <DateRangePicker start={start} end={end} onChange={(s, e) => { setStart(s); setEnd(e); }} />
       </div>
 
-      <h3 className="chart-subhead">Trends</h3>
-      <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={trendData}>
-          <CartesianGrid strokeDasharray="3 3" />
-          <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-          <YAxis domain={[0, 10]} ticks={[0, 2, 4, 6, 8, 10]} />
-          <Tooltip />
-          <Legend />
-          <Line type="monotone" dataKey="focus" name="Focus" stroke="#3b82f6" dot={false} connectNulls />
-          <Line type="monotone" dataKey="cognitive_load" name="Cognitive load" stroke="#f97316" dot={false} connectNulls />
-          <Line type="monotone" dataKey="subjective_energy" name="Energy" stroke="#22c55e" dot={false} connectNulls />
-        </ComposedChart>
-      </ResponsiveContainer></div>
+      {hasCognitionData && (
+        <>
+          <h3 className="chart-subhead">Trends</h3>
+          <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={trendData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <YAxis domain={[0, 10]} ticks={[0, 2, 4, 6, 8, 10]} />
+              <Tooltip />
+              <Legend />
+              <Line type="monotone" dataKey="focus" name="Focus" stroke="#3b82f6" dot={false} connectNulls />
+              <Line type="monotone" dataKey="cognitive_load" name="Cognitive load" stroke="#f97316" dot={false} connectNulls />
+              <Line type="monotone" dataKey="subjective_energy" name="Energy" stroke="#22c55e" dot={false} connectNulls />
+            </ComposedChart>
+          </ResponsiveContainer></div>
+        </>
+      )}
 
       {corrData.length >= 3 && (
         <>
