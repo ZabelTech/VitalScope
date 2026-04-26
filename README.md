@@ -241,6 +241,29 @@ npm run dev
 
 Open http://localhost:5173. Vite proxies `/api/*` to `http://localhost:8000`.
 
+### E2E use-case tests
+
+The repository includes Playwright end-to-end tests for the investigated user scenarios (login, Garmin full resync flow, Strong run-now flow, OODA navigation, meal logging with postprandial review, and plugin scheduling updates).
+
+```bash
+cd /home/robert/vitalscope/frontend
+
+## GitHub CI gates before preview deploy
+
+`.github/workflows/preview-deploy.yml` now runs three CI jobs before the Fly preview deploy step:
+
+- `require-e2e-for-feature` — pull-request guard that fails when feature-area files (`frontend/src`, `backend`, `sync_*.py`) change without updating at least one `frontend/e2e/*.spec.ts` test.
+- `frontend-typecheck` — runs `npx tsc --noEmit` in `frontend/`.
+- `e2e-usecases` — runs the Playwright E2E suite (`npm run test:e2e`).
+
+The deploy job has `needs` on all three checks, so preview deployment only runs after the E2E + typecheck gates pass.
+
+npx playwright install chromium    # first run only
+npm run test:e2e
+```
+
+
+
 ## Typical workflow
 
 Day-to-day the scheduler keeps the DB fresh — no manual steps required. If you want to force a refresh:
