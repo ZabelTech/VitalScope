@@ -1149,6 +1149,27 @@ export async function updateUserProfile(body: UserProfileInput): Promise<UserPro
   return res.json();
 }
 
+export async function getHiddenCards(): Promise<string[]> {
+  const res = await apiFetch("/api/settings/card-visibility");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  const data = (await res.json()) as { hidden: string[] };
+  return data.hidden;
+}
+
+export async function setCardHidden(card_id: string, hidden: boolean): Promise<string[]> {
+  const res = await apiFetch("/api/settings/card-visibility", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ card_id, hidden }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  const data = (await res.json()) as { hidden: string[] };
+  return data.hidden;
+}
+
 // --- Protocols ---
 
 export async function listProtocols(): Promise<Protocol[]> {

@@ -1,5 +1,6 @@
 import { format, subDays } from "date-fns";
 import { AutoTickedToday } from "./AutoTickedToday";
+import { Card, CardHeader } from "./Card";
 import { ImageUpload } from "./ImageUpload";
 import { IntakeLog } from "./IntakeLog";
 import { JournalPage } from "./JournalPage";
@@ -21,10 +22,11 @@ export function DailyPage() {
           label: "Today",
           content: (
             <div className="journal-page">
-              <div className="journal-form overview-card">
+              <Card id="daily.today-journal" className="journal-form overview-card">
+                <CardHeader id="daily.today-journal" />
                 <TodayJournal date={today} />
                 <IntakeLog wrapped={false} />
-              </div>
+              </Card>
             </div>
           ),
         },
@@ -43,13 +45,14 @@ export function DailyPage() {
                 label="Meal photo"
                 hint="Snap today's meals so you can cross-reference them with the totals."
               />
-              <div className="overview-card journal-form">
+              <Card id="daily.meal-describe" className="overview-card journal-form">
+                <CardHeader id="daily.meal-describe" />
                 <MealTextDescribe
                   date={today}
                   label="Describe a meal (AI)"
                   hint="No photo? Type what you ate — the AI estimates the nutrients."
                 />
-              </div>
+              </Card>
             </div>
           ),
         },

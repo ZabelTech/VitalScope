@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { fetchGenotypePhenotype } from "../api";
 import type { ConvergencePanel, GenotypePhenotypeData } from "../types";
+import { Card, CardHeader } from "./Card";
 
 const RISK_COLOR: Record<string, string> = {
   high: "#ef4444",
@@ -231,20 +232,24 @@ export function GenotypePhenotypeSection() {
 
   if (!data || !data.has_genome) {
     return (
-      <div className="overview-card">
+      <Card id="orient.genotype-phenotype">
+        <CardHeader id="orient.genotype-phenotype" />
         <p className="journal-hint">
           No genome file uploaded yet. Upload an annotated VCF with RS IDs in the Observe →
           Genome section to unlock genotype × phenotype convergence panels.
         </p>
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="conv-panels">
-      {data.panels.map((panel) => (
-        <PanelCard key={panel.id} panel={panel} />
-      ))}
-    </div>
+    <Card id="orient.genotype-phenotype" className="conv-panels-card">
+      <CardHeader id="orient.genotype-phenotype" />
+      <div className="conv-panels">
+        {data.panels.map((panel) => (
+          <PanelCard key={panel.id} panel={panel} />
+        ))}
+      </div>
+    </Card>
   );
 }

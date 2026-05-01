@@ -27,6 +27,7 @@ import type {
   NutrientCategory,
   NutrientDef,
 } from "../types";
+import { Card, CardHeader } from "./Card";
 import { MealFormFields, type MealFormOutput, type MealFormValues } from "./MealFormFields";
 import { MealTextDescribe } from "./MealTextDescribe";
 import { NutritionGaps } from "./NutritionGaps";
@@ -166,7 +167,8 @@ export function NutritionPage() {
 
   return (
     <div className="journal-page">
-      <div className="overview-card journal-form">
+      <Card id="nutrition.date-picker" className="overview-card journal-form">
+        <CardHeader id="nutrition.date-picker" />
         <label className="journal-field">
           <span className="stat-label">Date</span>
           <input
@@ -182,10 +184,10 @@ export function NutritionPage() {
           </p>
         )}
         {status === "error" && <p className="journal-err">Failed to load nutrition data</p>}
-      </div>
+      </Card>
 
-      <div className="overview-card journal-form">
-        <h3 className="stat-label">Meals</h3>
+      <Card id="nutrition.meals" className="overview-card journal-form">
+        <CardHeader id="nutrition.meals">Meals</CardHeader>
         {meals.length === 0 && <p className="journal-hint">No meals logged for this date.</p>}
         {meals.map((m) => (
           <div key={m.id} className="meal-row">
@@ -246,9 +248,10 @@ export function NutritionPage() {
           draftFromPreset={draftFromPreset}
           onDraftConsumed={() => setDraftFromPreset(null)}
         />
-      </div>
+      </Card>
 
-      <div className="overview-card journal-form">
+      <Card id="nutrition.meal-describe" className="overview-card journal-form">
+        <CardHeader id="nutrition.meal-describe" />
         <MealTextDescribe
           date={date}
           label="Describe a meal (AI)"
@@ -259,7 +262,7 @@ export function NutritionPage() {
           }
           onSaved={reload}
         />
-      </div>
+      </Card>
 
       <NutritionGaps date={date} refreshKey={gapsKey} asCard />
 

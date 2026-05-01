@@ -19,6 +19,7 @@ import type {
   Workout,
 } from "../types";
 import { ActivityCard } from "./ActivityCard";
+import { Card, CardHeader } from "./Card";
 
 const today = format(new Date(), "yyyy-MM-dd");
 
@@ -115,11 +116,11 @@ export function TodayDashboard() {
       </div>
 
       <div className="overview-grid-bottom">
-        <div className="overview-card">
-          <h3>
+        <Card id="today.steps">
+          <CardHeader id="today.steps">
             Steps
             <AgeBadge at={steps?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Today</span>
@@ -145,13 +146,13 @@ export function TodayDashboard() {
               </span>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="overview-card">
-          <h3>
+        <Card id="today.nutrition-summary">
+          <CardHeader id="today.nutrition-summary">
             Nutrition
             <AgeBadge at={today} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Calories</span>
@@ -193,15 +194,15 @@ export function TodayDashboard() {
               </span>
             </div>
           </div>
-        </div>
+        </Card>
       </div>
 
       {scheduledProtocols.length > 0 && (
-        <div className="overview-card">
-          <h3>
+        <Card id="today.protocols-scheduled">
+          <CardHeader id="today.protocols-scheduled">
             Protocols scheduled today
             <AgeBadge at={today} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
             {(["morning", "noon", "evening", null] as (ProtocolTimeOfDay | null)[]).map((slot) => {
               const items = scheduledProtocols.filter(
@@ -236,10 +237,11 @@ export function TodayDashboard() {
               );
             })}
           </div>
-        </div>
+        </Card>
       )}
 
       <ActivityCard
+        cardId="today.activity"
         activities={todayActivities}
         workouts={todayWorkouts}
         title="Today's activity"

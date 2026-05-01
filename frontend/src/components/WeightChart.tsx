@@ -5,6 +5,7 @@ import {
 import { useGoals } from "../hooks/useGoals";
 import { listBodyCompositionEstimates } from "../api";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { BodyCompositionEstimate, WeightDaily, StatValues } from "../types";
 
@@ -66,8 +67,8 @@ export function WeightChart({ start, end }: Props) {
   if (loading) return <div className="chart-loading">Loading body composition...</div>;
 
   return (
-    <div className="chart-section">
-      <h2>Body Composition</h2>
+    <Card id="orient.chart-weight" className="chart-section">
+      <CardHeader id="orient.chart-weight" level="h2">Body Composition</CardHeader>
       <MetricCards
         items={[
           { label: "Weight", stats: stats?.weight_kg ?? null, unit: " kg", decimals: 1 },
@@ -107,6 +108,6 @@ export function WeightChart({ start, end }: Props) {
           )}
         </LineChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

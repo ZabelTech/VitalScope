@@ -12,6 +12,12 @@ const today = format(new Date(), "yyyy-MM-dd");
 export function EntriesPage() {
   return (
     <OodaPage
+      revealPrefixes={[
+        "journal.",
+        "nutrition.",
+        "observe.bloodwork-panels",
+        "decide.genome-upload",
+      ]}
       sections={[
         { id: "journal", label: "Journal", content: <JournalPage /> },
         { id: "food", label: "Food & water", content: <NutritionPage /> },

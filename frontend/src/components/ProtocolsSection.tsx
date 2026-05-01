@@ -16,6 +16,7 @@ import type {
   ProtocolRecurrenceType,
   ProtocolTimeOfDay,
 } from "../types";
+import { Card, CardHeader, CardHeaderInline } from "./Card";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -370,8 +371,8 @@ export function ProtocolsSection() {
   return (
     <div className="journal-page">
       {/* Quick-log hormesis */}
-      <div className="overview-card journal-form">
-        <h3 className="stat-label">Quick Log</h3>
+      <Card id="protocols.quick-log" className="overview-card journal-form">
+        <CardHeader id="protocols.quick-log">Quick Log</CardHeader>
         <div className="protocol-quick-grid">
           {/* Zone 2 */}
           <div className="protocol-quick-card">
@@ -499,11 +500,11 @@ export function ProtocolsSection() {
             {tre.status === "error" && <span className="journal-err">Error</span>}
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Active protocols */}
-      <div className="overview-card journal-form">
-        <h3 className="stat-label">Active Protocols</h3>
+      <Card id="protocols.list" className="overview-card journal-form">
+        <CardHeader id="protocols.list">Active Protocols</CardHeader>
         {activeProtocols.length === 0 && loadStatus === "idle" && (
           <p className="journal-hint">No active protocols. Add one below.</p>
         )}
@@ -752,12 +753,12 @@ export function ProtocolsSection() {
             </div>
           </form>
         )}
-      </div>
+      </Card>
 
       {/* Today's events */}
       {todayEvents.length > 0 && (
-        <div className="overview-card journal-form">
-          <h3 className="stat-label">Today's events</h3>
+        <Card id="protocols.todays-events" className="overview-card journal-form">
+          <CardHeader id="protocols.todays-events">Today's events</CardHeader>
           {todayEvents.map((evt) => {
             const proto = protocols.find((p) => p.id === evt.protocol_id);
             return (
@@ -772,14 +773,15 @@ export function ProtocolsSection() {
               </div>
             );
           })}
-        </div>
+        </Card>
       )}
 
       {/* Archived protocols */}
       {archivedProtocols.length > 0 && (
-        <details className="overview-card">
-          <summary className="stat-label" style={{ cursor: "pointer", padding: "4px 0" }}>
+        <Card id="protocols.archived" as="details">
+          <summary className="stat-label" style={{ cursor: "pointer", padding: "4px 0", display: "flex", alignItems: "center", gap: 10 }}>
             Archived ({archivedProtocols.length})
+            <CardHeaderInline id="protocols.archived" />
           </summary>
           <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 4 }}>
             {archivedProtocols.map((p) => (
@@ -801,7 +803,7 @@ export function ProtocolsSection() {
               </div>
             ))}
           </div>
-        </details>
+        </Card>
       )}
     </div>
   );

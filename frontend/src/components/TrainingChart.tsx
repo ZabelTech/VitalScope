@@ -3,6 +3,7 @@ import {
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
 import type { ActivityWeekly, ActivityStats, WeeklyVolume } from "../types";
+import { Card, CardHeader } from "./Card";
 
 interface Props { start: string; end: string }
 
@@ -73,12 +74,12 @@ export function TrainingChart({ start, end }: Props) {
 
   if (items.length === 0) {
     return (
-      <div className="chart-section">
-        <h2>Training</h2>
+      <Card id="orient.chart-training" className="chart-section">
+        <CardHeader id="orient.chart-training" level="h2">Training</CardHeader>
         <div style={{ color: "#64748b", padding: "20px 0" }}>
           No training data yet for this range.
         </div>
-      </div>
+      </Card>
     );
   }
 
@@ -94,8 +95,8 @@ export function TrainingChart({ start, end }: Props) {
     ? Math.round(activityStats.total_elevation_m) : "--";
 
   return (
-    <div className="chart-section">
-      <h2>Training</h2>
+    <Card id="orient.chart-training" className="chart-section">
+      <CardHeader id="orient.chart-training" level="h2">Training</CardHeader>
       <div className="metric-cards" style={{ marginBottom: 16 }}>
         <div className="metric-card">
           <div className="metric-card-label">Total Sessions</div>
@@ -144,6 +145,6 @@ export function TrainingChart({ start, end }: Props) {
           <Line yAxisId="km"       type="monotone" dataKey="distance_km" name="Distance (km)" stroke="#22c55e" dot={false} />
         </ComposedChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

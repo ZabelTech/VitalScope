@@ -4,6 +4,7 @@ import { deleteGoal, fetchGoalDefaults, setGoal } from "../api";
 import { notifyGoalsUpdated, useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
 import type { StepsDaily, UserGoals } from "../types";
+import { Card, CardHeader } from "./Card";
 
 const today = format(new Date(), "yyyy-MM-dd");
 
@@ -178,8 +179,8 @@ export function GoalsPage() {
 
   return (
     <div className="journal-page">
-      <section className="overview-card" style={{ margin: "1rem 0" }}>
-        <h3>Daily step goal</h3>
+      <Card id="decide.goals-step" as="section" style={{ margin: "1rem 0" }}>
+        <CardHeader id="decide.goals-step">Daily step goal</CardHeader>
         <div className="overview-card-body">
           <div className="overview-stat">
             <span className="stat-label">Target</span>
@@ -191,10 +192,10 @@ export function GoalsPage() {
             Source: Garmin device setting. Edit on the device itself.
           </p>
         </div>
-      </section>
+      </Card>
 
-      <section className="overview-card" style={{ margin: "1rem 0" }}>
-        <h3>Health goals</h3>
+      <Card id="decide.goals-health" as="section" style={{ margin: "1rem 0" }}>
+        <CardHeader id="decide.goals-health">Health goals</CardHeader>
         <p style={{ fontSize: "0.82rem", color: "#64748b", margin: "0 0 0.75rem" }}>
           Placeholders are your 90-day averages. Set a goal to see it as a reference line in Trends charts and on today's metrics.
         </p>
@@ -207,7 +208,7 @@ export function GoalsPage() {
             onChange={handleGoalChange}
           />
         ))}
-      </section>
+      </Card>
     </div>
   );
 }

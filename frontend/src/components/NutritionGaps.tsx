@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchNutritionGaps } from "../api";
 import type { NutritionGapItem } from "../types";
+import { Card, CardHeader } from "./Card";
 
 interface Props {
   date: string;
@@ -33,14 +34,14 @@ export function NutritionGaps({ date, refreshKey, asCard }: Props) {
   if (asCard) {
     if (!hasContent && gaps.length === 0) return null;
     return (
-      <div className="overview-card">
-        <h3 className="stat-label">Nutrient gaps</h3>
+      <Card id="act.nutrition-gaps">
+        <CardHeader id="act.nutrition-gaps" />
         {hasContent ? (
           <GapList low={low} high={high} />
         ) : (
           <p className="journal-hint">All goals on track.</p>
         )}
-      </div>
+      </Card>
     );
   }
 

@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
+import { HiddenCardsReveal } from "./HiddenCardsReveal";
 
 export interface OodaSection {
   id: string;
@@ -10,8 +11,10 @@ export interface OodaSection {
 
 export function OodaPage({
   sections,
+  revealPrefixes,
 }: {
   sections: OodaSection[];
+  revealPrefixes?: string[];
 }) {
   const { hash } = useLocation();
 
@@ -23,6 +26,9 @@ export function OodaPage({
 
   return (
     <div className="ooda-page">
+      {revealPrefixes && revealPrefixes.length > 0 && (
+        <HiddenCardsReveal prefixes={revealPrefixes} />
+      )}
       {sections.length > 1 && (
         <nav className="ooda-section-nav">
           {sections.map((s) => (

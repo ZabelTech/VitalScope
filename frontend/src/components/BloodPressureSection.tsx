@@ -11,6 +11,7 @@ import {
 } from "recharts";
 import { deleteBloodPressure, listBloodPressure } from "../api";
 import type { BloodPressureEntry } from "../types";
+import { Card, CardHeader } from "./Card";
 
 const today = format(new Date(), "yyyy-MM-dd");
 const twoYearsAgo = format(subYears(new Date(), 2), "yyyy-MM-dd");
@@ -61,8 +62,8 @@ export function BloodPressureSection() {
         Add new readings under <strong>Entries → Blood pressure</strong>.
       </p>
 
-      <div className="chart-section">
-        <h2>Blood Pressure</h2>
+      <Card id="orient.chart-blood-pressure" className="chart-section">
+        <CardHeader id="orient.chart-blood-pressure" level="h2">Blood Pressure</CardHeader>
 
         {entries.length > 0 && (
           <>
@@ -152,7 +153,7 @@ export function BloodPressureSection() {
         {entries.length === 0 && !loading && (
           <p className="longevity-empty">No blood pressure entries yet.</p>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

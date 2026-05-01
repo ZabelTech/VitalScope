@@ -23,6 +23,7 @@ import type {
   CypProfileEntry,
   PharmacogenomicsProfile,
 } from "../types";
+import { Card, CardHeader } from "./Card";
 
 interface Props {
   date: string;
@@ -331,22 +332,25 @@ export function MetaboliserProfile({ date }: Props) {
       <div className="pharma-section-title">Caffeine clearance · {date}</div>
 
       <div className="metric-cards">
-        <div className="overview-card">
+        <Card id="observe.caffeine-total">
+          <CardHeader id="observe.caffeine-total" />
           <div className="stat-label">Total logged</div>
           <div className="stat-value">
             {totalMg} <span className="stat-unit">mg</span>
           </div>
-        </div>
+        </Card>
         {currentMg != null && (
-          <div className="overview-card">
+          <Card id="observe.caffeine-current">
+            <CardHeader id="observe.caffeine-current" />
             <div className="stat-label">Est. in system now</div>
             <div className="stat-value">
               {currentMg.toFixed(0)} <span className="stat-unit">mg</span>
             </div>
-          </div>
+          </Card>
         )}
         {cyp1a2 && (
-          <div className="overview-card">
+          <Card id="observe.caffeine-cyp1a2">
+            <CardHeader id="observe.caffeine-cyp1a2" />
             <div className="stat-label">CYP1A2 phenotype</div>
             <div
               className="stat-value"
@@ -361,7 +365,7 @@ export function MetaboliserProfile({ date }: Props) {
             {cyp1a2.half_life_hours != null && (
               <div className="stat-label">t½ {cyp1a2.half_life_hours}h</div>
             )}
-          </div>
+          </Card>
         )}
       </div>
 

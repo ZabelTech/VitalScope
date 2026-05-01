@@ -20,6 +20,8 @@ export function ActivityHistory() {
 
   return (
     <ActivityCard
+      cardId="observe.activity-history"
+      title="Activity history"
       activities={activities}
       workouts={workouts}
       maxItems={5}

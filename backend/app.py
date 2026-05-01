@@ -281,6 +281,13 @@ def _get_ai_context(conn: sqlite3.Connection) -> dict[str, bool]:
     return {k: overrides.get(k, True) for (k, _, _) in AI_CONTEXT_CATEGORIES}
 
 
+def _get_hidden_cards(conn: sqlite3.Connection) -> list[str]:
+    rows = conn.execute(
+        "SELECT card_id FROM card_visibility WHERE hidden = 1 ORDER BY card_id"
+    ).fetchall()
+    return [r["card_id"] for r in rows]
+
+
 def _ai_context_hash(ctx: dict[str, bool]) -> str:
     payload = json.dumps(ctx, sort_keys=True)
     return hashlib.sha256(payload.encode()).hexdigest()[:16]
@@ -448,6 +455,51 @@ def update_user_profile(body: UserProfileBody, request: Request):
     finally:
         conn.close()
     return _user_profile_row_to_dict(row)
+
+
+# --- Card visibility ---
+
+
+@app.get("/api/settings/card-visibility")
+def get_card_visibility(request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    conn = get_db()
+    try:
+        hidden = _get_hidden_cards(conn)
+    finally:
+        conn.close()
+    return {"hidden": hidden}
+
+
+class CardVisibilityUpdate(BaseModel):
+    card_id: str
+    hidden: bool
+
+
+@app.put("/api/settings/card-visibility")
+def update_card_visibility(body: CardVisibilityUpdate, request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    if DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Card visibility is read-only in demo mode")
+    card_id = body.card_id.strip()
+    if not card_id or len(card_id) > 128:
+        raise HTTPException(status_code=422, detail="card_id required, max 128 chars")
+    conn = get_db()
+    try:
+        if body.hidden:
+            conn.execute(
+                "INSERT OR REPLACE INTO card_visibility (card_id, hidden, updated_at) VALUES (?, 1, ?)",
+                (card_id, datetime.utcnow().isoformat()),
+            )
+        else:
+            conn.execute("DELETE FROM card_visibility WHERE card_id = ?", (card_id,))
+        conn.commit()
+        hidden = _get_hidden_cards(conn)
+    finally:
+        conn.close()
+    return {"hidden": hidden}
 
 
 def get_db() -> sqlite3.Connection:
@@ -1250,6 +1302,15 @@ def ensure_daily_landing_tables() -> None:
         CREATE TABLE IF NOT EXISTS ai_context_settings (
             key     TEXT PRIMARY KEY,
             enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS card_visibility (
+            card_id    TEXT PRIMARY KEY,
+            hidden     INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL
         )
         """
     )

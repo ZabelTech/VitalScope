@@ -3,6 +3,7 @@ import {
 } from "recharts";
 import { useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { HrvDaily, StatValues } from "../types";
 
@@ -21,8 +22,8 @@ export function HrvChart({ start, end }: Props) {
   const baselineHigh = items[0]?.baseline_balanced_upper;
 
   return (
-    <div className="chart-section">
-      <h2>Heart Rate Variability</h2>
+    <Card id="orient.chart-hrv" className="chart-section">
+      <CardHeader id="orient.chart-hrv" level="h2">Heart Rate Variability</CardHeader>
       <MetricCards items={[{ label: "Weekly Avg HRV", stats: stats?.weekly_avg ?? null, unit: " ms" }]} />
       <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <LineChart data={items}>
@@ -41,6 +42,6 @@ export function HrvChart({ start, end }: Props) {
           <Line type="monotone" dataKey="last_night_avg" name="Last Night" stroke="#a78bfa" dot={false} connectNulls strokeDasharray="4 4" />
         </LineChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

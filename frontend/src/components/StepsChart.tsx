@@ -2,6 +2,7 @@ import {
   Bar, Line, ComposedChart, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { StepsDaily, StatValues } from "../types";
 
@@ -14,8 +15,8 @@ export function StepsChart({ start, end }: Props) {
   if (loading) return <div className="chart-loading">Loading steps...</div>;
 
   return (
-    <div className="chart-section">
-      <h2>Steps</h2>
+    <Card id="orient.chart-steps" className="chart-section">
+      <CardHeader id="orient.chart-steps" level="h2">Steps</CardHeader>
       <MetricCards items={[{ label: "Daily Steps", stats: stats?.total_steps ?? null }]} />
       <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <ComposedChart data={data ?? []}>
@@ -28,6 +29,6 @@ export function StepsChart({ start, end }: Props) {
           <Line type="monotone" dataKey="step_goal" name="Goal" stroke="#ef4444" dot={false} connectNulls />
         </ComposedChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

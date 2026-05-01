@@ -10,6 +10,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+import { Card, CardHeader } from "./Card";
 import {
   createBiologicalAge,
   createGripStrength,
@@ -374,8 +375,8 @@ export function LongevitySection() {
       </p>
 
       {/* Epigenetic Clocks */}
-      <div className="chart-section">
-        <h2>Epigenetic Clocks</h2>
+      <Card id="orient.longevity-clocks" className="chart-section">
+        <CardHeader id="orient.longevity-clocks" level="h2">Epigenetic Clocks</CardHeader>
 
         <form className="longevity-form" onSubmit={submitClockEntry}>
           <div className="longevity-form-row">
@@ -458,11 +459,11 @@ export function LongevitySection() {
             onDelete={deleteEntry}
           />
         ))}
-      </div>
+      </Card>
 
       {/* Longevity analytes from bloodwork */}
-      <div className="chart-section">
-        <h2>Longevity Analytes</h2>
+      <Card id="orient.longevity-analytes" className="chart-section">
+        <CardHeader id="orient.longevity-analytes" level="h2">Longevity Analytes</CardHeader>
         <p className="longevity-section-note">
           Auto-populated from bloodwork panels. Upload a panel containing ApoB,
           Lp(a), hs-CRP, homocysteine, fibrinogen, or other longevity markers to
@@ -480,12 +481,12 @@ export function LongevitySection() {
             ))}
           </div>
         )}
-      </div>
+      </Card>
 
       {/* VO₂ max from Garmin */}
       {vo2maxData.length > 0 && (
-        <div className="chart-section">
-          <h2>VO₂ Max (Garmin)</h2>
+        <Card id="orient.longevity-vo2max" className="chart-section">
+          <CardHeader id="orient.longevity-vo2max" level="h2">VO₂ Max (Garmin)</CardHeader>
           <div className="chart-wrap">
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={vo2maxData} margin={{ top: 8, right: 16, bottom: 0, left: 0 }}>
@@ -513,12 +514,12 @@ export function LongevitySection() {
               </LineChart>
             </ResponsiveContainer>
           </div>
-        </div>
+        </Card>
       )}
 
       {/* Grip strength */}
-      <div className="chart-section">
-        <h2>Grip Strength</h2>
+      <Card id="orient.longevity-grip" className="chart-section">
+        <CardHeader id="orient.longevity-grip" level="h2">Grip Strength</CardHeader>
 
         <form className="longevity-form" onSubmit={submitGripEntry}>
           <div className="longevity-form-row">
@@ -634,7 +635,7 @@ export function LongevitySection() {
         {gripEntries.length === 0 && !loading && (
           <p className="longevity-empty">No grip strength entries yet.</p>
         )}
-      </div>
+      </Card>
     </div>
   );
 }

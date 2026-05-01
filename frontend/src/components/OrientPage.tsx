@@ -22,6 +22,7 @@ export function OrientPage() {
         <DateRangePicker start={start} end={end} onChange={(s, e) => { setStart(s); setEnd(e); }} />
       </div>
       <OodaPage
+        revealPrefixes={["orient."]}
         sections={[
           { id: "ai-analysis", label: "AI Analysis", content: <OrientAiAnalysis /> },
           { id: "trends", label: "Trends", content: <TrendsPage start={start} end={end} /> },

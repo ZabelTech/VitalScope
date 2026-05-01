@@ -3,6 +3,7 @@ import {
 } from "recharts";
 import { useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { HeartRateDaily, StatValues } from "../types";
 
@@ -17,8 +18,8 @@ export function HeartRateChart({ start, end }: Props) {
   if (loading) return <div className="chart-loading">Loading heart rate...</div>;
 
   return (
-    <div className="chart-section">
-      <h2>Heart Rate</h2>
+    <Card id="orient.chart-heart-rate" className="chart-section">
+      <CardHeader id="orient.chart-heart-rate" level="h2">Heart Rate</CardHeader>
       <MetricCards items={[{ label: "Resting HR", stats: stats?.resting_hr ?? null, unit: " bpm" }]} />
       <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <LineChart data={data ?? []}>
@@ -35,6 +36,6 @@ export function HeartRateChart({ start, end }: Props) {
           <Line type="monotone" dataKey="max_hr" name="Max" stroke="#ef4444" dot={false} connectNulls />
         </LineChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

@@ -5,6 +5,7 @@ import {
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
 import type { CognitionDaily, ProcessingSpeedDaily, SleepDaily } from "../types";
+import { Card, CardHeader } from "./Card";
 
 type CorrelationMetric = "deep_sleep_min" | "avg_rt_ms";
 type ProcessingView = "raw" | "adjusted";
@@ -39,12 +40,12 @@ export function CognitionSection({ start, end }: Props) {
 
   if (!hasCognitionData && !hasProcessingData) {
     return (
-      <div className="chart-section">
-        <h2>Cognition</h2>
+      <Card id="orient.cognition" className="chart-section">
+        <CardHeader id="orient.cognition" level="h2">Cognition</CardHeader>
         <p className="chart-empty">
           No cognition data yet. Log focus, mood, and energy in today's journal to see trends here.
         </p>
-      </div>
+      </Card>
     );
   }
 
@@ -101,8 +102,8 @@ export function CognitionSection({ start, end }: Props) {
     .filter((p): p is { focus: number; y: number; date: string } => p !== null);
 
   return (
-    <div className="chart-section">
-      <h2>Cognition</h2>
+    <Card id="orient.cognition" className="chart-section">
+      <CardHeader id="orient.cognition" level="h2">Cognition</CardHeader>
 
       {hasCognitionData && (
         <>
@@ -245,6 +246,6 @@ export function CognitionSection({ start, end }: Props) {
           </p>
         </>
       )}
-    </div>
+    </Card>
   );
 }
