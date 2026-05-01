@@ -5,7 +5,7 @@ import { MealFormFields, type MealFormOutput } from "./MealFormFields";
 
 interface Props {
   result: MealAnalysisResult;
-  uploadId: number;
+  uploadId?: number | null;
   date: string;
   defsByCategory: Record<NutrientCategory, NutrientDef[]>;
   onSaved: () => void;
@@ -40,7 +40,7 @@ export function MealAnalysisDraft({
       name: out.name,
       notes: out.notes,
       nutrients: out.nutrients,
-      source_upload_id: uploadId,
+      source_upload_id: uploadId ?? null,
     });
     onSaved();
   }

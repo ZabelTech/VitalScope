@@ -18,6 +18,7 @@ import {
 } from "../api";
 import type { GlucoseReading, Meal, NutrientCategory, NutrientDef } from "../types";
 import { MealFormFields, type MealFormOutput } from "./MealFormFields";
+import { MealTextDescribe } from "./MealTextDescribe";
 import { NutritionGaps } from "./NutritionGaps";
 import { WaterQuickLog } from "./WaterQuickLog";
 
@@ -114,6 +115,8 @@ export function NutritionPage() {
     await reload();
   }
 
+  const isPast = date < todayISO();
+
   return (
     <div className="journal-page">
       <div className="overview-card journal-form">
@@ -122,9 +125,15 @@ export function NutritionPage() {
           <input
             type="date"
             value={date}
+            max={todayISO()}
             onChange={(e) => setDate(e.target.value)}
           />
         </label>
+        {isPast && (
+          <p className="journal-hint">
+            Logging retroactively for {date} — meals added below will be saved against this date.
+          </p>
+        )}
         {status === "error" && <p className="journal-err">Failed to load nutrition data</p>}
       </div>
 
@@ -170,6 +179,19 @@ export function NutritionPage() {
           date={date}
           defsByCategory={defsByCategory}
           onAdded={reload}
+        />
+      </div>
+
+      <div className="overview-card journal-form">
+        <MealTextDescribe
+          date={date}
+          label="Describe a meal (AI)"
+          hint={
+            isPast
+              ? "Type what you ate — the AI fills in nutrients, then save it against the selected date."
+              : "Type what you ate and let the AI estimate the nutrients."
+          }
+          onSaved={reload}
         />
       </div>
 
