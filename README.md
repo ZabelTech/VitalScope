@@ -216,10 +216,11 @@ Vite + React 18 + TypeScript + Recharts + react-router-dom.
 Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anchor links, and stacked labelled sections.
 
 - **`/observe` Observe** — what is true right now?
-  - **Today's metrics** — today's snapshot with age badges: Last Night's Sleep (score + stages + SpO2), HRV, Body Battery (current / today range / charged / drained), Stress, Body Composition, Steps, Heart Rate.
+  - **Today's metrics** — today's snapshot with age badges: Last Night's Sleep (score + stages + SpO2), HRV, Body Battery (current / today range / charged / drained), Stress, Body Composition, Steps, Heart Rate, Blood Pressure (latest manual reading).
 - **`/orient` Orient** — what does the pattern look like?
   - **AI Analysis** — 14-day rollup of wearable + workout + latest-bloodwork data run through the configured AI provider, grouped into health / performance / recovery / body composition.
   - **Trends** — historical charts with a date range picker (30d / 90d / 6mo / 1yr / All). Each metric has a row of Min / Max / Avg / Median / Volatility cards above its chart. Glucose chart shows avg / min / max daily lines with a 70–180 mg/dL target-range band. Training chart is merged: stacked bars of weekly Garmin sessions + Strong sessions with a distance line overlay. Calories + water chart at the bottom.
+  - **Blood pressure** — manual entry of systolic / diastolic / optional pulse, with a chart and history list. Independent of `LongevitySection`.
   - **Activity history** — merged Garmin + Strong card list with click-to-expand details.
 - **`/decide` Decide** — what is the plan?
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).

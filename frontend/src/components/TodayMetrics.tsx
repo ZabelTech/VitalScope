@@ -1,9 +1,10 @@
-import { format, subDays } from "date-fns";
+import { format, subDays, subYears } from "date-fns";
 import { useEffect, useState } from "react";
-import { apiFetch, fetchUploads, uploadImageUrl } from "../api";
+import { apiFetch, fetchUploads, listBloodPressure, uploadImageUrl } from "../api";
 import { useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
 import type {
+  BloodPressureEntry,
   BodyBatteryDaily,
   HeartRateDaily,
   HrvDaily,
@@ -160,6 +161,26 @@ export function TodayMetrics() {
   useEffect(() => {
     fetchUploads("form")
       .then((uploads) => setRecentPhotos(uploads.slice(0, 3)))
+      .catch(() => {});
+  }, []);
+
+  const [latestBp, setLatestBp] = useState<BloodPressureEntry | null>(null);
+  useEffect(() => {
+    const start = format(subYears(new Date(), 2), "yyyy-MM-dd");
+    listBloodPressure(start, today)
+      .then((rows) => {
+        if (rows.length === 0) {
+          setLatestBp(null);
+          return;
+        }
+        const sorted = [...rows].sort((a, b) => {
+          const ak = `${a.date} ${a.time ?? ""}`;
+          const bk = `${b.date} ${b.time ?? ""}`;
+          if (ak === bk) return a.id - b.id;
+          return ak < bk ? -1 : 1;
+        });
+        setLatestBp(sorted[sorted.length - 1]);
+      })
       .catch(() => {});
   }, []);
 
@@ -380,6 +401,28 @@ export function TodayMetrics() {
               <span className="stat-label">Max</span>
               <span className="stat-value">{hr?.max_hr ?? "--"} bpm</span>
             </div>
+          </div>
+        </div>
+
+        <div className="overview-card">
+          <h3>
+            Blood Pressure
+            <AgeBadge at={latestBp?.date} />
+          </h3>
+          <div className="overview-card-body">
+            <div className="overview-stat">
+              <span className="stat-label">Systolic / Diastolic</span>
+              <span className="big-number">
+                {latestBp?.systolic_mmhg ?? "--"}/{latestBp?.diastolic_mmhg ?? "--"}
+                <span className="stat-unit">mmHg</span>
+              </span>
+            </div>
+            {latestBp?.pulse_bpm != null && (
+              <div className="overview-stat">
+                <span className="stat-label">Pulse</span>
+                <span className="stat-value">{latestBp.pulse_bpm} bpm</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

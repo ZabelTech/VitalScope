@@ -263,6 +263,7 @@ AI_CONTEXT_CATEGORIES: list[tuple[str, str, str]] = [
     ("glucose", "Glucose (CGM)", "Health"),
     ("biological_age", "Biological age", "Health"),
     ("grip_strength", "Grip strength", "Health"),
+    ("blood_pressure", "Blood pressure", "Health"),
     ("nutrition", "Nutrition & meals", "Lifestyle"),
     ("water", "Water intake", "Lifestyle"),
     ("supplements", "Supplements", "Lifestyle"),
@@ -1151,6 +1152,23 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_grip_strength_date ON grip_strength_entries(date)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS blood_pressure_entries (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            date            TEXT NOT NULL,
+            time            TEXT,
+            systolic_mmhg   INTEGER NOT NULL,
+            diastolic_mmhg  INTEGER NOT NULL,
+            pulse_bpm       INTEGER,
+            notes           TEXT,
+            created_at      TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_bp_date ON blood_pressure_entries(date)"
     )
     conn.execute(
         """
@@ -6688,6 +6706,74 @@ def delete_grip_strength_entry(entry_id: int):
         conn.close()
         raise HTTPException(status_code=404, detail="entry not found")
     conn.execute("DELETE FROM grip_strength_entries WHERE id = ?", (entry_id,))
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+class BloodPressureEntryIn(BaseModel):
+    date: str
+    time: Optional[str] = None
+    systolic_mmhg: int
+    diastolic_mmhg: int
+    pulse_bpm: Optional[int] = None
+    notes: Optional[str] = None
+
+
+@app.get("/api/blood-pressure")
+def list_blood_pressure(start: Optional[str] = None, end: Optional[str] = None):
+    s, e = default_range(start, end)
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT * FROM blood_pressure_entries
+           WHERE date >= ? AND date <= ?
+           ORDER BY date, COALESCE(time, ''), id""",
+        (s, e),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.post("/api/blood-pressure")
+def create_blood_pressure_entry(body: BloodPressureEntryIn):
+    if body.systolic_mmhg <= body.diastolic_mmhg:
+        raise HTTPException(status_code=400, detail="systolic must exceed diastolic")
+    now = _utcnow()
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            """INSERT INTO blood_pressure_entries
+               (date, time, systolic_mmhg, diastolic_mmhg, pulse_bpm, notes, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (
+                body.date,
+                body.time,
+                body.systolic_mmhg,
+                body.diastolic_mmhg,
+                body.pulse_bpm,
+                body.notes,
+                now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM blood_pressure_entries WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    return dict(row)
+
+
+@app.delete("/api/blood-pressure/{entry_id}")
+def delete_blood_pressure_entry(entry_id: int):
+    conn = get_db()
+    exists = conn.execute(
+        "SELECT 1 FROM blood_pressure_entries WHERE id = ?", (entry_id,)
+    ).fetchone()
+    if not exists:
+        conn.close()
+        raise HTTPException(status_code=404, detail="entry not found")
+    conn.execute("DELETE FROM blood_pressure_entries WHERE id = ?", (entry_id,))
     conn.commit()
     conn.close()
     return {"status": "ok"}
