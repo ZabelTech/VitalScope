@@ -78,17 +78,17 @@ test("Log meal and review postprandial response", async ({ page }) => {
 test("Record blood pressure manually", async ({ page }) => {
   await login(page);
 
-  await page.getByRole("link", { name: "Orient" }).click();
+  await page.getByLabel("Entries").click();
   await page.locator('a[href="#blood-pressure"]').click();
 
   const section = page.locator("section#blood-pressure");
-  await expect(section.getByRole("heading", { level: 2, name: "Blood Pressure" })).toBeVisible();
 
   await section.getByPlaceholder("Systolic (mmHg)").fill("121");
   await section.getByPlaceholder("Diastolic (mmHg)").fill("78");
   await section.getByPlaceholder("Pulse (bpm, optional)").fill("64");
   await section.getByRole("button", { name: "Add" }).click();
 
+  await expect(section.getByText("Reading saved.")).toBeVisible();
   await expect(section.getByText("121/78 mmHg")).toBeVisible();
   await expect(section.getByText("pulse 64 bpm")).toBeVisible();
 });

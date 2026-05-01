@@ -220,7 +220,7 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
 - **`/orient` Orient** — what does the pattern look like?
   - **AI Analysis** — 14-day rollup of wearable + workout + latest-bloodwork data run through the configured AI provider, grouped into health / performance / recovery / body composition.
   - **Trends** — historical charts with a date range picker (30d / 90d / 6mo / 1yr / All). Each metric has a row of Min / Max / Avg / Median / Volatility cards above its chart. Glucose chart shows avg / min / max daily lines with a 70–180 mg/dL target-range band. Training chart is merged: stacked bars of weekly Garmin sessions + Strong sessions with a distance line overlay. Calories + water chart at the bottom.
-  - **Blood pressure** — manual entry of systolic / diastolic / optional pulse, with a chart and history list. Independent of `LongevitySection`.
+  - **Blood pressure** — read-only chart + history of manual systolic / diastolic / optional pulse readings. Add new readings under Entries → Blood pressure.
   - **Activity history** — merged Garmin + Strong card list with click-to-expand details.
 - **`/decide` Decide** — what is the plan?
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).
@@ -230,6 +230,7 @@ Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anc
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
   - **Meals & water** — `NutritionPage`: log meals for any date (date picker accepts past days for retroactive logging) with free-text name + time + full nutrient breakdown (Macros / Minerals / Vitamins / Bioactives, ~37 seeded keys, collapsible sections). Below the manual form, an AI "Describe a meal" card lets the user type what they ate and have the nutrients estimated via `POST /api/meals/analyze-text` — same tool schema as the photo path. If CGM data covers the meal time, the 2-hour postprandial glucose curve is shown inline below the meal. Water is logged as separate per-drink entries with a running daily total. The Yesterday's-journal card on `/` exposes a "Log a missed meal for {date}" affordance that opens the same describe-a-meal flow with the journal's date pre-filled.
   - **Protocols** — `ProtocolsSection`: define and log intervention protocols (drugs, peptides, PEDs, supplement stacks, hormesis sessions, fasting windows, training blocks). Quick-log cards for Zone 2, sauna (°C + min), cold plunge (°C + min), and TRE window (start/end time). Active protocols show a running day-count; one-tap event logging with dose auto-fill.
+  - **Blood pressure** (Entries) — `BloodPressureForm`: log a manual systolic / diastolic / optional pulse reading. The chart + history live on Orient → Blood pressure.
   - **Bloodwork** — upload a lab PDF/image and have the AI extract panels into `bloodwork_panels` / `bloodwork_results`.
   - **Genome** — upload a raw genotype file and have the AI parse summary info.
 - **`/settings` Settings** — sync plugins. One card per plugin (Garmin Health, Garmin Activities, Strong, Eufy, CGM) with Enabled toggle, interval, credential fields, Save, Run now, last-run status, and recent-runs log.

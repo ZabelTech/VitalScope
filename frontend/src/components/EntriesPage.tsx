@@ -1,4 +1,5 @@
 import { format } from "date-fns";
+import { BloodPressureForm } from "./BloodPressureForm";
 import { BloodworkSection } from "./BloodworkSection";
 import { GenomeSection } from "./GenomeSection";
 import { ImageUpload } from "./ImageUpload";
@@ -26,6 +27,7 @@ export function EntriesPage() {
             />
           ),
         },
+        { id: "blood-pressure", label: "Blood pressure", content: <BloodPressureForm /> },
         { id: "bloodwork", label: "Bloodwork", content: <BloodworkSection /> },
         { id: "dna", label: "DNA", content: <GenomeSection /> },
       ]}
