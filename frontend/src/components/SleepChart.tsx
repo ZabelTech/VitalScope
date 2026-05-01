@@ -3,6 +3,7 @@ import {
 } from "recharts";
 import { useGoals } from "../hooks/useGoals";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { SleepDaily, StatValues } from "../types";
 
@@ -30,8 +31,8 @@ export function SleepChart({ start, end }: Props) {
   }));
 
   return (
-    <div className="chart-section">
-      <h2>Sleep</h2>
+    <Card id="orient.chart-sleep" className="chart-section">
+      <CardHeader id="orient.chart-sleep" level="h2">Sleep</CardHeader>
       <MetricCards items={[
         { label: "Sleep Score", stats: stats?.sleep_score ?? null },
         { label: "Sleep Duration", stats: stats?.sleep_hours ?? null, unit: " hrs", decimals: 1 },
@@ -54,6 +55,6 @@ export function SleepChart({ start, end }: Props) {
           <Line yAxisId="score" type="monotone" dataKey="score" name="Score" stroke="#ef4444" dot={false} connectNulls />
         </ComposedChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

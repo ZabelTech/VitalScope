@@ -2,6 +2,7 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { StressDaily, StatValues } from "../types";
 
@@ -14,8 +15,8 @@ export function StressChart({ start, end }: Props) {
   if (loading) return <div className="chart-loading">Loading stress...</div>;
 
   return (
-    <div className="chart-section">
-      <h2>Stress</h2>
+    <Card id="orient.chart-stress" className="chart-section">
+      <CardHeader id="orient.chart-stress" level="h2">Stress</CardHeader>
       <MetricCards items={[{ label: "Avg Stress", stats: stats?.avg_stress ?? null }]} />
       <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <AreaChart data={data ?? []}>
@@ -28,6 +29,6 @@ export function StressChart({ start, end }: Props) {
           <Area type="monotone" dataKey="max_stress" name="Max Stress" fill="none" stroke="#ef4444" connectNulls />
         </AreaChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

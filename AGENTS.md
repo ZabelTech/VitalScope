@@ -36,8 +36,8 @@ python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sq
 |---|---|
 | New sync data source | Two parts: (1) a new `sync_*.py` in the repo root following the pattern of `sync_garmin.py` / `sync_strong.py` (always include `--full` / `--all` + an incremental default); (2) a plugin wrapper in `backend/plugins/<name>.py` that calls `run_script_main("sync_xxx", env={...}, cli_args=[...])` and `register(Plugin(...))`. The plugin is auto-discovered at backend startup. |
 | New backend endpoint | `backend/app.py` — it's intentionally one file. Use `conn = get_db()` + `conn.row_factory = sqlite3.Row`. Group endpoints under an existing `# --- Section ---` comment. |
-| New chart | `frontend/src/components/XxxChart.tsx`. Follow `HeartRateChart.tsx` as a template: `useMetricData<T[]>("endpoint", start, end)`, `ResponsiveContainer`, `MetricCards` above, add to `TrendsPage.tsx`. |
-| New "today" card | Today-snapshot cards live in `TodayDashboard.tsx` (Act → Today) and `TodayMetrics.tsx` (Observe → Today's metrics). Always wrap the `<h3>` with `<AgeBadge at={...}/>` so users see data freshness. `AgeBadge` is currently duplicated in both files; if you change it, change both. |
+| New chart | `frontend/src/components/XxxChart.tsx`. Follow `HeartRateChart.tsx` as a template: `useMetricData<T[]>("endpoint", start, end)`, `ResponsiveContainer`, `MetricCards` above, add to `TrendsPage.tsx`. **Always wrap the chart in `<Card id="orient.chart-xxx" className="chart-section">` and replace the `<h2>` with `<CardHeader id="orient.chart-xxx" level="h2">…</CardHeader>` so the help/hide icons render** — see existing charts. Add the matching `CardInfo` entry in `frontend/src/cardInfo.ts` (TS will fail without it). |
+| New "today" card | Today-snapshot cards live in `TodayDashboard.tsx` (Act → Today) and `TodayMetrics.tsx` (Observe → Today's metrics). Wrap each card in `<Card id="…">` and use `<CardHeader id="…">…<AgeBadge at={...}/></CardHeader>` so the help/hide icons render and users see data freshness. `AgeBadge` is currently duplicated in `TodayDashboard.tsx` and `TodayMetrics.tsx`; if you change it, change both. Add a `CardInfo` entry in `frontend/src/cardInfo.ts` for any new card_id (TS will fail without it). |
 | New type | `frontend/src/types.ts`. Keep interfaces flat — the backend returns `sqlite3.Row` dicts, so types should mirror column names exactly. |
 | New section under an existing OODA page | Preferred. Add an entry to the `sections` array of `ActPage` / `ObservePage` / `OrientPage` / `DecidePage` — each entry is `{ id, label, content }`. The `OodaPage` frame renders an anchor nav + stacked sections automatically. |
 | New top-level route | Rare. If you really need one, add a `<Route>` in `App.tsx` and a `<NavLink>` in `NavBar.tsx`. Think twice before breaking the OODA layout — most new things are sections, not routes. `SettingsPage` and `AnamnesePage` are the current exceptions (utility, deliberately outside the loop). The `.top-bar` grid uses named areas (`brand entries anamnese cog`) — adding a fourth icon means extending the grid template in `index.css`, not just dropping a `<NavLink>` in. |
@@ -68,6 +68,7 @@ python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sq
   - Frontend: `LongevitySection.tsx` renders all four sub-sections (clocks, analytes, VO₂ max, grip strength). Wired into OrientPage as the "Biological age & longevity" section.
 - **Uploads**: `uploads.kind` is a `CHECK` whitelist `('meal','form','bloodwork')`. To add a new kind, extend `Literal` on `/api/uploads`, `/api/uploads` list, and run the table-rebuild migration in `ensure_daily_landing_tables` (SQLite can't `ALTER` a `CHECK`). Bloodwork uploads additionally accept `application/pdf` and use a 10 MB size cap (everything else stays at 5 MB).
 - **Briefings**: `briefings(date, kind, payload_json, model, provider, generated_at, context_hash, PRIMARY KEY (date, kind))` — one row per date+kind. `kind='morning'` is the morning briefing. `payload_json` is the full AI result as JSON. Subsequent requests for the same date+kind return the cached row **only when `context_hash` matches the current AI-context settings** (see below); pass `{ "regenerate": true }` to `POST /api/briefing/morning` to force a fresh generation (overwrites the existing row with `INSERT OR REPLACE`). When the user toggles a category in Settings → AI Context, the next briefing request will hash to a different value and naturally bypass the stale cached row. The `context_hash` column was added via `ALTER TABLE` (guarded by `PRAGMA table_info`); legacy rows default to `''` and miss the hash filter, which is fine — they simply regenerate on next read.
+- **Card visibility**: `card_visibility(card_id TEXT PK, hidden INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)` — one row per card the user has hidden via the × icon. Absent row → visible. The backend is a dumb key-value store with **no card_id whitelist** — IDs are owned by the frontend (`CARD_INFO` map in `frontend/src/cardInfo.ts`, exported as a `CardId` union via `as const satisfies`). Renaming an ID in the frontend leaves the old DB row dead but harmless. `GET /api/settings/card-visibility` returns `{ hidden: [...] }`; `PUT` body `{ card_id, hidden }` upserts/deletes one row at a time. PUT stays open in `DEMO_MODE` because card visibility is a UI preference (not user data); the demo DB is wiped on restart anyway. Frontend reads via the `CardVisibilityProvider` mounted in `App.tsx`; `<Card id="…">` returns `null` when hidden, `<CardHeader id="…">` renders the help/hide icons. Per-page reveal strip: pass `revealPrefixes={["today.","act."]}` to `OodaPage`.
 - **AI context (per-category sharing)**: `ai_context_settings(key TEXT PK, enabled INTEGER NOT NULL DEFAULT 1)` — one row per data category the user has explicitly toggled. Row absent → enabled (defaults preserve existing behaviour). Canonical category list lives in `AI_CONTEXT_CATEGORIES` in `backend/app.py` as `(key, label, group)` tuples; the frontend renders whatever the backend returns from `GET /api/settings/ai-context`, so adding a category there surfaces it in the Settings UI automatically. Read via `_get_ai_context(conn) -> dict[str, bool]`; every AI prompt-builder (`_gather_morning_metrics`, `_gather_orient_metrics`, `_gather_night_briefing_data`, `_gather_explain_context`) takes this dict and skips both the DB query and the dict assignment for any key whose flag is false. The bloodwork comparison narrative in `POST /api/bloodwork-panels` also respects `ctx["bloodwork"]`. **Image-only endpoints** (meal photo, form-check photo, bloodwork PDF upload) do not read the user's DB and are therefore not gated — the user is explicitly handing over that one artifact. When you add a new AI endpoint that pulls from the DB, plumb `ctx = _get_ai_context(conn)` through and gate every category read.
 - **User profile (Anamnese)**: `user_profile(id INTEGER PK CHECK (id = 1), name, birthday, sex CHECK (sex IN ('male','female')), known_diseases, former_health_conditions, life_events, interests, self_characterisation, admired, disliked, updated_at)` — single-row biographical sketch. Use `INSERT OR REPLACE` with `id = 1` to upsert. Edited via the standalone `AnamnesePage` (route `/anamnese`, user icon between entries and settings in the top bar). Read by `_get_user_profile(conn)` which returns `None` when the row is absent or every field is null, and adds a derived `age_years` when `birthday` parses. Each of the four `_gather_*` prompt-builders injects this dict under a `user_profile` key when `ctx["profile"]` is true, so the AI sees biographical framing without anyone having to plumb a separate parameter. The `profile` AI-context category is in the `Personal` group — that group exists only for this category, and any future biographical-style data should reuse it.
 - **Processing-speed task**: `cog_processing_sessions` stores one row per completed run (summary metrics + quality flags + interruption telemetry + deterministic `stimulus_seed`). `cog_processing_trials` stores per-trial payload (`PRIMARY KEY (session_id, trial_index)`, `ON DELETE CASCADE`). Use `POST /api/cognition/processing-speed/session` for writes and `GET /api/cognition/processing-speed/daily` / `GET /api/cognition/processing-speed/baseline` for trend + baseline reads. `/daily` returns **one row per session** (not per date) — each row carries `session_id` and `started_at` so the chart can plot multiple same-day runs separately, plus `include_in_quality_adjusted`, `baseline_confidence`, and `adjusted_score` (rolling z-score over prior high-quality individual sessions, filtered by `id < current_id` so same-day earlier sessions count). Pass `?aggregate=day` to collapse to one-row-per-date (latest session wins). `/baseline` likewise excludes the current session by id rather than by date. Frontend runtime requires a 6-trial untimed practice block on first run (and again after a 7+ day gap) before enabling the 75-second scored run. `journal_entries.avg_rt_ms` / `rt_trials` are still populated for backwards-compatible charts and should mirror the latest session summary for that date.
@@ -120,6 +121,7 @@ Every sync script must:
 - **Don't commit directly to `main`.** Every feature or fix goes on its own branch (`feat/…`, `fix/…`, `chore/…`) and lands through a pull request. The per-PR Fly preview deploy (`.github/workflows/preview-deploy.yml`) only fires on `pull_request` events — pushing straight to `main` skips both the preview and the implicit review step.
 - **Don't run destructive SQL** (`DROP`, `DELETE` without WHERE) without explicit permission.
 - **Don't add new routes when a section will do.** The OODA layout is the skeleton of the app; prefer adding a `{ id, label, content }` entry to an existing `OodaPage`'s `sections` array over creating another top-level page.
+- **Don't render a card without `<Card>`/`<CardHeader>`.** Every `.overview-card` and `.chart-section` instance must use the wrapper components from `frontend/src/components/Card.tsx` so the help/hide icons appear and the user's hide preference is honored. A bare `<div className="overview-card">…<h3>…</h3>` is a regression. The `CardId` union in `cardInfo.ts` enforces this at compile time — every `id` you pass needs a `CARD_INFO[id]` entry.
 
 ## Gotchas I learned the hard way
 
@@ -192,3 +194,81 @@ When you open a pull request (or push to an existing PR branch), you are respons
 - Backend changes → hit the new/changed endpoint with `curl` to confirm it returns valid JSON, not a 500 / 404.
 - Sync script changes → run the script once with the real incremental path (no `--full`) and confirm it doesn't re-fetch everything or infinite-loop.
 - **Always review `README.md` and `AGENTS.md` after implementing a feature or fix** and update whatever is now stale: page/route lists, architecture tree, route-groups table, data-model notes, gotchas, and any conventions the change introduced or invalidated. Treat the docs as part of the task, not a follow-up.
+
+## Rebase on main before every push
+
+**Always check for merge conflicts against `main` and resolve them locally before `git push`.** Don't rely on the GitHub PR page to surface them — by then your branch is already public and CI is already running against a stale base.
+
+The drill, every time, before pushing:
+
+```bash
+git fetch origin main
+git rebase origin/main         # or `git merge origin/main` if rebasing would
+                                # rewrite commits already on the remote PR branch
+```
+
+If conflicts come up, resolve them by reading both sides and keeping the **intent** of each change — don't pick the side that compiles fastest. Common collision points in this repo:
+
+- `backend/app.py` — multiple branches add new endpoints right after `update_ai_context_settings`. Keep both new sections, each under its own `# --- Section ---` comment.
+- `frontend/src/api.ts` — branches add new helpers near the bottom; keep both helper blocks.
+- `frontend/src/App.tsx` — new top-level routes and provider wrappers both touch the authed `return`. Keep every new `<Route>` AND any provider wrappers.
+- `frontend/src/types.ts` — new interfaces are routinely appended; keep both.
+- `frontend/src/cardInfo.ts` — when two branches add cards, keep all entries (the `CardId` union enforces uniqueness).
+
+After resolving, re-run **both** verifiers before pushing:
+
+```bash
+cd frontend && npx tsc -b --noEmit                                # must exit 0
+cd frontend && npx playwright test --config=playwright.local.config.ts  # all green
+```
+
+If you've already pushed and `main` has moved, fetch + rebase + force-push with `--force-with-lease` (never plain `--force`) so you don't clobber a teammate who pushed to the same branch.
+
+## Running the e2e suite before every push
+
+**Always run the full Playwright e2e suite locally before `git push`.** CI runs it on every PR (`.github/workflows/preview-deploy.yml` → `e2e-usecases`) and a red CI run blocks the preview deploy. Pushing without running locally means waiting on CI to discover failures you could have caught in 10 seconds.
+
+The Claude Code sandbox blocks `cdn.playwright.dev`, so `npx playwright install chromium` fails with `403 Host not in allowlist`. Use Chrome for Testing from `storage.googleapis.com` instead, which is reachable. One-time setup:
+
+```bash
+# Match the chromium version in node_modules/playwright-core; bump as Playwright upgrades
+CFT_VERSION=147.0.7727.15
+curl -sSL -o /tmp/cft.zip \
+  "https://storage.googleapis.com/chrome-for-testing-public/${CFT_VERSION}/linux64/chrome-linux64.zip"
+unzip -q /tmp/cft.zip -d /opt/cft
+/opt/cft/chrome-linux64/chrome --version    # sanity check
+```
+
+Then create `frontend/playwright.local.config.ts` (gitignored — never commit it):
+
+```ts
+import baseConfig from "./playwright.config";
+import { defineConfig } from "@playwright/test";
+
+export default defineConfig({
+  ...baseConfig,
+  projects: [{
+    name: "chromium",
+    use: {
+      launchOptions: {
+        executablePath: "/opt/cft/chrome-linux64/chrome",
+        args: ["--no-sandbox"],
+      },
+    },
+  }],
+});
+```
+
+Run the suite:
+
+```bash
+# Wipe the local demo DB first — playwright.config.ts uses
+# reuseExistingServer:true, so a stale uvicorn from a prior run keeps
+# the same vitalscope.db alive and tests that mutate state (e.g. "Log
+# meal and review postprandial response") see their own previous
+# inserts and fail with strict-mode locator collisions.
+rm -f vitalscope.db
+cd frontend && npx playwright test --config=playwright.local.config.ts
+```
+
+This boots the same demo backend + Vite dev server stack the CI job uses (see `webServer` in `playwright.config.ts`), so a local pass is a strong proxy for CI green. If it fails, fix the spec or the feature **before** pushing — never push hoping CI will tell you what's wrong.

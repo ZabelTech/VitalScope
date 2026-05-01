@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { GarminActivity, Workout, WorkoutDetail } from "../types";
 import { apiFetch } from "../api";
+import type { CardId } from "../cardInfo";
+import { Card, CardHeader } from "./Card";
 
 interface Props {
   activities: GarminActivity[];
@@ -8,6 +10,7 @@ interface Props {
   title?: string | null;
   maxItems?: number;
   emptyHint?: string;
+  cardId: CardId;
 }
 
 type MergedItem =
@@ -158,6 +161,7 @@ export function ActivityCard({
   title,
   maxItems = 8,
   emptyHint,
+  cardId,
 }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
@@ -179,18 +183,18 @@ export function ActivityCard({
   if (merged.length === 0) {
     if (!emptyHint) return null;
     return (
-      <div className="overview-card" style={{ marginTop: 20 }}>
-        {title && <h3>{title}</h3>}
+      <Card id={cardId} style={{ marginTop: 20 }}>
+        <CardHeader id={cardId}>{title}</CardHeader>
         <div className="overview-card-body">
           <p style={{ opacity: 0.6, margin: 0 }}>{emptyHint}</p>
         </div>
-      </div>
+      </Card>
     );
   }
 
   return (
-    <div className="overview-card" style={{ marginTop: 20 }}>
-      {title && <h3>{title}</h3>}
+    <Card id={cardId} style={{ marginTop: 20 }}>
+      <CardHeader id={cardId}>{title}</CardHeader>
       <div className="overview-card-body activity-list">
         {merged.slice(0, maxItems).map((item) => {
           const id = item.kind === "garmin"
@@ -239,6 +243,6 @@ export function ActivityCard({
           );
         })}
       </div>
-    </div>
+    </Card>
   );
 }

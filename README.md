@@ -215,6 +215,8 @@ Vite + React 18 + TypeScript + Recharts + react-router-dom.
 
 Each route uses the shared `OodaPage` frame: a page title, an in-page nav of anchor links, and stacked labelled sections.
 
+Every card across the app carries two icons in its header: **ⓘ** opens a popover explaining where the data comes from, what it means, and the scientific backing (sourced from `frontend/src/cardInfo.ts`); **×** hides the card. Hidden cards are remembered across sessions and devices via the `card_visibility` SQLite table and exposed back via a per-page "N cards hidden — show" link at the top of each OODA page.
+
 - **`/observe` Observe** — what is true right now?
   - **Today's metrics** — today's snapshot with age badges: Last Night's Sleep (score + stages + SpO2), HRV, Body Battery (current / today range / charged / drained), Stress, Body Composition, Steps, Heart Rate, Blood Pressure (latest manual reading).
 - **`/orient` Orient** — what does the pattern look like?

@@ -2,6 +2,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { BodyBatteryDaily, StatValues } from "../types";
 
@@ -24,8 +25,8 @@ export function BodyBatteryChart({ start, end }: Props) {
   }));
 
   return (
-    <div className="chart-section">
-      <h2>Body Battery</h2>
+    <Card id="orient.chart-body-battery" className="chart-section">
+      <CardHeader id="orient.chart-body-battery" level="h2">Body Battery</CardHeader>
       <MetricCards
         items={[
           { label: "Daily Peak", stats: stats?.max_level ?? null },
@@ -43,6 +44,6 @@ export function BodyBatteryChart({ start, end }: Props) {
           <Bar dataKey="drained" name="Drained" fill="#ef4444" />
         </BarChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

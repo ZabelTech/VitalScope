@@ -14,6 +14,7 @@ import {
   type MealTemplateInput,
   type PlannedSessionInput,
 } from "../api";
+import { Card, CardHeader } from "./Card";
 import type {
   GarminActivity,
   MealTemplate,
@@ -162,8 +163,8 @@ function FoodPlanTab() {
     <>
       {error && <p className="journal-err">{error}</p>}
 
-      <section className="overview-card" style={{ marginBottom: "1rem" }}>
-        <h3>Daily macro targets</h3>
+      <Card id="plan.macro-targets" as="section" style={{ marginBottom: "1rem" }}>
+        <CardHeader id="plan.macro-targets">Daily macro targets</CardHeader>
         <div className="overview-card-body" style={{ display: "flex", flexWrap: "wrap", gap: "1rem" }}>
           {macroGoals.length === 0 ? (
             <p className="journal-hint" style={{ margin: 0 }}>No macro targets set. Configure them in Decide → Goals.</p>
@@ -179,10 +180,10 @@ function FoodPlanTab() {
             ))
           )}
         </div>
-      </section>
+      </Card>
 
-      <section className="overview-card">
-        <h3>Meal templates</h3>
+      <Card id="plan.meal-templates" as="section">
+        <CardHeader id="plan.meal-templates">Meal templates</CardHeader>
         <div className="overview-card-body">
           <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
             <span className="stat-label" style={{ margin: 0 }}>Log to date</span>
@@ -230,7 +231,7 @@ function FoodPlanTab() {
             </button>
           )}
         </div>
-      </section>
+      </Card>
     </>
   );
 }
@@ -393,8 +394,8 @@ function ActivityPlanTab() {
   return (
     <>
       {error && <p className="journal-err">{error}</p>}
-      <section className="overview-card">
-        <h3>Weekly training plan</h3>
+      <Card id="plan.activities" as="section">
+        <CardHeader id="plan.activities">Weekly training plan</CardHeader>
         <div className="overview-card-body" style={{ padding: 0 }}>
           {weekDates.map((date) => {
             const dayLabel = format(new Date(date + "T12:00:00"), "EEE d");
@@ -454,7 +455,7 @@ function ActivityPlanTab() {
             );
           })}
         </div>
-      </section>
+      </Card>
     </>
   );
 }

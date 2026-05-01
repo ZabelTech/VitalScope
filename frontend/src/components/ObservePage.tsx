@@ -10,6 +10,7 @@ const today = format(new Date(), "yyyy-MM-dd");
 export function ObservePage() {
   return (
     <OodaPage
+      revealPrefixes={["observe."]}
       sections={[
         { id: "metrics", label: "Today's metrics", content: <TodayMetrics /> },
         {

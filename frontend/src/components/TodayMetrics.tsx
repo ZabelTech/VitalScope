@@ -13,6 +13,7 @@ import type {
   Upload,
   WeightDaily,
 } from "../types";
+import { Card, CardHeader } from "./Card";
 
 const today = format(new Date(), "yyyy-MM-dd");
 const thirtyDaysAgo = format(subDays(new Date(), 30), "yyyy-MM-dd");
@@ -198,11 +199,11 @@ export function TodayMetrics() {
   return (
     <div className="overview">
       <div className="overview-grid-top">
-        <div className="overview-card overview-card-large">
-          <h3>
+        <Card id="observe.sleep" className="overview-card overview-card-large">
+          <CardHeader id="observe.sleep">
             Last Night's Sleep
             <AgeBadge at={sleep?.sleep_end ?? sleep?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="sleep-headline">
               <span className="big-number">{sleep?.sleep_score ?? "--"}</span>
@@ -241,13 +242,13 @@ export function TodayMetrics() {
               </div>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="overview-card">
-          <h3>
+        <Card id="observe.hrv">
+          <CardHeader id="observe.hrv">
             Heart Rate Variability
             <AgeBadge at={hrv?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Last Night Avg</span>
@@ -278,15 +279,15 @@ export function TodayMetrics() {
               </span>
             </div>
           </div>
-        </div>
+        </Card>
       </div>
 
       <div className="overview-grid-bottom">
-        <div className="overview-card">
-          <h3>
+        <Card id="observe.body-battery">
+          <CardHeader id="observe.body-battery">
             Body Battery
             <AgeBadge at={bbCurrent?.updated_at ?? bb?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Current</span>
@@ -314,13 +315,13 @@ export function TodayMetrics() {
               </span>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="overview-card">
-          <h3>
+        <Card id="observe.stress">
+          <CardHeader id="observe.stress">
             Stress
             <AgeBadge at={stress?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Average</span>
@@ -331,13 +332,13 @@ export function TodayMetrics() {
               <span className="stat-value">{stress?.max_stress ?? "--"}</span>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="overview-card">
-          <h3>
+        <Card id="observe.weight">
+          <CardHeader id="observe.weight">
             Body Composition
             <AgeBadge at={weight?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Weight</span>
@@ -373,13 +374,13 @@ export function TodayMetrics() {
               </span>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="overview-card">
-          <h3>
+        <Card id="observe.resting-hr">
+          <CardHeader id="observe.resting-hr">
             Heart Rate
             <AgeBadge at={hr?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Resting</span>
@@ -402,13 +403,13 @@ export function TodayMetrics() {
               <span className="stat-value">{hr?.max_hr ?? "--"} bpm</span>
             </div>
           </div>
-        </div>
+        </Card>
 
-        <div className="overview-card">
-          <h3>
+        <Card id="observe.blood-pressure">
+          <CardHeader id="observe.blood-pressure">
             Blood Pressure
             <AgeBadge at={latestBp?.date} />
-          </h3>
+          </CardHeader>
           <div className="overview-card-body">
             <div className="overview-stat">
               <span className="stat-label">Systolic / Diastolic</span>
@@ -424,7 +425,7 @@ export function TodayMetrics() {
               </div>
             )}
           </div>
-        </div>
+        </Card>
       </div>
 
       {recentPhotos.length > 0 && (

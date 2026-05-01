@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { fetchMetric, fetchPlanned } from "../api";
 import type { GarminActivity, PlannedActivity, StepsDaily } from "../types";
+import { Card, CardHeader } from "./Card";
 
 interface Props {
   date: string;
@@ -47,7 +48,8 @@ export function AutoTickedToday({ date }: Props) {
   );
 
   return (
-    <div className="overview-card auto-ticked">
+    <Card id="act.auto-ticked" className="overview-card auto-ticked">
+      <CardHeader id="act.auto-ticked" />
       <div className="checklist-row">
         <span className={`tick ${stepsMet ? "tick-on" : ""}`} aria-hidden="true">
           {stepsMet ? "✓" : "◯"}
@@ -100,6 +102,6 @@ export function AutoTickedToday({ date }: Props) {
           </div>
         </div>
       ))}
-    </div>
+    </Card>
   );
 }

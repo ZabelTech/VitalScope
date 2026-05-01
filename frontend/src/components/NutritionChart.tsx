@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import { fetchNutritionDaily, fetchWaterDaily } from "../api";
 import { useGoals } from "../hooks/useGoals";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { NutritionDailyTotals, StatValues, WaterDaily } from "../types";
 
@@ -103,8 +104,8 @@ export function NutritionChart({ start, end }: Props) {
   };
 
   return (
-    <div className="chart-section">
-      <h2>Nutrition</h2>
+    <Card id="orient.chart-nutrition" className="chart-section">
+      <CardHeader id="orient.chart-nutrition" level="h2">Nutrition</CardHeader>
       <MetricCards
         items={[
           { label: "Calories", stats: stats.calories, unit: "kcal" },
@@ -148,6 +149,6 @@ export function NutritionChart({ start, end }: Props) {
           />
         </ComposedChart>
       </ResponsiveContainer></div>
-    </div>
+    </Card>
   );
 }

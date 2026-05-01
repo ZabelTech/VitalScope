@@ -13,6 +13,7 @@ import {
   listBloodworkPanels,
 } from "../api";
 import type { AnalyteDataPoint, BloodworkPanel, BloodworkResult } from "../types";
+import { Card, CardHeader } from "./Card";
 import { ImageUpload } from "./ImageUpload";
 
 const today = format(new Date(), "yyyy-MM-dd");
@@ -64,7 +65,8 @@ export function BloodworkSection() {
   }
 
   return (
-    <div className="overview-card">
+    <Card id="observe.bloodwork-panels">
+      <CardHeader id="observe.bloodwork-panels" />
       <ImageUpload
         kind="bloodwork"
         date={today}
@@ -105,7 +107,7 @@ export function BloodworkSection() {
           </ul>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { fetchNutritionDaily, fetchNutritionGoals, listNutrientDefs } from "../api";
 import type { NutrientDef, NutrientGoals, NutritionDailyTotals } from "../types";
+import { Card, CardHeader } from "./Card";
 import { NutritionGaps } from "./NutritionGaps";
 
 interface Props {
@@ -45,13 +46,13 @@ export function NutritionTodayCard({ date }: Props) {
   const keys = HIGHLIGHT_KEYS.filter((k) => goals[k] != null || totals[k] != null);
 
   return (
-    <div className="overview-card nutrition-today">
-      <h3 className="stat-label">
+    <Card id="today.nutrition-detail" className="overview-card nutrition-today">
+      <CardHeader id="today.nutrition-detail">
         Nutrients today
         <Link to="/act#intake" className="card-age" style={{ textDecoration: "underline" }}>
           log meal
         </Link>
-      </h3>
+      </CardHeader>
       {keys.length === 0 ? (
         <p className="journal-hint">
           No goals set. Seed goals in <code>seed_demo.py</code> or set via API.
@@ -82,6 +83,6 @@ export function NutritionTodayCard({ date }: Props) {
         </ul>
       )}
       <NutritionGaps date={date} />
-    </div>
+    </Card>
   );
 }

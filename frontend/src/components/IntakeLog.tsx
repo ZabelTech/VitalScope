@@ -12,6 +12,7 @@ import type {
   SupplementIntake,
   TimeOfDay,
 } from "../types";
+import { Card, CardHeader } from "./Card";
 
 const SUPPLEMENT_SECTIONS: { key: TimeOfDay; label: string }[] = [
   { key: "morning", label: "Morning" },
@@ -216,7 +217,10 @@ export function IntakeLog({ wrapped = true }: Props = {}) {
   if (!wrapped) return body;
   return (
     <div className="journal-page">
-      <div className="journal-form overview-card">{body}</div>
+      <Card id="act.intake-log" className="journal-form overview-card">
+        <CardHeader id="act.intake-log" />
+        {body}
+      </Card>
     </div>
   );
 }

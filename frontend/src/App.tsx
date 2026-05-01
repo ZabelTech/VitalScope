@@ -11,6 +11,7 @@ import { DecidePage } from "./components/DecidePage";
 import { HeroPage } from "./components/HeroPage";
 import { MarketingPage } from "./components/MarketingPage";
 import { SettingsPage } from "./components/SettingsPage";
+import { CardVisibilityProvider } from "./hooks/useCardVisibility";
 import { useRuntime } from "./hooks/useRuntime";
 
 function DemoBanner() {
@@ -58,26 +59,28 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
-      <div className="app">
-        <DemoBanner />
-        <NavBar />
-        <main>
-          <Routes>
-            <Route path="/" element={<Navigate to="/observe" replace />} />
-            <Route path="/act" element={<ActPage />} />
-            <Route path="/observe" element={<ObservePage />} />
-            <Route path="/orient" element={<OrientPage />} />
-            <Route path="/decide" element={<DecidePage />} />
-            <Route path="/entries" element={<EntriesPage />} />
-            <Route path="/anamnese" element={<AnamnesePage />} />
-            <Route path="/settings" element={<SettingsPage />} />
-            <Route path="/manifesto" element={<HeroPage />} />
-            <Route path="/marketing" element={<MarketingPage />} />
-          </Routes>
-        </main>
-      </div>
-    </BrowserRouter>
+    <CardVisibilityProvider>
+      <BrowserRouter>
+        <div className="app">
+          <DemoBanner />
+          <NavBar />
+          <main>
+            <Routes>
+              <Route path="/" element={<Navigate to="/observe" replace />} />
+              <Route path="/act" element={<ActPage />} />
+              <Route path="/observe" element={<ObservePage />} />
+              <Route path="/orient" element={<OrientPage />} />
+              <Route path="/decide" element={<DecidePage />} />
+              <Route path="/entries" element={<EntriesPage />} />
+              <Route path="/anamnese" element={<AnamnesePage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/manifesto" element={<HeroPage />} />
+              <Route path="/marketing" element={<MarketingPage />} />
+            </Routes>
+          </main>
+        </div>
+      </BrowserRouter>
+    </CardVisibilityProvider>
   );
 }
 

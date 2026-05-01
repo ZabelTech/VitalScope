@@ -2,6 +2,7 @@ import { format, subYears } from "date-fns";
 import { useCallback, useEffect, useState } from "react";
 import { deleteGenomeUpload, fetchGenomeVariants, listGenomeUploads } from "../api";
 import type { GenomeUpload, GenomeVariant } from "../types";
+import { Card, CardHeader } from "./Card";
 import { ImageUpload } from "./ImageUpload";
 
 const today = format(new Date(), "yyyy-MM-dd");
@@ -38,7 +39,8 @@ export function GenomeSection() {
   }
 
   return (
-    <div className="overview-card">
+    <Card id="decide.genome-upload">
+      <CardHeader id="decide.genome-upload" />
       <ImageUpload
         kind="genome"
         date={today}
@@ -73,7 +75,7 @@ export function GenomeSection() {
           </ul>
         )}
       </div>
-    </div>
+    </Card>
   );
 }
 

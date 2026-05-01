@@ -7,6 +7,14 @@ import {
   updateSupplement,
 } from "../api";
 import type { NutrientDef, Supplement, SupplementNutrient, TimeOfDay } from "../types";
+import type { CardId } from "../cardInfo";
+import { Card, CardHeader } from "./Card";
+
+const TIME_TO_CARD_ID: Record<TimeOfDay, CardId> = {
+  morning: "supplements.morning",
+  noon: "supplements.noon",
+  evening: "supplements.evening",
+};
 
 const SECTIONS: { key: TimeOfDay; label: string }[] = [
   { key: "morning", label: "Morning" },
@@ -97,9 +105,10 @@ function SupplementSection({
     }
   }
 
+  const cardId = TIME_TO_CARD_ID[time];
   return (
-    <section className="overview-card journal-form">
-      <h3 className="stat-label">{label}</h3>
+    <Card id={cardId} as="section" className="overview-card journal-form">
+      <CardHeader id={cardId}>{label}</CardHeader>
       {items.length === 0 && <p className="journal-hint">No supplements yet.</p>}
       {items.map((item) => (
         <SupplementRow
@@ -127,7 +136,7 @@ function SupplementSection({
           Add
         </button>
       </form>
-    </section>
+    </Card>
   );
 }
 

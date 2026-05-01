@@ -8,6 +8,7 @@ import {
   submitJournalResponses,
 } from "../api";
 import type { JournalEntry, JournalQuestionResponse, MoodTag, MorningFeeling } from "../types";
+import { Card, CardHeader } from "./Card";
 import { MealTextDescribe } from "./MealTextDescribe";
 
 function todayISO(): string {
@@ -155,7 +156,8 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
 
   return (
     <div className="journal-page">
-      <form className="journal-form overview-card" onSubmit={handleSubmit}>
+      <Card id="journal.entry" as="form" className="journal-form overview-card" onSubmit={handleSubmit}>
+        <CardHeader id="journal.entry" />
         {showDate && (
           <label className="journal-field">
             <span className="stat-label">Date</span>
@@ -272,10 +274,11 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
           {status === "saved" && <span className="journal-ok">Saved ✓</span>}
           {status === "error" && <span className="journal-err">Failed to save</span>}
         </div>
-      </form>
+      </Card>
 
       {date < todayISO() && (
-        <div className="overview-card journal-form">
+        <Card id="journal.meal-describe" className="overview-card journal-form">
+          <CardHeader id="journal.meal-describe" />
           {!showMealDescribe ? (
             <div className="journal-actions">
               <button
@@ -294,7 +297,7 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
               onSaved={() => setShowMealDescribe(false)}
             />
           )}
-        </div>
+        </Card>
       )}
     </div>
   );

@@ -10,6 +10,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { useMetricData } from "../hooks/useMetricData";
+import { Card, CardHeader } from "./Card";
 import { MetricCards } from "./MetricCards";
 import type { GlucoseDaily, StatValues } from "../types";
 
@@ -29,8 +30,8 @@ export function GlucoseChart({ start, end }: Props) {
   if (!data || data.length === 0) return null;
 
   return (
-    <div className="chart-section">
-      <h2>Glucose</h2>
+    <Card id="orient.chart-glucose" className="chart-section">
+      <CardHeader id="orient.chart-glucose" level="h2">Glucose</CardHeader>
       <MetricCards
         items={[
           { label: "Avg Glucose", stats: stats?.avg_mgdl ?? null, unit: " mg/dL", decimals: 0 },
@@ -78,6 +79,6 @@ export function GlucoseChart({ start, end }: Props) {
           </ComposedChart>
         </ResponsiveContainer>
       </div>
-    </div>
+    </Card>
   );
 }

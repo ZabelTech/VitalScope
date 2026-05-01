@@ -8,6 +8,15 @@ import { ProtocolsSection } from "./ProtocolsSection";
 export function DecidePage() {
   return (
     <OodaPage
+      revealPrefixes={[
+        "decide.",
+        "plan.",
+        "protocols.",
+        "supplements.",
+        "nutrition.",
+        "genome.",
+        "daily.",
+      ]}
       sections={[
         { id: "morning-briefing", label: "Morning briefing", content: <MorningBriefing /> },
         { id: "night-briefing", label: "Night briefing", content: <NightBriefingCard /> },

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { createWater, listWater } from "../api";
 import type { WaterEntry } from "../types";
+import { Card, CardHeader } from "./Card";
 
 interface Props {
   date: string;
@@ -69,10 +70,10 @@ export function WaterQuickLog({
   }
 
   return (
-    <div className="overview-card water-quick-log">
-      <h3 className="stat-label">
+    <Card id="today.water-quick-log" className="overview-card water-quick-log">
+      <CardHeader id="today.water-quick-log">
         {title} — {total} / {goalMl} ml
-      </h3>
+      </CardHeader>
       <div className="water-gauge" role="img" aria-label={`${total} ml of ${goalMl} ml goal`}>
         <div className="water-gauge-track">
           <div className="water-gauge-marker" style={{ left: `${markerPct}%` }} />
@@ -97,6 +98,6 @@ export function WaterQuickLog({
           </button>
         ))}
       </div>
-    </div>
+    </Card>
   );
 }
