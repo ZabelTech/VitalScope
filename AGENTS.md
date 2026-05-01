@@ -194,3 +194,81 @@ When you open a pull request (or push to an existing PR branch), you are respons
 - Backend changes → hit the new/changed endpoint with `curl` to confirm it returns valid JSON, not a 500 / 404.
 - Sync script changes → run the script once with the real incremental path (no `--full`) and confirm it doesn't re-fetch everything or infinite-loop.
 - **Always review `README.md` and `AGENTS.md` after implementing a feature or fix** and update whatever is now stale: page/route lists, architecture tree, route-groups table, data-model notes, gotchas, and any conventions the change introduced or invalidated. Treat the docs as part of the task, not a follow-up.
+
+## Rebase on main before every push
+
+**Always check for merge conflicts against `main` and resolve them locally before `git push`.** Don't rely on the GitHub PR page to surface them — by then your branch is already public and CI is already running against a stale base.
+
+The drill, every time, before pushing:
+
+```bash
+git fetch origin main
+git rebase origin/main         # or `git merge origin/main` if rebasing would
+                                # rewrite commits already on the remote PR branch
+```
+
+If conflicts come up, resolve them by reading both sides and keeping the **intent** of each change — don't pick the side that compiles fastest. Common collision points in this repo:
+
+- `backend/app.py` — multiple branches add new endpoints right after `update_ai_context_settings`. Keep both new sections, each under its own `# --- Section ---` comment.
+- `frontend/src/api.ts` — branches add new helpers near the bottom; keep both helper blocks.
+- `frontend/src/App.tsx` — new top-level routes and provider wrappers both touch the authed `return`. Keep every new `<Route>` AND any provider wrappers.
+- `frontend/src/types.ts` — new interfaces are routinely appended; keep both.
+- `frontend/src/cardInfo.ts` — when two branches add cards, keep all entries (the `CardId` union enforces uniqueness).
+
+After resolving, re-run **both** verifiers before pushing:
+
+```bash
+cd frontend && npx tsc -b --noEmit                                # must exit 0
+cd frontend && npx playwright test --config=playwright.local.config.ts  # all green
+```
+
+If you've already pushed and `main` has moved, fetch + rebase + force-push with `--force-with-lease` (never plain `--force`) so you don't clobber a teammate who pushed to the same branch.
+
+## Running the e2e suite before every push
+
+**Always run the full Playwright e2e suite locally before `git push`.** CI runs it on every PR (`.github/workflows/preview-deploy.yml` → `e2e-usecases`) and a red CI run blocks the preview deploy. Pushing without running locally means waiting on CI to discover failures you could have caught in 10 seconds.
+
+The Claude Code sandbox blocks `cdn.playwright.dev`, so `npx playwright install chromium` fails with `403 Host not in allowlist`. Use Chrome for Testing from `storage.googleapis.com` instead, which is reachable. One-time setup:
+
+```bash
+# Match the chromium version in node_modules/playwright-core; bump as Playwright upgrades
+CFT_VERSION=147.0.7727.15
+curl -sSL -o /tmp/cft.zip \
+  "https://storage.googleapis.com/chrome-for-testing-public/${CFT_VERSION}/linux64/chrome-linux64.zip"
+unzip -q /tmp/cft.zip -d /opt/cft
+/opt/cft/chrome-linux64/chrome --version    # sanity check
+```
+
+Then create `frontend/playwright.local.config.ts` (gitignored — never commit it):
+
+```ts
+import baseConfig from "./playwright.config";
+import { defineConfig } from "@playwright/test";
+
+export default defineConfig({
+  ...baseConfig,
+  projects: [{
+    name: "chromium",
+    use: {
+      launchOptions: {
+        executablePath: "/opt/cft/chrome-linux64/chrome",
+        args: ["--no-sandbox"],
+      },
+    },
+  }],
+});
+```
+
+Run the suite:
+
+```bash
+# Wipe the local demo DB first — playwright.config.ts uses
+# reuseExistingServer:true, so a stale uvicorn from a prior run keeps
+# the same vitalscope.db alive and tests that mutate state (e.g. "Log
+# meal and review postprandial response") see their own previous
+# inserts and fail with strict-mode locator collisions.
+rm -f vitalscope.db
+cd frontend && npx playwright test --config=playwright.local.config.ts
+```
+
+This boots the same demo backend + Vite dev server stack the CI job uses (see `webServer` in `playwright.config.ts`), so a local pass is a strong proxy for CI green. If it fails, fix the spec or the feature **before** pushing — never push hoping CI will tell you what's wrong.
