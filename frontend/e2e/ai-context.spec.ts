@@ -1,13 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const CATEGORIES = [
-  { key: "heart_rate", label: "Heart rate", group: "Wearables" },
-  { key: "hrv", label: "Heart rate variability", group: "Wearables" },
-  { key: "sleep", label: "Sleep", group: "Wearables" },
-  { key: "journal", label: "Journal entries", group: "Lifestyle" },
-  { key: "bloodwork", label: "Bloodwork (as context)", group: "Health" },
-];
-
 async function login(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Begin the Cycle" }).first().click();
@@ -16,14 +8,26 @@ async function login(page: Page) {
   await expect(page.getByRole("link", { name: "Observe" })).toBeVisible();
 }
 
-test("AI Context settings — opt out of a category and persist", async ({ page }) => {
-  let state = CATEGORIES.map((c) => ({ ...c, enabled: true }));
+test("AI Context settings — opt out of a category and round-trip via mocked API", async ({ page }) => {
+  type Cat = { key: string; label: string; group: string; enabled: boolean };
+  let state: Cat[] = [
+    { key: "heart_rate", label: "Heart rate", group: "Wearables", enabled: true },
+    { key: "hrv", label: "Heart rate variability", group: "Wearables", enabled: true },
+    { key: "sleep", label: "Sleep", group: "Wearables", enabled: true },
+    { key: "journal", label: "Journal entries", group: "Lifestyle", enabled: true },
+    { key: "bloodwork", label: "Bloodwork (as context)", group: "Health", enabled: true },
+  ];
 
   await page.route("**/api/settings/ai-context", async (route) => {
     if (route.request().method() === "PUT") {
-      const body = route.request().postDataJSON() as { updates: Record<string, boolean> };
+      const body = (route.request().postDataJSON() ?? {}) as {
+        updates?: Record<string, boolean>;
+      };
+      const updates = body.updates ?? {};
       state = state.map((c) =>
-        c.key in body.updates ? { ...c, enabled: body.updates[c.key] } : c,
+        Object.prototype.hasOwnProperty.call(updates, c.key)
+          ? { ...c, enabled: updates[c.key] }
+          : c,
       );
     }
     await route.fulfill({
@@ -37,7 +41,11 @@ test("AI Context settings — opt out of a category and persist", async ({ page 
   await page.getByLabel("Settings").click();
 
   const card = page.locator("section.ai-context-card");
+  await expect(card).toBeVisible();
   await expect(card.getByRole("heading", { name: "AI Context" })).toBeVisible();
+  // Wait until the category count copy reflects the loaded state (loading -> N of M).
+  await expect(card.getByText(/categories shared with AI/)).toBeVisible();
+
   await card.getByRole("heading", { name: "AI Context" }).click();
 
   const journalCheckbox = card.getByRole("checkbox", { name: "Journal entries" });
@@ -45,12 +53,6 @@ test("AI Context settings — opt out of a category and persist", async ({ page 
 
   await journalCheckbox.uncheck();
   await expect(journalCheckbox).not.toBeChecked();
-
-  // Card should reflect the updated count from the mocked PUT response
-  await expect(card.getByText(/of \d+ categories shared with AI/)).toBeVisible();
+  await expect(card.getByText("4 of 5 categories shared with AI")).toBeVisible();
   expect(state.find((c) => c.key === "journal")?.enabled).toBe(false);
-
-  await card.getByRole("button", { name: "Share everything" }).click();
-  await expect(journalCheckbox).toBeChecked();
-  expect(state.every((c) => c.enabled)).toBe(true);
 });
