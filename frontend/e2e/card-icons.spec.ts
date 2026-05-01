@@ -10,7 +10,7 @@ async function login(page: Page) {
 
 test("Card help popover opens with source/meaning content", async ({ page }) => {
   await login(page);
-  await page.getByRole("link", { name: "Act" }).click();
+  await page.getByRole("link", { name: "Act", exact: true }).click();
 
   // Steps card on the Today dashboard
   const stepsCard = page
@@ -67,7 +67,7 @@ test("Hide icon optimistically removes the card and reveal strip restores it", a
   });
 
   await login(page);
-  await page.getByRole("link", { name: "Act" }).click();
+  await page.getByRole("link", { name: "Act", exact: true }).click();
 
   const stepsCard = page
     .locator(".overview-card")
