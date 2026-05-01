@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import gzip
+import hashlib
 import hmac
 import json
 import logging
@@ -241,6 +242,94 @@ def update_ai_settings(body: AiSettingsBody, request: Request):
         "openai_key_hint": _mask_key(OPENAI_API_KEY),
         "openrouter_key_hint": _mask_key(OPENROUTER_API_KEY),
     }
+
+
+# --- AI context (per-category sharing toggles) ---
+# Order here is also the display order in the settings UI; the frontend renders
+# whatever the backend returns, so adding a category here surfaces it in the UI
+# automatically. New categories default to enabled (row absent → True).
+AI_CONTEXT_CATEGORIES: list[tuple[str, str, str]] = [
+    ("heart_rate", "Heart rate", "Wearables"),
+    ("hrv", "Heart rate variability", "Wearables"),
+    ("sleep", "Sleep", "Wearables"),
+    ("stress", "Stress", "Wearables"),
+    ("body_battery", "Body battery", "Wearables"),
+    ("steps", "Steps", "Wearables"),
+    ("weight", "Weight & body composition", "Wearables"),
+    ("garmin_activities", "Garmin activities", "Activity"),
+    ("strong_workouts", "Strong workouts", "Activity"),
+    ("planned_activities", "Planned activities", "Activity"),
+    ("bloodwork", "Bloodwork (as context)", "Health"),
+    ("glucose", "Glucose (CGM)", "Health"),
+    ("biological_age", "Biological age", "Health"),
+    ("grip_strength", "Grip strength", "Health"),
+    ("nutrition", "Nutrition & meals", "Lifestyle"),
+    ("water", "Water intake", "Lifestyle"),
+    ("supplements", "Supplements", "Lifestyle"),
+    ("protocols", "Protocols", "Lifestyle"),
+    ("journal", "Journal entries", "Lifestyle"),
+    ("cognition", "Cognition tests", "Lifestyle"),
+]
+_AI_CONTEXT_KEYS = {k for (k, _, _) in AI_CONTEXT_CATEGORIES}
+
+
+def _get_ai_context(conn: sqlite3.Connection) -> dict[str, bool]:
+    rows = conn.execute("SELECT key, enabled FROM ai_context_settings").fetchall()
+    overrides = {r["key"]: bool(r["enabled"]) for r in rows}
+    return {k: overrides.get(k, True) for (k, _, _) in AI_CONTEXT_CATEGORIES}
+
+
+def _ai_context_hash(ctx: dict[str, bool]) -> str:
+    payload = json.dumps(ctx, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+def _ai_context_response(ctx: dict[str, bool]) -> dict:
+    return {
+        "categories": [
+            {"key": key, "label": label, "group": group, "enabled": ctx[key]}
+            for (key, label, group) in AI_CONTEXT_CATEGORIES
+        ]
+    }
+
+
+@app.get("/api/settings/ai-context")
+def get_ai_context_settings(request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    conn = get_db()
+    try:
+        ctx = _get_ai_context(conn)
+    finally:
+        conn.close()
+    return _ai_context_response(ctx)
+
+
+class AiContextUpdateBody(BaseModel):
+    updates: dict[str, bool]
+
+
+@app.put("/api/settings/ai-context")
+def update_ai_context_settings(body: AiContextUpdateBody, request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    if DEMO_MODE:
+        raise HTTPException(status_code=403, detail="AI context is read-only in demo mode")
+    unknown = [k for k in body.updates if k not in _AI_CONTEXT_KEYS]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"unknown categories: {sorted(unknown)}")
+    conn = get_db()
+    try:
+        for key, enabled in body.updates.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO ai_context_settings (key, enabled) VALUES (?, ?)",
+                (key, 1 if enabled else 0),
+            )
+        conn.commit()
+        ctx = _get_ai_context(conn)
+    finally:
+        conn.close()
+    return _ai_context_response(ctx)
 
 
 def get_db() -> sqlite3.Connection:
@@ -1022,6 +1111,14 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS ai_context_settings (
+            key     TEXT PRIMARY KEY,
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS biological_age_entries (
             id                 INTEGER PRIMARY KEY AUTOINCREMENT,
             date               TEXT NOT NULL,
@@ -1068,6 +1165,11 @@ def ensure_daily_landing_tables() -> None:
         )
         """
     )
+    briefing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(briefings)").fetchall()}
+    if "context_hash" not in briefing_cols:
+        conn.execute(
+            "ALTER TABLE briefings ADD COLUMN context_hash TEXT NOT NULL DEFAULT ''"
+        )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS caffeine_intake (
@@ -5104,7 +5206,9 @@ _ORIENT_ANALYSIS_TOOL = {
 }
 
 
-def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> dict:
+def _gather_orient_metrics(
+    conn: sqlite3.Connection, ctx: dict[str, bool], window_days: int = 14
+) -> dict:
     today = date.today()
     end_date = today.isoformat()
     start_date = (today - timedelta(days=window_days)).isoformat()
@@ -5113,111 +5217,130 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
     def rows_to_list(rows: list) -> list[dict]:
         return [dict(r) for r in rows]
 
-    hr = rows_to_list(conn.execute(
-        "SELECT date, resting_hr, avg_7d_resting_hr FROM heart_rate_daily "
-        "WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start_date, end_date),
-    ).fetchall())
-
-    hrv = rows_to_list(conn.execute(
-        "SELECT date, weekly_avg, last_night_avg, "
-        "baseline_balanced_low, baseline_balanced_upper "
-        "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start_date, end_date),
-    ).fetchall())
-
-    sleep = rows_to_list(conn.execute(
-        "SELECT date, sleep_score, sleep_score_quality, "
-        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
-        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
-        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
-        "avg_spo2, avg_sleep_stress "
-        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start_date, end_date),
-    ).fetchall())
-
-    stress = rows_to_list(conn.execute(
-        "SELECT date, avg_stress, max_stress FROM stress_daily "
-        "WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start_date, end_date),
-    ).fetchall())
-
-    body_battery = rows_to_list(conn.execute(
-        "SELECT date, charged, drained FROM body_battery_daily "
-        "WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start_date, end_date),
-    ).fetchall())
-
-    steps = rows_to_list(conn.execute(
-        "SELECT date, total_steps, step_goal FROM steps_daily "
-        "WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start_date, end_date),
-    ).fetchall())
-
-    weight = rows_to_list(conn.execute(
-        "SELECT date, weight_kg, body_fat_pct, muscle_mass_kg, bmi "
-        "FROM weight_daily WHERE date BETWEEN ? AND ? "
-        "AND weight_kg IS NOT NULL ORDER BY date",
-        (prev_start, end_date),
-    ).fetchall())
-
-    workouts = rows_to_list(conn.execute(
-        "SELECT w.date, w.name, "
-        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
-        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
-        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
-        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
-        "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date DESC LIMIT 10",
-        (prev_start, end_date),
-    ).fetchall())
-
-    bp = conn.execute(
-        "SELECT id, date, notes FROM bloodwork_panels "
-        "WHERE date >= date('now', '-' || ? || ' days') "
-        "ORDER BY date DESC LIMIT 1",
-        (BLOODWORK_AI_MAX_AGE_DAYS,),
-    ).fetchone()
-    bloodwork = None
-    if bp:
-        flagged = rows_to_list(conn.execute(
-            "SELECT analyte, value, value_text, unit, reference_low, reference_high, flag "
-            "FROM bloodwork_results WHERE panel_id = ? AND flag IS NOT NULL AND flag != 'normal' "
-            "ORDER BY sort_order LIMIT 20",
-            (bp["id"],),
-        ).fetchall())
-        bloodwork = {
-            "date": bp["date"],
-            "notes": bp["notes"],
-            "flagged_results": flagged,
-        }
-
-    cognition = rows_to_list(conn.execute(
-        """
-        SELECT date, focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms
-        FROM journal_entries
-        WHERE date BETWEEN ? AND ?
-          AND (focus IS NOT NULL OR mood_tag IS NOT NULL
-               OR cognitive_load IS NOT NULL OR subjective_energy IS NOT NULL)
-        ORDER BY date
-        """,
-        (start_date, end_date),
-    ).fetchall())
-
-    result = {
+    result: dict = {
         "analysis_date": end_date,
         "window_days": window_days,
-        "heart_rate": hr,
-        "hrv": hrv,
-        "sleep": sleep,
-        "stress": stress,
-        "body_battery": body_battery,
-        "steps": steps,
-        "weight": weight,
-        "recent_workouts": workouts,
-        "journal_cognition": cognition,
     }
-    if bloodwork is not None:
-        result["bloodwork"] = bloodwork
+
+    if ctx.get("heart_rate"):
+        result["heart_rate"] = rows_to_list(conn.execute(
+            "SELECT date, resting_hr, avg_7d_resting_hr FROM heart_rate_daily "
+            "WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start_date, end_date),
+        ).fetchall())
+
+    if ctx.get("hrv"):
+        result["hrv"] = rows_to_list(conn.execute(
+            "SELECT date, weekly_avg, last_night_avg, "
+            "baseline_balanced_low, baseline_balanced_upper "
+            "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start_date, end_date),
+        ).fetchall())
+
+    if ctx.get("sleep"):
+        result["sleep"] = rows_to_list(conn.execute(
+            "SELECT date, sleep_score, sleep_score_quality, "
+            "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+            "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+            "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
+            "avg_spo2, avg_sleep_stress "
+            "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start_date, end_date),
+        ).fetchall())
+
+    if ctx.get("stress"):
+        result["stress"] = rows_to_list(conn.execute(
+            "SELECT date, avg_stress, max_stress FROM stress_daily "
+            "WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start_date, end_date),
+        ).fetchall())
+
+    if ctx.get("body_battery"):
+        result["body_battery"] = rows_to_list(conn.execute(
+            "SELECT date, charged, drained FROM body_battery_daily "
+            "WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start_date, end_date),
+        ).fetchall())
+
+    if ctx.get("steps"):
+        result["steps"] = rows_to_list(conn.execute(
+            "SELECT date, total_steps, step_goal FROM steps_daily "
+            "WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start_date, end_date),
+        ).fetchall())
+
+    if ctx.get("weight"):
+        result["weight"] = rows_to_list(conn.execute(
+            "SELECT date, weight_kg, body_fat_pct, muscle_mass_kg, bmi "
+            "FROM weight_daily WHERE date BETWEEN ? AND ? "
+            "AND weight_kg IS NOT NULL ORDER BY date",
+            (prev_start, end_date),
+        ).fetchall())
+
+    if ctx.get("strong_workouts"):
+        result["recent_workouts"] = rows_to_list(conn.execute(
+            "SELECT w.date, w.name, "
+            "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+            "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+            "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+            "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+            "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date DESC LIMIT 10",
+            (prev_start, end_date),
+        ).fetchall())
+
+    if ctx.get("bloodwork"):
+        bp = conn.execute(
+            "SELECT id, date, notes FROM bloodwork_panels "
+            "WHERE date >= date('now', '-' || ? || ' days') "
+            "ORDER BY date DESC LIMIT 1",
+            (BLOODWORK_AI_MAX_AGE_DAYS,),
+        ).fetchone()
+        if bp:
+            flagged = rows_to_list(conn.execute(
+                "SELECT analyte, value, value_text, unit, reference_low, reference_high, flag "
+                "FROM bloodwork_results WHERE panel_id = ? AND flag IS NOT NULL AND flag != 'normal' "
+                "ORDER BY sort_order LIMIT 20",
+                (bp["id"],),
+            ).fetchall())
+            result["bloodwork"] = {
+                "date": bp["date"],
+                "notes": bp["notes"],
+                "flagged_results": flagged,
+            }
+
+    if ctx.get("journal") or ctx.get("cognition"):
+        # The query mixes free-text mood tags (journal) with cognitive-load /
+        # avg_rt_ms (cognition tests). Keep the row only if at least one of the
+        # two categories the user opted into is represented, and strip the
+        # other category's columns before serializing.
+        keep_journal = ctx.get("journal", False)
+        keep_cognition = ctx.get("cognition", False)
+        rows = rows_to_list(conn.execute(
+            """
+            SELECT date, focus, mood_tag, cognitive_load, subjective_energy, avg_rt_ms
+            FROM journal_entries
+            WHERE date BETWEEN ? AND ?
+              AND (focus IS NOT NULL OR mood_tag IS NOT NULL
+                   OR cognitive_load IS NOT NULL OR subjective_energy IS NOT NULL)
+            ORDER BY date
+            """,
+            (start_date, end_date),
+        ).fetchall())
+        filtered: list[dict] = []
+        for row in rows:
+            keep: dict = {"date": row["date"]}
+            if keep_journal:
+                keep["focus"] = row.get("focus")
+                keep["mood_tag"] = row.get("mood_tag")
+                keep["subjective_energy"] = row.get("subjective_energy")
+            if keep_cognition:
+                keep["cognitive_load"] = row.get("cognitive_load")
+                keep["avg_rt_ms"] = row.get("avg_rt_ms")
+            if any(v is not None for k, v in keep.items() if k != "date"):
+                filtered.append(keep)
+        if filtered:
+            result["journal_cognition"] = filtered
+
     return result
 
 
@@ -5235,7 +5358,8 @@ async def orient_analyze(body: OrientAnalyzeBody):
 
     conn = get_db()
     try:
-        metrics = _gather_orient_metrics(conn, window_days=max(7, min(30, body.window_days)))
+        ctx = _get_ai_context(conn)
+        metrics = _gather_orient_metrics(conn, ctx, window_days=max(7, min(30, body.window_days)))
     finally:
         conn.close()
 
@@ -5383,7 +5507,11 @@ _ORIENT_EXPLAIN_TOOL = {
 
 
 def _gather_explain_context(
-    conn: sqlite3.Connection, metric: str, target_date: str, window_days: int = 3
+    conn: sqlite3.Connection,
+    metric: str,
+    target_date: str,
+    ctx: dict[str, bool],
+    window_days: int = 3,
 ) -> dict:
     try:
         td = date.fromisoformat(target_date)
@@ -5395,69 +5523,71 @@ def _gather_explain_context(
     def rows_to_list(rows: list) -> list[dict]:
         return [dict(r) for r in rows]
 
-    hr = rows_to_list(conn.execute(
-        "SELECT date, resting_hr FROM heart_rate_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start, end),
-    ).fetchall())
-    hrv = rows_to_list(conn.execute(
-        "SELECT date, weekly_avg, last_night_avg, baseline_balanced_low, baseline_balanced_upper "
-        "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start, end),
-    ).fetchall())
-    sleep = rows_to_list(conn.execute(
-        "SELECT date, sleep_score, sleep_score_quality, "
-        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
-        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
-        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, avg_spo2, avg_sleep_stress "
-        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start, end),
-    ).fetchall())
-    stress = rows_to_list(conn.execute(
-        "SELECT date, avg_stress, max_stress FROM stress_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start, end),
-    ).fetchall())
-    body_battery = rows_to_list(conn.execute(
-        "SELECT date, charged, drained FROM body_battery_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (start, end),
-    ).fetchall())
-    workouts = rows_to_list(conn.execute(
-        "SELECT w.date, w.name, "
-        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
-        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
-        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
-        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
-        "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date",
-        (start, end),
-    ).fetchall())
-    supplements = rows_to_list(conn.execute(
-        "SELECT i.date, s.name, s.dosage, s.time_of_day, i.taken "
-        "FROM journal_supplement_intake i JOIN supplements s ON s.id = i.supplement_id "
-        "WHERE i.date BETWEEN ? AND ? ORDER BY i.date, s.sort_order",
-        (start, end),
-    ).fetchall())
-    meals = rows_to_list(conn.execute(
-        "SELECT m.date, m.name, m.time, "
-        "MAX(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount END) AS calories_kcal, "
-        "MAX(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount END) AS protein_g, "
-        "MAX(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount END) AS carbs_g "
-        "FROM meals m LEFT JOIN meal_nutrients mn ON mn.meal_id = m.id "
-        "WHERE m.date BETWEEN ? AND ? GROUP BY m.id ORDER BY m.date, m.time",
-        (start, end),
-    ).fetchall())
-
-    return {
+    out: dict = {
         "target_date": target_date,
         "metric": metric,
         "context_window": f"{start} to {end}",
-        "heart_rate": hr,
-        "hrv": hrv,
-        "sleep": sleep,
-        "stress": stress,
-        "body_battery": body_battery,
-        "workouts": workouts,
-        "supplements": supplements,
-        "meals": meals,
     }
+
+    if ctx.get("heart_rate"):
+        out["heart_rate"] = rows_to_list(conn.execute(
+            "SELECT date, resting_hr FROM heart_rate_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start, end),
+        ).fetchall())
+    if ctx.get("hrv"):
+        out["hrv"] = rows_to_list(conn.execute(
+            "SELECT date, weekly_avg, last_night_avg, baseline_balanced_low, baseline_balanced_upper "
+            "FROM hrv_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start, end),
+        ).fetchall())
+    if ctx.get("sleep"):
+        out["sleep"] = rows_to_list(conn.execute(
+            "SELECT date, sleep_score, sleep_score_quality, "
+            "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+            "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+            "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, avg_spo2, avg_sleep_stress "
+            "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start, end),
+        ).fetchall())
+    if ctx.get("stress"):
+        out["stress"] = rows_to_list(conn.execute(
+            "SELECT date, avg_stress, max_stress FROM stress_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start, end),
+        ).fetchall())
+    if ctx.get("body_battery"):
+        out["body_battery"] = rows_to_list(conn.execute(
+            "SELECT date, charged, drained FROM body_battery_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (start, end),
+        ).fetchall())
+    if ctx.get("strong_workouts"):
+        out["workouts"] = rows_to_list(conn.execute(
+            "SELECT w.date, w.name, "
+            "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+            "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+            "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+            "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+            "WHERE w.date BETWEEN ? AND ? GROUP BY w.id ORDER BY w.date",
+            (start, end),
+        ).fetchall())
+    if ctx.get("supplements"):
+        out["supplements"] = rows_to_list(conn.execute(
+            "SELECT i.date, s.name, s.dosage, s.time_of_day, i.taken "
+            "FROM journal_supplement_intake i JOIN supplements s ON s.id = i.supplement_id "
+            "WHERE i.date BETWEEN ? AND ? ORDER BY i.date, s.sort_order",
+            (start, end),
+        ).fetchall())
+    if ctx.get("nutrition"):
+        out["meals"] = rows_to_list(conn.execute(
+            "SELECT m.date, m.name, m.time, "
+            "MAX(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount END) AS calories_kcal, "
+            "MAX(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount END) AS protein_g, "
+            "MAX(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount END) AS carbs_g "
+            "FROM meals m LEFT JOIN meal_nutrients mn ON mn.meal_id = m.id "
+            "WHERE m.date BETWEEN ? AND ? GROUP BY m.id ORDER BY m.date, m.time",
+            (start, end),
+        ).fetchall())
+
+    return out
 
 
 class OrientExplainBody(BaseModel):
@@ -5479,7 +5609,8 @@ async def orient_explain(body: OrientExplainBody):
 
     conn = get_db()
     try:
-        context = _gather_explain_context(conn, body.metric, body.date)
+        ctx = _get_ai_context(conn)
+        context = _gather_explain_context(conn, body.metric, body.date, ctx)
     finally:
         conn.close()
 
@@ -5599,7 +5730,7 @@ _MORNING_BRIEFING_TOOL = {
 }
 
 
-def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
+def _gather_morning_metrics(conn: sqlite3.Connection, ctx: dict[str, bool]) -> dict:
     today = date.today()
     yesterday = today - timedelta(days=1)
     today_str = today.isoformat()
@@ -5611,151 +5742,150 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
     def rows_to_list(rows) -> list[dict]:
         return [dict(r) for r in rows]
 
-    sleep = row_to_dict(conn.execute(
-        "SELECT date, sleep_score, sleep_score_quality, "
-        "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
-        "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
-        "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
-        "ROUND(light_sleep_seconds / 3600.0, 1) AS light_hours, "
-        "sleep_start, sleep_end, avg_spo2, avg_sleep_stress "
-        "FROM sleep_daily WHERE date = ?",
-        (today_str,),
-    ).fetchone())
+    metrics: dict = {
+        "briefing_date": today_str,
+        "yesterday": yesterday_str,
+    }
 
-    hrv = row_to_dict(conn.execute(
-        "SELECT weekly_avg, last_night_avg, "
-        "baseline_balanced_low, baseline_balanced_upper "
-        "FROM hrv_daily WHERE date = ?",
-        (today_str,),
-    ).fetchone())
+    if ctx.get("sleep"):
+        metrics["last_night_sleep"] = row_to_dict(conn.execute(
+            "SELECT date, sleep_score, sleep_score_quality, "
+            "ROUND(sleep_time_seconds / 3600.0, 1) AS sleep_hours, "
+            "ROUND(deep_sleep_seconds / 3600.0, 1) AS deep_hours, "
+            "ROUND(rem_sleep_seconds / 3600.0, 1) AS rem_hours, "
+            "ROUND(light_sleep_seconds / 3600.0, 1) AS light_hours, "
+            "sleep_start, sleep_end, avg_spo2, avg_sleep_stress "
+            "FROM sleep_daily WHERE date = ?",
+            (today_str,),
+        ).fetchone())
 
-    hr = row_to_dict(conn.execute(
-        "SELECT resting_hr, avg_7d_resting_hr FROM heart_rate_daily WHERE date = ?",
-        (today_str,),
-    ).fetchone())
+    if ctx.get("hrv"):
+        metrics["hrv"] = row_to_dict(conn.execute(
+            "SELECT weekly_avg, last_night_avg, "
+            "baseline_balanced_low, baseline_balanced_upper "
+            "FROM hrv_daily WHERE date = ?",
+            (today_str,),
+        ).fetchone())
 
-    body_battery = row_to_dict(conn.execute(
-        """
-        SELECT
-            (SELECT level FROM body_battery_readings
-             WHERE date = ? ORDER BY timestamp DESC LIMIT 1) AS current_level,
-            (SELECT MAX(level) FROM body_battery_readings WHERE date = ?) AS peak_today,
-            (SELECT MIN(level) FROM body_battery_readings WHERE date = ?) AS low_today,
-            (SELECT charged FROM body_battery_daily WHERE date = ?) AS charged,
-            (SELECT drained FROM body_battery_daily WHERE date = ?) AS drained
-        """,
-        (today_str, today_str, today_str, today_str, today_str),
-    ).fetchone())
+    if ctx.get("heart_rate"):
+        metrics["resting_hr"] = row_to_dict(conn.execute(
+            "SELECT resting_hr, avg_7d_resting_hr FROM heart_rate_daily WHERE date = ?",
+            (today_str,),
+        ).fetchone())
 
-    garmin_sessions = rows_to_list(conn.execute(
-        "SELECT name, sport_type, "
-        "ROUND(duration_sec / 60.0) AS duration_min, "
-        "ROUND(distance_m / 1000.0, 2) AS distance_km, "
-        "avg_hr, calories, training_effect, anaerobic_te "
-        "FROM garmin_activities WHERE date = ? ORDER BY start_time",
-        (yesterday_str,),
-    ).fetchall())
+    if ctx.get("body_battery"):
+        metrics["body_battery"] = row_to_dict(conn.execute(
+            """
+            SELECT
+                (SELECT level FROM body_battery_readings
+                 WHERE date = ? ORDER BY timestamp DESC LIMIT 1) AS current_level,
+                (SELECT MAX(level) FROM body_battery_readings WHERE date = ?) AS peak_today,
+                (SELECT MIN(level) FROM body_battery_readings WHERE date = ?) AS low_today,
+                (SELECT charged FROM body_battery_daily WHERE date = ?) AS charged,
+                (SELECT drained FROM body_battery_daily WHERE date = ?) AS drained
+            """,
+            (today_str, today_str, today_str, today_str, today_str),
+        ).fetchone())
 
-    strong_workouts = rows_to_list(conn.execute(
-        "SELECT w.name, "
-        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
-        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
-        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
-        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
-        "WHERE w.date = ? GROUP BY w.id ORDER BY w.date",
-        (yesterday_str,),
-    ).fetchall())
+    if ctx.get("garmin_activities"):
+        metrics["yesterday_garmin_sessions"] = rows_to_list(conn.execute(
+            "SELECT name, sport_type, "
+            "ROUND(duration_sec / 60.0) AS duration_min, "
+            "ROUND(distance_m / 1000.0, 2) AS distance_km, "
+            "avg_hr, calories, training_effect, anaerobic_te "
+            "FROM garmin_activities WHERE date = ? ORDER BY start_time",
+            (yesterday_str,),
+        ).fetchall())
 
-    steps = row_to_dict(conn.execute(
-        "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
-        (yesterday_str,),
-    ).fetchone())
+    if ctx.get("strong_workouts"):
+        metrics["yesterday_strong_workouts"] = rows_to_list(conn.execute(
+            "SELECT w.name, "
+            "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+            "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+            "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+            "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+            "WHERE w.date = ? GROUP BY w.id ORDER BY w.date",
+            (yesterday_str,),
+        ).fetchall())
 
-    stress = row_to_dict(conn.execute(
-        "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
-        (yesterday_str,),
-    ).fetchone())
+    if ctx.get("steps"):
+        metrics["yesterday_steps"] = row_to_dict(conn.execute(
+            "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
+            (yesterday_str,),
+        ).fetchone())
 
-    journal = row_to_dict(conn.execute(
-        "SELECT morning_feeling, drank_alcohol, alcohol_amount, notes "
-        "FROM journal_entries WHERE date = ?",
-        (yesterday_str,),
-    ).fetchone())
+    if ctx.get("stress"):
+        metrics["yesterday_stress"] = row_to_dict(conn.execute(
+            "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
+            (yesterday_str,),
+        ).fetchone())
 
-    nutrition = row_to_dict(conn.execute(
-        "SELECT "
-        "ROUND(SUM(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount ELSE 0 END)) AS calories_kcal, "
-        "ROUND(SUM(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount ELSE 0 END)) AS protein_g, "
-        "ROUND(SUM(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount ELSE 0 END)) AS carbs_g, "
-        "ROUND(SUM(CASE WHEN mn.nutrient_key='fat_g' THEN mn.amount ELSE 0 END)) AS fat_g "
-        "FROM meals m JOIN meal_nutrients mn ON mn.meal_id = m.id "
-        "WHERE m.date = ?",
-        (yesterday_str,),
-    ).fetchone())
+    if ctx.get("journal"):
+        metrics["yesterday_journal"] = row_to_dict(conn.execute(
+            "SELECT morning_feeling, drank_alcohol, alcohol_amount, notes "
+            "FROM journal_entries WHERE date = ?",
+            (yesterday_str,),
+        ).fetchone())
 
-    if _water_excluded_for_date(conn, yesterday_str):
-        water = None
-    else:
+    if ctx.get("nutrition"):
+        metrics["yesterday_nutrition"] = row_to_dict(conn.execute(
+            "SELECT "
+            "ROUND(SUM(CASE WHEN mn.nutrient_key='calories_kcal' THEN mn.amount ELSE 0 END)) AS calories_kcal, "
+            "ROUND(SUM(CASE WHEN mn.nutrient_key='protein_g' THEN mn.amount ELSE 0 END)) AS protein_g, "
+            "ROUND(SUM(CASE WHEN mn.nutrient_key='carbs_g' THEN mn.amount ELSE 0 END)) AS carbs_g, "
+            "ROUND(SUM(CASE WHEN mn.nutrient_key='fat_g' THEN mn.amount ELSE 0 END)) AS fat_g "
+            "FROM meals m JOIN meal_nutrients mn ON mn.meal_id = m.id "
+            "WHERE m.date = ?",
+            (yesterday_str,),
+        ).fetchone())
+
+    if ctx.get("water") and not _water_excluded_for_date(conn, yesterday_str):
         water = row_to_dict(conn.execute(
             "SELECT ROUND(SUM(amount_ml)) AS total_ml FROM water_intake WHERE date = ?",
             (yesterday_str,),
         ).fetchone())
+        if water is not None:
+            metrics["yesterday_water"] = water
 
-    planned_activities = rows_to_list(conn.execute(
-        "SELECT sport_type, target_distance_m, target_duration_sec, notes "
-        "FROM planned_activities WHERE date = ? ORDER BY id",
-        (today_str,),
-    ).fetchall())
+    if ctx.get("planned_activities"):
+        metrics["todays_planned_activities"] = rows_to_list(conn.execute(
+            "SELECT sport_type, target_distance_m, target_duration_sec, notes "
+            "FROM planned_activities WHERE date = ? ORDER BY id",
+            (today_str,),
+        ).fetchall())
 
-    supplements = rows_to_list(conn.execute(
-        "SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken "
-        "FROM supplements s "
-        "LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ? "
-        "ORDER BY s.sort_order",
-        (today_str,),
-    ).fetchall())
+    if ctx.get("supplements"):
+        metrics["todays_supplements"] = rows_to_list(conn.execute(
+            "SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken "
+            "FROM supplements s "
+            "LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ? "
+            "ORDER BY s.sort_order",
+            (today_str,),
+        ).fetchall())
 
-    bp = conn.execute(
-        "SELECT id, date FROM bloodwork_panels "
-        "WHERE date >= date('now', '-' || ? || ' days') "
-        "ORDER BY date DESC LIMIT 1",
-        (BLOODWORK_AI_MAX_AGE_DAYS,),
-    ).fetchone()
-    open_bloodwork_alerts: list[str] = []
-    if bp:
-        flagged = conn.execute(
-            "SELECT analyte, value, value_text, unit, flag "
-            "FROM bloodwork_results WHERE panel_id = ? "
-            "AND flag IS NOT NULL AND flag != 'normal' "
-            "ORDER BY sort_order LIMIT 10",
-            (bp["id"],),
-        ).fetchall()
-        open_bloodwork_alerts = [
-            f"{r['analyte']}: {r['value'] if r['value'] is not None else r['value_text']} "
-            f"{r['unit'] or ''} ({r['flag']})"
-            for r in flagged
-        ]
+    if ctx.get("bloodwork"):
+        bp = conn.execute(
+            "SELECT id, date FROM bloodwork_panels "
+            "WHERE date >= date('now', '-' || ? || ' days') "
+            "ORDER BY date DESC LIMIT 1",
+            (BLOODWORK_AI_MAX_AGE_DAYS,),
+        ).fetchone()
+        if bp:
+            flagged = conn.execute(
+                "SELECT analyte, value, value_text, unit, flag "
+                "FROM bloodwork_results WHERE panel_id = ? "
+                "AND flag IS NOT NULL AND flag != 'normal' "
+                "ORDER BY sort_order LIMIT 10",
+                (bp["id"],),
+            ).fetchall()
+            open_bloodwork_alerts = [
+                f"{r['analyte']}: {r['value'] if r['value'] is not None else r['value_text']} "
+                f"{r['unit'] or ''} ({r['flag']})"
+                for r in flagged
+            ]
+            if open_bloodwork_alerts:
+                metrics["open_bloodwork_alerts"] = open_bloodwork_alerts
 
-    metrics = {
-        "briefing_date": today_str,
-        "yesterday": yesterday_str,
-        "last_night_sleep": sleep,
-        "hrv": hrv,
-        "resting_hr": hr,
-        "body_battery": body_battery,
-        "yesterday_garmin_sessions": garmin_sessions,
-        "yesterday_strong_workouts": strong_workouts,
-        "yesterday_steps": steps,
-        "yesterday_stress": stress,
-        "yesterday_journal": journal,
-        "yesterday_nutrition": nutrition,
-        "todays_planned_activities": planned_activities,
-        "todays_supplements": supplements,
-    }
-    if water is not None:
-        metrics["yesterday_water"] = water
-    if open_bloodwork_alerts:
-        metrics["open_bloodwork_alerts"] = open_bloodwork_alerts
     return metrics
 
 
@@ -5774,11 +5904,13 @@ async def morning_briefing(body: MorningBriefingBody):
     today_str = date.today().isoformat()
     conn = get_db()
     try:
+        ctx = _get_ai_context(conn)
+        ctx_hash = _ai_context_hash(ctx)
         if not body.regenerate:
             cached = conn.execute(
                 "SELECT payload_json, model, provider, generated_at "
-                "FROM briefings WHERE date = ? AND kind = 'morning'",
-                (today_str,),
+                "FROM briefings WHERE date = ? AND kind = 'morning' AND context_hash = ?",
+                (today_str, ctx_hash),
             ).fetchone()
             if cached:
                 payload = json.loads(cached["payload_json"])
@@ -5790,7 +5922,7 @@ async def morning_briefing(body: MorningBriefingBody):
                     "briefing_date": today_str,
                     "cached": True,
                 }
-        metrics = _gather_morning_metrics(conn)
+        metrics = _gather_morning_metrics(conn, ctx)
     finally:
         conn.close()
 
@@ -5835,9 +5967,9 @@ async def morning_briefing(body: MorningBriefingBody):
     try:
         conn2.execute(
             "INSERT OR REPLACE INTO briefings "
-            "(date, kind, payload_json, model, provider, generated_at) "
-            "VALUES (?, 'morning', ?, ?, ?, ?)",
-            (today_str, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at),
+            "(date, kind, payload_json, model, provider, generated_at, context_hash) "
+            "VALUES (?, 'morning', ?, ?, ?, ?, ?)",
+            (today_str, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at, ctx_hash),
         )
         conn2.commit()
     finally:
@@ -5935,7 +6067,9 @@ _NIGHT_BRIEFING_TOOL = {
 }
 
 
-def _gather_night_briefing_data(conn: sqlite3.Connection, target_date: str) -> dict:
+def _gather_night_briefing_data(
+    conn: sqlite3.Connection, target_date: str, ctx: dict[str, bool]
+) -> dict:
     target = date.fromisoformat(target_date)
     yesterday = (target - timedelta(days=1)).isoformat()
     window_start = (target - timedelta(days=14)).isoformat()
@@ -5943,125 +6077,120 @@ def _gather_night_briefing_data(conn: sqlite3.Connection, target_date: str) -> d
     def rows_to_list(rows: list) -> list[dict]:
         return [dict(r) for r in rows]
 
-    activities = rows_to_list(conn.execute(
-        "SELECT name, sport_type, ROUND(duration_sec/60.0) AS duration_min, "
-        "ROUND(distance_m/1000.0, 2) AS distance_km, avg_hr, calories, training_effect "
-        "FROM garmin_activities WHERE date = ? ORDER BY start_time",
-        (target_date,),
-    ).fetchall())
+    out: dict = {"target_date": target_date}
 
-    workouts = rows_to_list(conn.execute(
-        "SELECT w.name, "
-        "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
-        "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
-        "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
-        "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
-        "WHERE w.date = ? GROUP BY w.id ORDER BY w.end_date",
-        (target_date,),
-    ).fetchall())
+    if ctx.get("garmin_activities"):
+        out["activities_today"] = rows_to_list(conn.execute(
+            "SELECT name, sport_type, ROUND(duration_sec/60.0) AS duration_min, "
+            "ROUND(distance_m/1000.0, 2) AS distance_km, avg_hr, calories, training_effect "
+            "FROM garmin_activities WHERE date = ? ORDER BY start_time",
+            (target_date,),
+        ).fetchall())
 
-    steps_row = conn.execute(
-        "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
-        (target_date,),
-    ).fetchone()
-    steps = dict(steps_row) if steps_row else {}
+    if ctx.get("strong_workouts"):
+        out["workouts_today"] = rows_to_list(conn.execute(
+            "SELECT w.name, "
+            "COALESCE(SUM(CASE WHEN ws.set_type='working' THEN 1 ELSE 0 END), 0) AS working_sets, "
+            "ROUND(COALESCE(SUM(CASE WHEN ws.set_type='working' "
+            "THEN COALESCE(ws.weight_kg * ws.reps, 0) ELSE 0 END), 0), 1) AS volume_kg "
+            "FROM workouts w LEFT JOIN workout_sets ws ON ws.workout_id = w.id "
+            "WHERE w.date = ? GROUP BY w.id ORDER BY w.end_date",
+            (target_date,),
+        ).fetchall())
 
-    stress_row = conn.execute(
-        "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
-        (target_date,),
-    ).fetchone()
-    stress_today = dict(stress_row) if stress_row else {}
+    if ctx.get("steps"):
+        steps_row = conn.execute(
+            "SELECT total_steps, step_goal FROM steps_daily WHERE date = ?",
+            (target_date,),
+        ).fetchone()
+        out["steps_today"] = dict(steps_row) if steps_row else {}
 
-    hrv_row = conn.execute(
-        "SELECT last_night_avg, weekly_avg, baseline_balanced_low, baseline_balanced_upper "
-        "FROM hrv_daily WHERE date = ?",
-        (yesterday,),
-    ).fetchone()
-    hrv_last_night = dict(hrv_row) if hrv_row else {}
+    if ctx.get("stress"):
+        stress_row = conn.execute(
+            "SELECT avg_stress, max_stress FROM stress_daily WHERE date = ?",
+            (target_date,),
+        ).fetchone()
+        out["stress_today"] = dict(stress_row) if stress_row else {}
 
-    sleep_window = rows_to_list(conn.execute(
-        "SELECT date, ROUND(sleep_time_seconds/3600.0, 1) AS sleep_hours, sleep_score, "
-        "sleep_start, sleep_end "
-        "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
-        (window_start, yesterday),
-    ).fetchall())
+    if ctx.get("hrv"):
+        hrv_row = conn.execute(
+            "SELECT last_night_avg, weekly_avg, baseline_balanced_low, baseline_balanced_upper "
+            "FROM hrv_daily WHERE date = ?",
+            (yesterday,),
+        ).fetchone()
+        out["hrv_last_night"] = dict(hrv_row) if hrv_row else {}
 
-    meal_rows = conn.execute(
-        "SELECT id, time, name FROM meals WHERE date = ? ORDER BY time, id",
-        (target_date,),
-    ).fetchall()
-    meals_today = []
-    nutrition_totals: dict[str, float] = {}
-    for meal in meal_rows:
-        nutrients = {r["nutrient_key"]: r["amount"] for r in conn.execute(
-            "SELECT nutrient_key, amount FROM meal_nutrients WHERE meal_id = ?",
-            (meal["id"],),
-        ).fetchall()}
-        meals_today.append({"time": meal["time"], "name": meal["name"], "nutrients": nutrients})
-        for k, v in nutrients.items():
-            nutrition_totals[k] = round(nutrition_totals.get(k, 0) + v, 1)
+    if ctx.get("sleep"):
+        out["sleep_last_14_days"] = rows_to_list(conn.execute(
+            "SELECT date, ROUND(sleep_time_seconds/3600.0, 1) AS sleep_hours, sleep_score, "
+            "sleep_start, sleep_end "
+            "FROM sleep_daily WHERE date BETWEEN ? AND ? ORDER BY date",
+            (window_start, yesterday),
+        ).fetchall())
 
-    last_meal_row = conn.execute(
-        "SELECT time FROM meals WHERE date = ? AND time IS NOT NULL ORDER BY time DESC LIMIT 1",
-        (target_date,),
-    ).fetchone()
-    last_meal_time = last_meal_row["time"] if last_meal_row else None
+    if ctx.get("nutrition"):
+        meal_rows = conn.execute(
+            "SELECT id, time, name FROM meals WHERE date = ? ORDER BY time, id",
+            (target_date,),
+        ).fetchall()
+        meals_today = []
+        nutrition_totals: dict[str, float] = {}
+        for meal in meal_rows:
+            nutrients = {r["nutrient_key"]: r["amount"] for r in conn.execute(
+                "SELECT nutrient_key, amount FROM meal_nutrients WHERE meal_id = ?",
+                (meal["id"],),
+            ).fetchall()}
+            meals_today.append({"time": meal["time"], "name": meal["name"], "nutrients": nutrients})
+            for k, v in nutrients.items():
+                nutrition_totals[k] = round(nutrition_totals.get(k, 0) + v, 1)
+        out["meals_today"] = meals_today
+        last_meal_row = conn.execute(
+            "SELECT time FROM meals WHERE date = ? AND time IS NOT NULL ORDER BY time DESC LIMIT 1",
+            (target_date,),
+        ).fetchone()
+        out["last_meal_time"] = last_meal_row["time"] if last_meal_row else None
+        out["nutrition_totals_today"] = nutrition_totals
+        goal_rows = conn.execute("SELECT nutrient_key, amount FROM nutrient_goals").fetchall()
+        out["nutrition_goals"] = {r["nutrient_key"]: r["amount"] for r in goal_rows}
 
-    water_row = conn.execute(
-        "SELECT COALESCE(SUM(amount_ml), 0) AS total FROM water_intake WHERE date = ?",
-        (target_date,),
-    ).fetchone()
-    water_ml = water_row["total"] if water_row else 0
+    if ctx.get("water"):
+        water_row = conn.execute(
+            "SELECT COALESCE(SUM(amount_ml), 0) AS total FROM water_intake WHERE date = ?",
+            (target_date,),
+        ).fetchone()
+        out["water_ml_today"] = water_row["total"] if water_row else 0
 
-    evening_pending = rows_to_list(conn.execute(
-        """
-        SELECT s.name, s.dosage
-        FROM supplements s
-        LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
-        WHERE s.time_of_day = 'evening' AND COALESCE(i.taken, 0) = 0
-        ORDER BY s.sort_order, s.id
-        """,
-        (target_date,),
-    ).fetchall())
+    if ctx.get("supplements"):
+        out["evening_supplements_pending"] = rows_to_list(conn.execute(
+            """
+            SELECT s.name, s.dosage
+            FROM supplements s
+            LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
+            WHERE s.time_of_day = 'evening' AND COALESCE(i.taken, 0) = 0
+            ORDER BY s.sort_order, s.id
+            """,
+            (target_date,),
+        ).fetchall())
+        out["all_supplements_today"] = rows_to_list(conn.execute(
+            """
+            SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken
+            FROM supplements s
+            LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
+            ORDER BY CASE s.time_of_day WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'evening' THEN 2 END,
+                     s.sort_order, s.id
+            """,
+            (target_date,),
+        ).fetchall())
 
-    all_supplements = rows_to_list(conn.execute(
-        """
-        SELECT s.name, s.dosage, s.time_of_day, COALESCE(i.taken, 0) AS taken
-        FROM supplements s
-        LEFT JOIN journal_supplement_intake i ON i.supplement_id = s.id AND i.date = ?
-        ORDER BY CASE s.time_of_day WHEN 'morning' THEN 0 WHEN 'noon' THEN 1 WHEN 'evening' THEN 2 END,
-                 s.sort_order, s.id
-        """,
-        (target_date,),
-    ).fetchall())
+    if ctx.get("journal"):
+        journal_row = conn.execute(
+            "SELECT morning_feeling, notes, followed_supplements, drank_alcohol, "
+            "alcohol_amount, is_work_day FROM journal_entries WHERE date = ?",
+            (target_date,),
+        ).fetchone()
+        out["journal_entry_today"] = dict(journal_row) if journal_row else {}
 
-    journal_row = conn.execute(
-        "SELECT morning_feeling, notes, followed_supplements, drank_alcohol, "
-        "alcohol_amount, is_work_day FROM journal_entries WHERE date = ?",
-        (target_date,),
-    ).fetchone()
-    journal_entry = dict(journal_row) if journal_row else {}
-
-    goal_rows = conn.execute("SELECT nutrient_key, amount FROM nutrient_goals").fetchall()
-    nutrition_goals = {r["nutrient_key"]: r["amount"] for r in goal_rows}
-
-    return {
-        "target_date": target_date,
-        "activities_today": activities,
-        "workouts_today": workouts,
-        "steps_today": steps,
-        "stress_today": stress_today,
-        "hrv_last_night": hrv_last_night,
-        "sleep_last_14_days": sleep_window,
-        "meals_today": meals_today,
-        "last_meal_time": last_meal_time,
-        "nutrition_totals_today": nutrition_totals,
-        "nutrition_goals": nutrition_goals,
-        "water_ml_today": water_ml,
-        "evening_supplements_pending": evening_pending,
-        "all_supplements_today": all_supplements,
-        "journal_entry_today": journal_entry,
-    }
+    return out
 
 
 class NightBriefingBody(BaseModel):
@@ -6081,10 +6210,13 @@ async def night_briefing(body: NightBriefingBody):
 
     conn = get_db()
     try:
+        ctx = _get_ai_context(conn)
+        ctx_hash = _ai_context_hash(ctx)
         if not body.regenerate:
             cached = conn.execute(
-                "SELECT payload_json, model FROM briefings WHERE date = ? AND kind = 'night'",
-                (target_date,),
+                "SELECT payload_json, model FROM briefings "
+                "WHERE date = ? AND kind = 'night' AND context_hash = ?",
+                (target_date, ctx_hash),
             ).fetchone()
             if cached:
                 return {
@@ -6094,7 +6226,7 @@ async def night_briefing(body: NightBriefingBody):
                     "cached": True,
                 }
 
-        data = _gather_night_briefing_data(conn, target_date)
+        data = _gather_night_briefing_data(conn, target_date, ctx)
     finally:
         conn.close()
 
@@ -6143,9 +6275,9 @@ async def night_briefing(body: NightBriefingBody):
     try:
         conn.execute(
             "INSERT OR REPLACE INTO briefings "
-            "(date, kind, payload_json, model, provider, generated_at) "
-            "VALUES (?, 'night', ?, ?, ?, ?)",
-            (target_date, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at),
+            "(date, kind, payload_json, model, provider, generated_at, context_hash) "
+            "VALUES (?, 'night', ?, ?, ?, ?, ?)",
+            (target_date, json.dumps(result), AI_MODEL, AI_PROVIDER, generated_at, ctx_hash),
         )
         conn.commit()
     finally:
@@ -6276,7 +6408,8 @@ async def create_bloodwork_panel(body: BloodworkPanelIn):
                 (panel_id, body.source_upload_id),
             )
         conn.commit()
-        if AI_AVAILABLE and body.results:
+        ctx = _get_ai_context(conn)
+        if AI_AVAILABLE and body.results and ctx.get("bloodwork"):
             try:
                 prior = _fetch_prior_panels_for_comparison(conn, panel_id, body.date)
                 if prior:
