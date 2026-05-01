@@ -4169,6 +4169,8 @@ class DemoProvider(AIProvider):
     ) -> dict:
         await asyncio.sleep(0.4)
         tool_name = tool.get("name")
+        if tool_name == "record_meal_estimate":
+            return _demo_meal_payload(tool)
         if tool_name == "record_panel_comparison":
             return _demo_comparison_payload()
         if tool_name == "record_health_orientation":
@@ -4453,6 +4455,11 @@ class AnalyzeImageBody(BaseModel):
     user_notes: Optional[str] = None
 
 
+class AnalyzeMealTextBody(BaseModel):
+    description: str
+    user_notes: Optional[str] = None
+
+
 def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
     """Build a strict tool-use schema from the live nutrient_defs table so a
     newly-added custom nutrient is picked up without a code change."""
@@ -4598,6 +4605,64 @@ async def analyze_meal_image(body: AnalyzeImageBody):
         user_text=user_text,
         media_b64=img_b64,
         mime=mime,
+        tool=tool,
+    )
+
+    raw_nutrients = payload.get("nutrients", {}) or {}
+    nutrients: list[dict] = []
+    unknown_keys: list[str] = []
+    for key, value in raw_nutrients.items():
+        if value is None:
+            unknown_keys.append(key)
+        else:
+            try:
+                nutrients.append({"nutrient_key": key, "amount": float(value)})
+            except (TypeError, ValueError):
+                unknown_keys.append(key)
+
+    return {
+        "model": _get_ai_provider().model,
+        "suggested_name": payload.get("suggested_name") or "Meal",
+        "suggested_notes": payload.get("suggested_notes") or "",
+        "confidence": payload.get("confidence") or "medium",
+        "nutrients": nutrients,
+        "unknown_keys": sorted(unknown_keys),
+    }
+
+
+@app.post("/api/meals/analyze-text")
+async def analyze_meal_text(body: AnalyzeMealTextBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    description = (body.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=422, detail="description is required")
+
+    conn = get_db()
+    try:
+        tool = _build_analyze_tool_schema(conn)
+    finally:
+        conn.close()
+
+    system_prompt = (
+        "You are a registered-dietitian-grade nutrient estimator. Given a free-text meal "
+        "description, call record_meal_estimate with your best numeric estimate for each "
+        "listed nutrient. Estimate a single serving as described. Never invent numbers — "
+        "prefer null when uncertain. The user knows what they ate; trust their description "
+        "for ingredients and portion sizes."
+    )
+    user_text = _append_user_context(
+        f"Estimate the nutrient content of this meal:\n\n{description}",
+        body.user_notes,
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
         tool=tool,
     )
 

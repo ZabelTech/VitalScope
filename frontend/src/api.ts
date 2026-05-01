@@ -580,6 +580,25 @@ export async function analyzeMealImage(
   return postAnalyze("/api/meals/analyze-image", upload_id, user_notes);
 }
 
+export async function analyzeMealText(
+  description: string,
+  user_notes?: string,
+): Promise<MealAnalysisResult> {
+  const body: { description: string; user_notes?: string } = { description };
+  const trimmed = user_notes?.trim();
+  if (trimmed) body.user_notes = trimmed;
+  const res = await apiFetch("/api/meals/analyze-text", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function analyzeFormCheckImage(
   upload_id: number,
   user_notes?: string,
