@@ -52,15 +52,15 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   margin-bottom: 16px;
 }
 
-/* Nav bar — brand + cog on the top row, nav links wrap below on mobile */
+/* Nav bar — brand + entries + cog on the top row, nav links wrap below on mobile */
 .top-bar {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   grid-template-areas:
-    "brand cog"
-    "nav   nav";
+    "brand entries cog"
+    "nav   nav     nav";
   align-items: center;
-  column-gap: 12px;
+  column-gap: 8px;
   row-gap: 12px;
   margin-bottom: 20px;
 }
@@ -68,6 +68,7 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 .navbar-brand { grid-area: brand; }
 .nav-links    { grid-area: nav; }
 .nav-cog      { grid-area: cog; }
+.nav-entries  { grid-area: entries; }
 
 .top-bar h1 {
   font-size: clamp(1.25rem, 1rem + 2vw, 1.5rem);
@@ -126,8 +127,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 @media (min-width: 640px) {
   .top-bar {
-    grid-template-columns: auto 1fr auto;
-    grid-template-areas: "brand nav cog";
+    grid-template-columns: auto 1fr auto auto;
+    grid-template-areas: "brand nav entries cog";
     column-gap: 24px;
     row-gap: 0;
     margin-bottom: 32px;

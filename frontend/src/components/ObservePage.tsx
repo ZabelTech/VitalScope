@@ -1,4 +1,6 @@
 import { format } from "date-fns";
+import { ActivityHistory } from "./ActivityHistory";
+import { FormCheckTimeline } from "./FormCheckTimeline";
 import { MetaboliserProfile } from "./MetaboliserProfile";
 import { OodaPage } from "./OodaPage";
 import { TodayMetrics } from "./TodayMetrics";
@@ -15,6 +17,8 @@ export function ObservePage() {
           label: "Metaboliser profile",
           content: <MetaboliserProfile date={today} />,
         },
+        { id: "visual-record", label: "Visual record", content: <FormCheckTimeline /> },
+        { id: "activity", label: "Activity history", content: <ActivityHistory /> },
       ]}
     />
   );

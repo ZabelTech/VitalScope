@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { NavBar } from "./components/NavBar";
 import { ActPage } from "./components/ActPage";
-import { DailyPage } from "./components/DailyPage";
+import { EntriesPage } from "./components/EntriesPage";
 import { LoginForm } from "./components/LoginForm";
 import { ObservePage } from "./components/ObservePage";
 import { OrientPage } from "./components/OrientPage";
@@ -63,11 +63,12 @@ function App() {
         <NavBar />
         <main>
           <Routes>
-            <Route path="/" element={<DailyPage />} />
+            <Route path="/" element={<Navigate to="/observe" replace />} />
             <Route path="/act" element={<ActPage />} />
             <Route path="/observe" element={<ObservePage />} />
             <Route path="/orient" element={<OrientPage />} />
             <Route path="/decide" element={<DecidePage />} />
+            <Route path="/entries" element={<EntriesPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/manifesto" element={<HeroPage />} />
             <Route path="/marketing" element={<MarketingPage />} />
