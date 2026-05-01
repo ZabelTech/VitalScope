@@ -34,57 +34,38 @@ test("Card help popover opens with source/meaning content", async ({ page }) => 
   await expect(popover).not.toBeVisible();
 });
 
-test("Hide icon optimistically removes the card and reveal strip restores it", async ({ page }) => {
-  // Stub the PUT so demo mode's 403 doesn't trigger the optimistic revert.
-  let hidden: string[] = [];
-  await page.route("**/api/settings/card-visibility", async (route) => {
-    if (route.request().method() === "GET") {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ hidden }),
-      });
-      return;
-    }
-    if (route.request().method() === "PUT") {
-      const body = JSON.parse(route.request().postData() || "{}") as {
-        card_id: string;
-        hidden: boolean;
-      };
-      if (body.hidden) {
-        if (!hidden.includes(body.card_id)) hidden.push(body.card_id);
-      } else {
-        hidden = hidden.filter((id) => id !== body.card_id);
-      }
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ hidden }),
-      });
-      return;
-    }
-    await route.continue();
-  });
-
+test("Hiding a card persists across a full page reload", async ({ page }) => {
+  // Drive the real flow against the live demo backend — no API mocks.
+  // The bug this catches: if the PUT is rejected (e.g. demo-mode 403
+  // or auth issue), the optimistic update gets reverted and the user
+  // sees the card snap back. Even when the optimistic step "works",
+  // the hide must survive a reload — that's the whole point of the
+  // server-backed visibility table.
   await login(page);
   await page.getByRole("link", { name: "Act", exact: true }).click();
 
-  const stepsCard = page
-    .locator(".overview-card")
-    .filter({ hasText: /^Steps/i })
-    .first();
-  await expect(stepsCard).toBeVisible();
+  const stepsCard = () =>
+    page.locator(".overview-card").filter({ hasText: /^Steps/i }).first();
+  await expect(stepsCard()).toBeVisible();
 
-  await stepsCard.getByRole("button", { name: "Hide card" }).click();
-  await expect(stepsCard).not.toBeVisible();
+  // Wait for the PUT response so we know it succeeded before reloading.
+  const putResponse = page.waitForResponse(
+    (r) =>
+      r.url().includes("/api/settings/card-visibility") &&
+      r.request().method() === "PUT",
+  );
+  await stepsCard().getByRole("button", { name: "Hide card" }).click();
+  const put = await putResponse;
+  expect(put.ok(), `PUT should succeed, got ${put.status()}`).toBeTruthy();
+  await expect(stepsCard()).toHaveCount(0);
 
+  await page.reload();
+  await expect(stepsCard()).toHaveCount(0);
+
+  // Restore so subsequent runs aren't poisoned (DB persists across runs
+  // when reuseExistingServer is true — see AGENTS.md e2e section).
   const reveal = page.locator(".cards-hidden-strip");
   await expect(reveal).toBeVisible();
-  await expect(reveal).toContainText(/1 card hidden/i);
-
   await reveal.getByRole("button", { name: "show" }).click();
-  await expect(reveal).not.toBeVisible();
-  await expect(
-    page.locator(".overview-card").filter({ hasText: /^Steps/i }).first(),
-  ).toBeVisible();
+  await expect(stepsCard()).toBeVisible();
 });

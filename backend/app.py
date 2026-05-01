@@ -479,10 +479,11 @@ class CardVisibilityUpdate(BaseModel):
 
 @app.put("/api/settings/card-visibility")
 def update_card_visibility(body: CardVisibilityUpdate, request: Request):
+    # Card visibility is a UI preference, not user data — toggling stays
+    # open in demo mode. The demo DB is wiped on restart, consistent with
+    # the banner's "edits are wiped on restart" promise.
     if not _is_authenticated(request):
         raise HTTPException(status_code=401)
-    if DEMO_MODE:
-        raise HTTPException(status_code=403, detail="Card visibility is read-only in demo mode")
     card_id = body.card_id.strip()
     if not card_id or len(card_id) > 128:
         raise HTTPException(status_code=422, detail="card_id required, max 128 chars")
