@@ -1637,18 +1637,36 @@ def _compute_processing_speed_summary(session: ProcessingSpeedSessionIn) -> dict
     }
 
 
-def _processing_speed_baseline(conn: sqlite3.Connection, target_date: str, window: int) -> dict[str, Any]:
-    rows = conn.execute(
-        """
-        SELECT throughput_pm
-        FROM cog_processing_sessions
-        WHERE quality_flag = 'ok'
-          AND date < ?
-          AND date >= date(?, ?)
-        ORDER BY date DESC, created_at DESC
-        """,
-        (target_date, target_date, f"-{window} day"),
-    ).fetchall()
+def _processing_speed_baseline(
+    conn: sqlite3.Connection,
+    target_date: str,
+    window: int,
+    before_session_id: Optional[int] = None,
+) -> dict[str, Any]:
+    if before_session_id is not None:
+        rows = conn.execute(
+            """
+            SELECT throughput_pm
+            FROM cog_processing_sessions
+            WHERE quality_flag = 'ok'
+              AND id < ?
+              AND date >= date(?, ?)
+            ORDER BY date DESC, created_at DESC
+            """,
+            (before_session_id, target_date, f"-{window} day"),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT throughput_pm
+            FROM cog_processing_sessions
+            WHERE quality_flag = 'ok'
+              AND date < ?
+              AND date >= date(?, ?)
+            ORDER BY date DESC, created_at DESC
+            """,
+            (target_date, target_date, f"-{window} day"),
+        ).fetchall()
     values = [float(r["throughput_pm"]) for r in rows]
     if len(values) < 3:
         return {"window_days": window, "count": len(values), "mean": None, "std": None, "confidence": "low"}
@@ -1729,7 +1747,7 @@ def submit_processing_speed_session(session: ProcessingSpeedSessionIn):
                 trial.presented_at,
             ),
         )
-    baseline = _processing_speed_baseline(conn, session.date, 7)
+    baseline = _processing_speed_baseline(conn, session.date, 7, before_session_id=session_id)
     delta_vs_baseline = None
     z_score = None
     if baseline["mean"] is not None:
@@ -1760,22 +1778,17 @@ def get_processing_speed_daily(
     start: Optional[str] = None,
     end: Optional[str] = None,
     baseline_window: int = Query(7, ge=3, le=30),
+    aggregate: Optional[str] = Query(None, pattern="^(day)$"),
 ):
     s, e = default_range(start, end)
     conn = get_db()
     rows = conn.execute(
         """
-        WITH latest AS (
-          SELECT date, MAX(created_at) AS created_at
-          FROM cog_processing_sessions
-          WHERE date >= ? AND date <= ?
-          GROUP BY date
-        )
-        SELECT s.date, s.attempted, s.correct, s.accuracy, s.median_rt_ms, s.throughput_pm,
-               s.quality_flag, s.created_at
-        FROM cog_processing_sessions s
-        JOIN latest l ON l.date = s.date AND l.created_at = s.created_at
-        ORDER BY s.date
+        SELECT id AS session_id, date, started_at, attempted, correct, accuracy,
+               median_rt_ms, throughput_pm, quality_flag, created_at
+        FROM cog_processing_sessions
+        WHERE date >= ? AND date <= ?
+        ORDER BY date, started_at, created_at, id
         """,
         (s, e),
     ).fetchall()
@@ -1808,26 +1821,33 @@ def get_processing_speed_daily(
 
         points.append(point)
 
+    if aggregate == "day":
+        by_date: dict[str, dict[str, Any]] = {}
+        for p in points:
+            by_date[p["date"]] = p
+        return list(by_date.values())
+
     return points
 
 
 @app.get("/api/cognition/processing-speed/baseline")
 def get_processing_speed_baseline(date: str, window: int = Query(7, ge=3, le=30)):
     conn = get_db()
-    baseline = _processing_speed_baseline(conn, date, window)
     row = conn.execute(
         """
-        SELECT throughput_pm
+        SELECT id, throughput_pm
         FROM cog_processing_sessions
         WHERE date = ?
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT 1
         """,
         (date,),
     ).fetchone()
-    conn.close()
     if row is None:
+        conn.close()
         raise HTTPException(status_code=404, detail="No processing-speed session for that date")
+    baseline = _processing_speed_baseline(conn, date, window, before_session_id=int(row["id"]))
+    conn.close()
     today_throughput = float(row["throughput_pm"])
     z_score = None
     delta_vs_baseline = None

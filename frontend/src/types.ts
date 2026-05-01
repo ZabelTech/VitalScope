@@ -196,7 +196,9 @@ export interface ProcessingSpeedSessionResult {
 }
 
 export interface ProcessingSpeedDaily {
+  session_id: number;
   date: string;
+  started_at: string;
   attempted: number;
   correct: number;
   accuracy: number;

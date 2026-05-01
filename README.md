@@ -192,7 +192,7 @@ A single FastAPI file serving routes from `vitalscope.db`. CORS is open to `http
 | Journal | `GET/POST /api/journal`, `GET /api/journal/{date}`, `GET/POST /api/journal/{date}/supplements` |
 | Cognition processing speed | `POST /api/cognition/processing-speed/session`, `GET /api/cognition/processing-speed/daily`, `GET /api/cognition/processing-speed/baseline` |
 
-`GET /api/cognition/processing-speed/daily` returns the latest session per day plus quality-adjusted chart helpers: `include_in_quality_adjusted`, `baseline_confidence`, and `adjusted_score` (rolling z-score vs prior high-quality sessions in the selected baseline window).
+`GET /api/cognition/processing-speed/daily` returns one row **per session** (not per date) so the chart can plot multiple same-day runs separately. Each row carries `session_id` and `started_at` plus quality-adjusted chart helpers: `include_in_quality_adjusted`, `baseline_confidence`, and `adjusted_score` (rolling z-score vs prior high-quality individual sessions in the selected baseline window). Pass `?aggregate=day` to collapse to one row per date (latest session wins) for callers that want a single point per day.
 | Supplements | `GET/POST/PUT/DELETE /api/supplements[/{id}]` |
 | Protocols | `GET/POST/PUT/DELETE /api/protocols[/{id}]`, `GET/POST/PUT/DELETE /api/protocol-events[/{id}]` |
 | Nutrition | `GET/POST/PUT/DELETE /api/meals[/{id}]`, `GET /api/nutrition/daily`, `GET/POST/DELETE /api/water[/{id}]`, `GET /api/water/daily`, `GET/POST /api/nutrients/definitions`, `DELETE /api/nutrients/definitions/{key}` |
