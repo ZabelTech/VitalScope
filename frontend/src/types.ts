@@ -764,6 +764,17 @@ export interface AiSettingsUpdate {
   openrouter_api_key?: string | null;
 }
 
+export interface AiContextCategory {
+  key: string;
+  label: string;
+  group: string;
+  enabled: boolean;
+}
+
+export interface AiContextSettings {
+  categories: AiContextCategory[];
+}
+
 export type ProtocolCategory =
   | "drug"
   | "peptide"

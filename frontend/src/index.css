@@ -5066,3 +5066,91 @@ input[type="range"]::-moz-range-thumb {
   text-align: center;
   padding: 2px 3px;
 }
+
+/* --- AI context (per-category sharing toggles) --- */
+
+.ai-context-card {
+  padding: 1rem;
+  margin: 1rem 0;
+}
+
+.ai-context-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.ai-context-body {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ai-context-blurb {
+  margin: 0;
+  font-size: 0.9em;
+  opacity: 0.8;
+  line-height: 1.45;
+}
+
+.ai-context-demo-note {
+  font-size: 0.85em;
+  color: #94a3b8;
+  background: #0f172a;
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  margin: 0;
+}
+
+.ai-context-bulk {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.ai-context-groups {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+@media (min-width: 600px) {
+  .ai-context-groups {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.ai-context-group {
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem 0.75rem;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.ai-context-group legend {
+  padding: 0 0.4rem;
+  font-size: 0.85em;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #cbd5e1;
+}
+
+.ai-context-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95em;
+  cursor: pointer;
+  padding: 0.2rem 0;
+}
+
+.ai-context-row input[type="checkbox"] {
+  margin: 0;
+  accent-color: #3b82f6;
+}

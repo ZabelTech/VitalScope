@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   createJournalQuestion,
   deleteJournalQuestion,
+  getAiContextSettings,
   getAiSettings,
   listJournalQuestions,
   listPlugins,
   listPluginRuns,
   runPluginNow,
+  updateAiContextSettings,
   updateAiSettings,
   updateJournalQuestion,
   updatePlugin,
@@ -15,7 +17,13 @@ import {
   type PluginRun,
 } from "../api";
 import { refreshRuntime, useRuntime } from "../hooks/useRuntime";
-import type { AiEffort, AiProvider, AiSettings, JournalQuestion } from "../types";
+import type {
+  AiContextCategory,
+  AiEffort,
+  AiProvider,
+  AiSettings,
+  JournalQuestion,
+} from "../types";
 
 export function SettingsPage() {
   const runtime = useRuntime();
@@ -41,6 +49,7 @@ export function SettingsPage() {
         <h2>Settings</h2>
       </div>
       <AiConfigCard demo={runtime?.demo ?? false} />
+      <AiContextCard demo={runtime?.demo ?? false} />
       <JournalConfigCard />
       {status === "loading" && <p>Loading…</p>}
       {status === "error" && <p className="journal-err">Failed to load plugins</p>}
@@ -364,6 +373,147 @@ function AiConfigCard({ demo }: { demo: boolean }) {
             </button>
             {saveMsg && <span style={{ opacity: 0.8 }}>{saveMsg}</span>}
           </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function AiContextCard({ demo }: { demo: boolean }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [categories, setCategories] = useState<AiContextCategory[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    getAiContextSettings()
+      .then((s) => setCategories(s.categories))
+      .catch(() => setErrorMsg("Failed to load AI context settings"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function toggle(key: string, enabled: boolean) {
+    setCategories((prev) =>
+      prev.map((c) => (c.key === key ? { ...c, enabled } : c)),
+    );
+    setSavingKey(key);
+    setErrorMsg(null);
+    try {
+      const updated = await updateAiContextSettings({ [key]: enabled });
+      setCategories(updated.categories);
+    } catch (e) {
+      setErrorMsg(`${e}`);
+      setCategories((prev) =>
+        prev.map((c) => (c.key === key ? { ...c, enabled: !enabled } : c)),
+      );
+    } finally {
+      setSavingKey(null);
+    }
+  }
+
+  async function setAll(enabled: boolean) {
+    setErrorMsg(null);
+    const updates: Record<string, boolean> = {};
+    for (const c of categories) updates[c.key] = enabled;
+    setCategories((prev) => prev.map((c) => ({ ...c, enabled })));
+    try {
+      const updated = await updateAiContextSettings(updates);
+      setCategories(updated.categories);
+    } catch (e) {
+      setErrorMsg(`${e}`);
+    }
+  }
+
+  const groups: { name: string; items: AiContextCategory[] }[] = [];
+  for (const c of categories) {
+    let g = groups.find((x) => x.name === c.group);
+    if (!g) {
+      g = { name: c.group, items: [] };
+      groups.push(g);
+    }
+    g.items.push(c);
+  }
+  const enabledCount = categories.filter((c) => c.enabled).length;
+
+  return (
+    <section className="card ai-context-card">
+      <header
+        className="ai-context-header"
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "0.8em", opacity: 0.6, lineHeight: 1 }}>
+            {collapsed ? "▸" : "▾"}
+          </span>
+          <div>
+            <h3 style={{ margin: 0 }}>AI Context</h3>
+            <p style={{ margin: "0.1rem 0 0", opacity: 0.7, fontSize: "0.9em" }}>
+              {loading
+                ? "Loading…"
+                : `${enabledCount} of ${categories.length} categories shared with AI`}
+            </p>
+          </div>
+        </div>
+      </header>
+
+      {!collapsed && (
+        <div className="ai-context-body">
+          <p className="ai-context-blurb">
+            Choose which data categories the AI is allowed to see when generating
+            briefings, the orient analysis, and other automated narratives. Anything
+            you turn off here is excluded from the prompt before it leaves your device.
+            This does not affect data you explicitly upload (meal photos, form checks,
+            lab PDFs).
+          </p>
+
+          {demo && (
+            <p className="ai-context-demo-note">
+              AI context is locked in demo mode.
+            </p>
+          )}
+
+          {errorMsg && <p className="journal-err">{errorMsg}</p>}
+
+          {!loading && categories.length > 0 && (
+            <>
+              <div className="ai-context-bulk">
+                <button
+                  type="button"
+                  onClick={() => setAll(true)}
+                  disabled={demo || enabledCount === categories.length}
+                >
+                  Share everything
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAll(false)}
+                  disabled={demo || enabledCount === 0}
+                >
+                  Share nothing
+                </button>
+              </div>
+
+              <div className="ai-context-groups">
+                {groups.map((g) => (
+                  <fieldset key={g.name} className="ai-context-group">
+                    <legend>{g.name}</legend>
+                    {g.items.map((c) => (
+                      <label key={c.key} className="ai-context-row">
+                        <input
+                          type="checkbox"
+                          checked={c.enabled}
+                          disabled={demo || savingKey === c.key}
+                          onChange={(e) => toggle(c.key, e.target.checked)}
+                        />
+                        <span>{c.label}</span>
+                      </label>
+                    ))}
+                  </fieldset>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </section>

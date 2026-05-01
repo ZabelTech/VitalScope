@@ -1,4 +1,5 @@
 import type {
+  AiContextSettings,
   AiSettings,
   AiSettingsUpdate,
   AnalyteDataPoint,
@@ -1063,6 +1064,27 @@ export async function updateAiSettings(body: AiSettingsUpdate): Promise<AiSettin
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function getAiContextSettings(): Promise<AiContextSettings> {
+  const res = await apiFetch("/api/settings/ai-context");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateAiContextSettings(
+  updates: Record<string, boolean>,
+): Promise<AiContextSettings> {
+  const res = await apiFetch("/api/settings/ai-context", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
