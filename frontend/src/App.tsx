@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { NavBar } from "./components/NavBar";
 import { ActPage } from "./components/ActPage";
+import { AnamnesePage } from "./components/AnamnesePage";
 import { EntriesPage } from "./components/EntriesPage";
 import { LoginForm } from "./components/LoginForm";
 import { ObservePage } from "./components/ObservePage";
@@ -69,6 +70,7 @@ function App() {
             <Route path="/orient" element={<OrientPage />} />
             <Route path="/decide" element={<DecidePage />} />
             <Route path="/entries" element={<EntriesPage />} />
+            <Route path="/anamnese" element={<AnamnesePage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/manifesto" element={<HeroPage />} />
             <Route path="/marketing" element={<MarketingPage />} />

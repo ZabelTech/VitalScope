@@ -52,23 +52,24 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   margin-bottom: 16px;
 }
 
-/* Nav bar — brand + entries + cog on the top row, nav links wrap below on mobile */
+/* Nav bar — brand + entries + anamnese + cog on the top row, nav links wrap below on mobile */
 .top-bar {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto auto auto;
   grid-template-areas:
-    "brand entries cog"
-    "nav   nav     nav";
+    "brand entries anamnese cog"
+    "nav   nav     nav      nav";
   align-items: center;
   column-gap: 8px;
   row-gap: 12px;
   margin-bottom: 20px;
 }
 
-.navbar-brand { grid-area: brand; }
-.nav-links    { grid-area: nav; }
-.nav-cog      { grid-area: cog; }
-.nav-entries  { grid-area: entries; }
+.navbar-brand   { grid-area: brand; }
+.nav-links      { grid-area: nav; }
+.nav-cog        { grid-area: cog; }
+.nav-entries    { grid-area: entries; }
+.nav-anamnese   { grid-area: anamnese; }
 
 .top-bar h1 {
   font-size: clamp(1.25rem, 1rem + 2vw, 1.5rem);
@@ -127,8 +128,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 @media (min-width: 640px) {
   .top-bar {
-    grid-template-columns: auto 1fr auto auto;
-    grid-template-areas: "brand nav entries cog";
+    grid-template-columns: auto 1fr auto auto auto;
+    grid-template-areas: "brand nav entries anamnese cog";
     column-gap: 24px;
     row-gap: 0;
     margin-bottom: 32px;

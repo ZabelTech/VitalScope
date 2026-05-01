@@ -775,6 +775,24 @@ export interface AiContextSettings {
   categories: AiContextCategory[];
 }
 
+export type UserSex = "male" | "female";
+
+export interface UserProfile {
+  name: string | null;
+  birthday: string | null;
+  sex: UserSex | null;
+  known_diseases: string | null;
+  former_health_conditions: string | null;
+  life_events: string | null;
+  interests: string | null;
+  self_characterisation: string | null;
+  admired: string | null;
+  disliked: string | null;
+  updated_at: string | null;
+}
+
+export type UserProfileInput = Partial<Omit<UserProfile, "updated_at">>;
+
 export type ProtocolCategory =
   | "drug"
   | "peptide"

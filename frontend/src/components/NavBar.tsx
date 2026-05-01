@@ -30,6 +30,22 @@ export function NavBar() {
           <line x1="12" y1="3" x2="12" y2="15" />
         </svg>
       </NavLink>
+      <NavLink to="/anamnese" className="nav-cog nav-anamnese" aria-label="Anamnese">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </svg>
+      </NavLink>
       <NavLink to="/settings" className="nav-cog" aria-label="Settings">
         <svg
           width="20"

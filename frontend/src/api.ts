@@ -59,6 +59,8 @@ import type {
   Upload,
   UploadKind,
   UserGoals,
+  UserProfile,
+  UserProfileInput,
   Vo2MaxEntry,
   WaterDaily,
   WaterEntry,
@@ -1085,6 +1087,27 @@ export async function updateAiContextSettings(
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ updates }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
+}
+
+// --- User profile (Anamnese) ---
+
+export async function getUserProfile(): Promise<UserProfile> {
+  const res = await apiFetch("/api/user-profile");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateUserProfile(body: UserProfileInput): Promise<UserProfile> {
+  const res = await apiFetch("/api/user-profile", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({ detail: res.statusText }));
