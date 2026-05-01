@@ -8,6 +8,7 @@ import {
   submitJournalResponses,
 } from "../api";
 import type { JournalEntry, JournalQuestionResponse, MoodTag, MorningFeeling } from "../types";
+import { MealTextDescribe } from "./MealTextDescribe";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -28,6 +29,7 @@ interface Props {
 
 export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [date, setDate] = useState<string>(initialDate ?? yesterdayISO());
+  const [showMealDescribe, setShowMealDescribe] = useState(false);
   const [alcoholAmount, setAlcoholAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [morningFeeling, setMorningFeeling] = useState<MorningFeeling>("normal");
@@ -45,6 +47,10 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [waterNotLogged, setWaterNotLogged] = useState(false);
 
   const isPastDate = date < todayISO();
+
+  useEffect(() => {
+    setShowMealDescribe(false);
+  }, [date]);
 
   useEffect(() => {
     let cancelled = false;
@@ -267,6 +273,29 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
           {status === "error" && <span className="journal-err">Failed to save</span>}
         </div>
       </form>
+
+      {date < todayISO() && (
+        <div className="overview-card journal-form">
+          {!showMealDescribe ? (
+            <div className="journal-actions">
+              <button
+                type="button"
+                className="chip"
+                onClick={() => setShowMealDescribe(true)}
+              >
+                Log a missed meal for {date}
+              </button>
+            </div>
+          ) : (
+            <MealTextDescribe
+              date={date}
+              label={`Log a missed meal for ${date}`}
+              hint="Type what you ate — the AI fills in nutrients, then save it against this date."
+              onSaved={() => setShowMealDescribe(false)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }

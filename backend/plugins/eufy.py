@@ -30,7 +30,7 @@ def _run(params: dict) -> RunResult:
 register(Plugin(
     name="eufy",
     label="EufyLife — Body Composition",
-    default_interval_minutes=1440,
+    default_interval_minutes=1,
     description="Weight and body-composition readings from EufyLife.",
     param_schema=[
         ParamSpec("email", "Email", "text", required=True, env_var="EUFY_EMAIL"),

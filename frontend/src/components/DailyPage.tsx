@@ -3,6 +3,7 @@ import { AutoTickedToday } from "./AutoTickedToday";
 import { ImageUpload } from "./ImageUpload";
 import { IntakeLog } from "./IntakeLog";
 import { JournalPage } from "./JournalPage";
+import { MealTextDescribe } from "./MealTextDescribe";
 import { NutritionTodayCard } from "./NutritionTodayCard";
 import { OodaPage } from "./OodaPage";
 import { TodayJournal } from "./TodayJournal";
@@ -42,6 +43,13 @@ export function DailyPage() {
                 label="Meal photo"
                 hint="Snap today's meals so you can cross-reference them with the totals."
               />
+              <div className="overview-card journal-form">
+                <MealTextDescribe
+                  date={today}
+                  label="Describe a meal (AI)"
+                  hint="No photo? Type what you ate — the AI estimates the nutrients."
+                />
+              </div>
             </div>
           ),
         },

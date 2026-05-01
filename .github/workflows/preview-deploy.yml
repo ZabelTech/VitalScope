@@ -33,7 +33,7 @@ jobs:
         run: |
           cd frontend
           npm ci
-          npx tsc --noEmit
+          npx tsc -b --noEmit
 
   e2e-usecases:
     runs-on: ubuntu-latest
