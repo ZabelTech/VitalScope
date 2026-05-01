@@ -1223,9 +1223,14 @@ SELECT date, weekly_avg, last_night_avg, last_night_5min_high,
        baseline_low_upper, baseline_balanced_low, baseline_balanced_upper
 FROM hrv_daily;
 
-CREATE VIEW IF NOT EXISTS v_body_battery_daily AS
-SELECT date, charged, drained
-FROM body_battery_daily;
+DROP VIEW IF EXISTS v_body_battery_daily;
+CREATE VIEW v_body_battery_daily AS
+SELECT d.date,
+       d.charged,
+       d.drained,
+       (SELECT MAX(level) FROM body_battery_readings r WHERE r.date = d.date) AS max_level,
+       (SELECT MIN(level) FROM body_battery_readings r WHERE r.date = d.date) AS min_level
+FROM body_battery_daily d;
 
 CREATE VIEW IF NOT EXISTS v_body_battery_readings AS
 SELECT timestamp, date, level
@@ -1422,7 +1427,10 @@ def hrv_stats(start: Optional[str] = None, end: Optional[str] = None):
 @app.get("/api/body-battery/stats")
 def body_battery_stats(start: Optional[str] = None, end: Optional[str] = None):
     s, e = default_range(start, end)
-    return {"charged": stats_for_column("v_body_battery_daily", "charged", s, e)}
+    return {
+        "max_level": stats_for_column("v_body_battery_daily", "max_level", s, e),
+        "charged": stats_for_column("v_body_battery_daily", "charged", s, e),
+    }
 
 
 @app.get("/api/sleep/stats")

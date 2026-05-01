@@ -20,6 +20,8 @@ export interface BodyBatteryDaily {
   date: string;
   charged: number | null;
   drained: number | null;
+  max_level: number | null;
+  min_level: number | null;
 }
 
 export interface SleepDaily {
