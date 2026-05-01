@@ -446,6 +446,69 @@ def ensure_protocol_tables() -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_events_date ON protocol_events(date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_events_pid ON protocol_events(protocol_id)")
+
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(protocols)").fetchall()}
+    needs_rebuild = (
+        "time_of_day" not in cols
+        or "recurrence_type" not in cols
+        or "recurrence_days" not in cols
+        or "recurrence_n" not in cols
+        or "recurrence_anchor_date" not in cols
+    )
+    if needs_rebuild:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            """
+            CREATE TABLE protocols_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL CHECK (category IN (
+                    'drug','peptide','ped','supplement_stack','hormesis','fasting','training_block'
+                )),
+                dose TEXT,
+                unit TEXT,
+                cadence TEXT,
+                start_date TEXT NOT NULL,
+                end_date TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                time_of_day TEXT CHECK (time_of_day IS NULL OR time_of_day IN ('morning','noon','evening')),
+                recurrence_type TEXT NOT NULL DEFAULT 'daily' CHECK (recurrence_type IN (
+                    'daily','days_of_week','every_n_days','weekly_on','as_needed'
+                )),
+                recurrence_days TEXT,
+                recurrence_n INTEGER,
+                recurrence_anchor_date TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO protocols_new (
+                id, name, category, dose, unit, cadence, start_date, end_date, notes, created_at,
+                time_of_day, recurrence_type, recurrence_days, recurrence_n, recurrence_anchor_date
+            )
+            SELECT id, name, category, dose, unit, cadence, start_date, end_date, notes, created_at,
+                   NULL, 'daily', NULL, NULL, NULL
+            FROM protocols
+            """
+        )
+        conn.execute("DROP TABLE protocols")
+        conn.execute("ALTER TABLE protocols_new RENAME TO protocols")
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS protocol_adherence (
+            date TEXT NOT NULL,
+            protocol_id INTEGER NOT NULL REFERENCES protocols(id) ON DELETE CASCADE,
+            time_of_day TEXT,
+            taken INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, protocol_id, time_of_day)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_adherence_date ON protocol_adherence(date)")
     conn.commit()
     conn.close()
 
@@ -2227,6 +2290,13 @@ ProtocolCategory = Literal[
     "drug", "peptide", "ped", "supplement_stack", "hormesis", "fasting", "training_block"
 ]
 
+ProtocolTimeOfDay = Literal["morning", "noon", "evening"]
+ProtocolRecurrenceType = Literal[
+    "daily", "days_of_week", "every_n_days", "weekly_on", "as_needed"
+]
+
+_WEEKDAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
 
 class ProtocolIn(BaseModel):
     name: str
@@ -2237,6 +2307,11 @@ class ProtocolIn(BaseModel):
     start_date: str
     end_date: Optional[str] = None
     notes: Optional[str] = None
+    time_of_day: Optional[ProtocolTimeOfDay] = None
+    recurrence_type: ProtocolRecurrenceType = "daily"
+    recurrence_days: Optional[str] = None
+    recurrence_n: Optional[int] = None
+    recurrence_anchor_date: Optional[str] = None
 
 
 class ProtocolEventIn(BaseModel):
@@ -2248,7 +2323,14 @@ class ProtocolEventIn(BaseModel):
     notes: Optional[str] = None
 
 
+class ProtocolAdherenceIn(BaseModel):
+    protocol_id: int
+    time_of_day: Optional[ProtocolTimeOfDay] = None
+    taken: bool
+
+
 def _row_to_protocol(row: sqlite3.Row) -> dict:
+    keys = row.keys() if hasattr(row, "keys") else []
     return {
         "id": row["id"],
         "name": row["name"],
@@ -2260,7 +2342,77 @@ def _row_to_protocol(row: sqlite3.Row) -> dict:
         "end_date": row["end_date"],
         "notes": row["notes"],
         "created_at": row["created_at"],
+        "time_of_day": row["time_of_day"] if "time_of_day" in keys else None,
+        "recurrence_type": row["recurrence_type"] if "recurrence_type" in keys else "daily",
+        "recurrence_days": row["recurrence_days"] if "recurrence_days" in keys else None,
+        "recurrence_n": row["recurrence_n"] if "recurrence_n" in keys else None,
+        "recurrence_anchor_date": row["recurrence_anchor_date"] if "recurrence_anchor_date" in keys else None,
     }
+
+
+def _parse_recurrence_days(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    return [tok.strip().lower() for tok in value.split(",") if tok.strip()]
+
+
+def _normalize_recurrence_days(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    parts = _parse_recurrence_days(value)
+    valid = [d for d in parts if d in _WEEKDAY_NAMES]
+    return ",".join(valid) if valid else None
+
+
+def _protocol_scheduled_for_date(row: sqlite3.Row, date_str: str) -> bool:
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    start_str = row["start_date"]
+    if start_str:
+        try:
+            start = datetime.strptime(start_str, "%Y-%m-%d").date()
+            if target < start:
+                return False
+        except ValueError:
+            pass
+    end_str = row["end_date"]
+    if end_str:
+        try:
+            end = datetime.strptime(end_str, "%Y-%m-%d").date()
+            if target > end:
+                return False
+        except ValueError:
+            pass
+
+    keys = row.keys() if hasattr(row, "keys") else []
+    rtype = row["recurrence_type"] if "recurrence_type" in keys else "daily"
+    if rtype == "daily":
+        return True
+    if rtype == "as_needed":
+        return False
+    weekday = _WEEKDAY_NAMES[target.weekday()]
+    if rtype == "days_of_week":
+        days = _parse_recurrence_days(row["recurrence_days"] if "recurrence_days" in keys else None)
+        return weekday in days
+    if rtype == "weekly_on":
+        days = _parse_recurrence_days(row["recurrence_days"] if "recurrence_days" in keys else None)
+        return bool(days) and days[0] == weekday
+    if rtype == "every_n_days":
+        n = row["recurrence_n"] if "recurrence_n" in keys else None
+        anchor_str = row["recurrence_anchor_date"] if "recurrence_anchor_date" in keys else None
+        if not n or n <= 0 or not anchor_str:
+            return False
+        try:
+            anchor = datetime.strptime(anchor_str, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        delta = (target - anchor).days
+        if delta < 0:
+            return False
+        return delta % n == 0
+    return False
 
 
 def _row_to_protocol_event(row: sqlite3.Row) -> dict:
@@ -2291,8 +2443,11 @@ def create_protocol(body: ProtocolIn):
     conn = get_db()
     cur = conn.execute(
         """
-        INSERT INTO protocols (name, category, dose, unit, cadence, start_date, end_date, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO protocols (
+            name, category, dose, unit, cadence, start_date, end_date, notes, created_at,
+            time_of_day, recurrence_type, recurrence_days, recurrence_n, recurrence_anchor_date
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             body.name.strip(),
@@ -2304,6 +2459,11 @@ def create_protocol(body: ProtocolIn):
             body.end_date,
             body.notes.strip() if body.notes else None,
             datetime.utcnow().isoformat(timespec="seconds"),
+            body.time_of_day,
+            body.recurrence_type,
+            _normalize_recurrence_days(body.recurrence_days),
+            body.recurrence_n,
+            body.recurrence_anchor_date,
         ),
     )
     new_id = cur.lastrowid
@@ -2320,7 +2480,9 @@ def update_protocol(pid: int, body: ProtocolIn):
         """
         UPDATE protocols
         SET name = ?, category = ?, dose = ?, unit = ?, cadence = ?,
-            start_date = ?, end_date = ?, notes = ?
+            start_date = ?, end_date = ?, notes = ?,
+            time_of_day = ?, recurrence_type = ?, recurrence_days = ?,
+            recurrence_n = ?, recurrence_anchor_date = ?
         WHERE id = ?
         """,
         (
@@ -2332,6 +2494,11 @@ def update_protocol(pid: int, body: ProtocolIn):
             body.start_date,
             body.end_date,
             body.notes.strip() if body.notes else None,
+            body.time_of_day,
+            body.recurrence_type,
+            _normalize_recurrence_days(body.recurrence_days),
+            body.recurrence_n,
+            body.recurrence_anchor_date,
             pid,
         ),
     )
@@ -2448,6 +2615,81 @@ def delete_protocol_event(eid: int):
     if cur.rowcount == 0:
         raise HTTPException(status_code=404, detail="Protocol event not found")
     return {"status": "ok"}
+
+
+@app.get("/api/protocols/{entry_date}/scheduled")
+def get_scheduled_protocols(entry_date: str):
+    try:
+        datetime.strptime(entry_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date; expected YYYY-MM-DD")
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT * FROM protocols
+        WHERE start_date <= ? AND (end_date IS NULL OR end_date >= ?)
+        ORDER BY
+            CASE COALESCE(time_of_day, 'zzz')
+                WHEN 'morning' THEN 0
+                WHEN 'noon' THEN 1
+                WHEN 'evening' THEN 2
+                ELSE 3
+            END,
+            name
+        """,
+        (entry_date, entry_date),
+    ).fetchall()
+    adherence_rows = conn.execute(
+        "SELECT protocol_id, time_of_day, taken FROM protocol_adherence WHERE date = ?",
+        (entry_date,),
+    ).fetchall()
+    conn.close()
+    adherence_map: dict[tuple[int, str], int] = {}
+    for ar in adherence_rows:
+        slot = ar["time_of_day"] or ""
+        adherence_map[(ar["protocol_id"], slot)] = ar["taken"]
+    out: list[dict] = []
+    for row in rows:
+        if not _protocol_scheduled_for_date(row, entry_date):
+            continue
+        proto = _row_to_protocol(row)
+        slot_key = proto["time_of_day"] or ""
+        proto["taken"] = bool(adherence_map.get((proto["id"], slot_key), 0))
+        out.append(proto)
+    return out
+
+
+@app.post("/api/protocols/{entry_date}/adherence")
+def save_protocol_adherence(entry_date: str, body: ProtocolAdherenceIn):
+    try:
+        datetime.strptime(entry_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date; expected YYYY-MM-DD")
+    conn = get_db()
+    proto = conn.execute(
+        "SELECT id FROM protocols WHERE id = ?", (body.protocol_id,)
+    ).fetchone()
+    if proto is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Protocol not found")
+    slot = body.time_of_day if body.time_of_day else ""
+    conn.execute(
+        """
+        INSERT INTO protocol_adherence (date, protocol_id, time_of_day, taken)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(date, protocol_id, time_of_day) DO UPDATE SET taken = excluded.taken
+        """,
+        (entry_date, body.protocol_id, slot, int(body.taken)),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "status": "ok",
+        "date": entry_date,
+        "protocol_id": body.protocol_id,
+        "time_of_day": body.time_of_day,
+        "taken": body.taken,
+    }
 
 
 # --- Nutrition ---

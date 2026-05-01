@@ -49,6 +49,8 @@ import type {
   ProtocolEvent,
   ProtocolInput,
   ProtocolEventInput,
+  ProtocolTimeOfDay,
+  ScheduledProtocol,
   Supplement,
   SupplementIntake,
   TimeOfDay,
@@ -1049,6 +1051,24 @@ export async function updateProtocolEvent(id: number, body: ProtocolEventInput):
 
 export async function deleteProtocolEvent(id: number): Promise<void> {
   const res = await apiFetch(`/api/protocol-events/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchScheduledProtocols(date: string): Promise<ScheduledProtocol[]> {
+  const res = await apiFetch(`/api/protocols/${date}/scheduled`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function saveProtocolAdherence(
+  date: string,
+  body: { protocol_id: number; time_of_day: ProtocolTimeOfDay | null; taken: boolean }
+): Promise<void> {
+  const res = await apiFetch(`/api/protocols/${date}/adherence`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 

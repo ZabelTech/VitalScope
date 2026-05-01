@@ -1,11 +1,19 @@
 import { format, subDays } from "date-fns";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { apiFetch, fetchNutritionDaily, fetchWaterDaily } from "../api";
+import {
+  apiFetch,
+  fetchNutritionDaily,
+  fetchScheduledProtocols,
+  fetchWaterDaily,
+  saveProtocolAdherence,
+} from "../api";
 import { useMetricData } from "../hooks/useMetricData";
 import type {
   GarminActivity,
   NutritionDailyTotals,
+  ProtocolTimeOfDay,
+  ScheduledProtocol,
   StepsDaily,
   WaterDaily,
   Workout,
@@ -66,6 +74,35 @@ export function TodayDashboard() {
       .then((rows) => setWaterToday(rows[0] ?? null))
       .catch(() => {});
   }, []);
+
+  const [scheduledProtocols, setScheduledProtocols] = useState<ScheduledProtocol[]>([]);
+  const [protocolSaving, setProtocolSaving] = useState(false);
+  useEffect(() => {
+    fetchScheduledProtocols(today)
+      .then(setScheduledProtocols)
+      .catch(() => {});
+  }, []);
+
+  async function toggleProtocol(p: ScheduledProtocol) {
+    const next = !p.taken;
+    setScheduledProtocols((prev) =>
+      prev.map((row) => (row.id === p.id ? { ...row, taken: next } : row))
+    );
+    setProtocolSaving(true);
+    try {
+      await saveProtocolAdherence(today, {
+        protocol_id: p.id,
+        time_of_day: (p.time_of_day ?? null) as ProtocolTimeOfDay | null,
+        taken: next,
+      });
+    } catch {
+      setScheduledProtocols((prev) =>
+        prev.map((row) => (row.id === p.id ? { ...row, taken: !next } : row))
+      );
+    } finally {
+      setProtocolSaving(false);
+    }
+  }
 
   if (stepsLoading) return <div className="chart-loading">Loading today...</div>;
 
@@ -158,6 +195,49 @@ export function TodayDashboard() {
           </div>
         </div>
       </div>
+
+      {scheduledProtocols.length > 0 && (
+        <div className="overview-card">
+          <h3>
+            Protocols scheduled today
+            <AgeBadge at={today} />
+          </h3>
+          <div className="overview-card-body" style={{ flexDirection: "column", alignItems: "stretch", gap: 6 }}>
+            {(["morning", "noon", "evening", null] as (ProtocolTimeOfDay | null)[]).map((slot) => {
+              const items = scheduledProtocols.filter(
+                (p) => (p.time_of_day ?? null) === slot
+              );
+              if (items.length === 0) return null;
+              const slotLabel =
+                slot === null
+                  ? "Anytime"
+                  : slot.charAt(0).toUpperCase() + slot.slice(1);
+              return (
+                <div key={slot ?? "anytime"} className="journal-supplement-group">
+                  <span className="stat-label">{slotLabel}</span>
+                  {items.map((p) => (
+                    <label key={p.id} className="journal-radio">
+                      <input
+                        type="checkbox"
+                        checked={p.taken}
+                        onChange={() => toggleProtocol(p)}
+                        disabled={protocolSaving}
+                      />
+                      {p.name}
+                      {(p.dose || p.unit) && (
+                        <span className="supplement-dosage">
+                          {" "}
+                          ({[p.dose, p.unit].filter(Boolean).join(" ")})
+                        </span>
+                      )}
+                    </label>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <ActivityCard
         activities={todayActivities}
