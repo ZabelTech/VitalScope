@@ -1,6 +1,17 @@
 import { useEffect, useState } from "react";
-import { fetchJournalEntry, fetchJournalResponses, submitJournalEntry, submitJournalResponses } from "../api";
+import {
+  fetchJournalEntry,
+  fetchJournalResponses,
+  fetchWaterLoggingStatus,
+  setWaterLoggingStatus,
+  submitJournalEntry,
+  submitJournalResponses,
+} from "../api";
 import type { JournalEntry, JournalQuestionResponse, MoodTag, MorningFeeling } from "../types";
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const MOOD_TAGS: MoodTag[] = ["great", "good", "flat", "low", "irritable", "anxious"];
 
@@ -31,6 +42,9 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [loadedExisting, setLoadedExisting] = useState(false);
   const [customResponses, setCustomResponses] = useState<JournalQuestionResponse[]>([]);
+  const [waterNotLogged, setWaterNotLogged] = useState(false);
+
+  const isPastDate = date < todayISO();
 
   useEffect(() => {
     let cancelled = false;
@@ -73,10 +87,25 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
         setCustomResponses(responses);
       })
       .catch(() => {});
+    fetchWaterLoggingStatus(date)
+      .then((s) => {
+        if (cancelled) return;
+        setWaterNotLogged(s.not_logged);
+      })
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
   }, [date]);
+
+  async function handleToggleWaterNotLogged(next: boolean) {
+    setWaterNotLogged(next);
+    try {
+      await setWaterLoggingStatus(date, next);
+    } catch {
+      setWaterNotLogged(!next);
+    }
+  }
 
   function updateCustomResponse(questionId: number, response: string) {
     setCustomResponses((prev) =>
@@ -155,6 +184,22 @@ export function JournalPage({ initialDate, showDate = true }: Props = {}) {
             placeholder="Optional notes…"
           />
         </label>
+
+        {isPastDate && (
+          <label className="journal-field journal-checkbox">
+            <input
+              type="checkbox"
+              checked={waterNotLogged}
+              onChange={(e) => handleToggleWaterNotLogged(e.target.checked)}
+            />
+            <span>
+              <span className="stat-label">Water not logged</span>
+              <span className="journal-hint">
+                When checked, this day's water is excluded from AI briefings and from weekly aggregates.
+              </span>
+            </span>
+          </label>
+        )}
 
         <fieldset className="journal-field">
           <legend className="stat-label">Mood</legend>

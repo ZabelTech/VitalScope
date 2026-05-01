@@ -622,6 +622,15 @@ def ensure_nutrition_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_water_date ON water_intake(date)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS water_logging_flags (
+            date TEXT PRIMARY KEY,
+            not_logged INTEGER NOT NULL,
+            set_at TEXT NOT NULL
+        )
+        """
+    )
     conn.executemany(
         """
         INSERT OR IGNORE INTO nutrient_defs (key, label, unit, category, sort_order)
@@ -2856,16 +2865,65 @@ def water_daily(start: Optional[str] = None, end: Optional[str] = None):
     conn = get_db()
     rows = conn.execute(
         """
-        SELECT date, SUM(amount_ml) AS total_ml
-        FROM water_intake
-        WHERE date >= ? AND date <= ?
-        GROUP BY date
-        ORDER BY date
+        SELECT wi.date, SUM(wi.amount_ml) AS total_ml
+        FROM water_intake wi
+        LEFT JOIN water_logging_flags wlf ON wlf.date = wi.date
+        WHERE wi.date >= ? AND wi.date <= ?
+          AND COALESCE(wlf.not_logged, 0) = 0
+        GROUP BY wi.date
+        ORDER BY wi.date
         """,
         (s, e),
     ).fetchall()
     conn.close()
     return [{"date": r["date"], "total_ml": r["total_ml"]} for r in rows]
+
+
+def _water_excluded_for_date(conn: sqlite3.Connection, the_date: str) -> bool:
+    flag = conn.execute(
+        "SELECT not_logged FROM water_logging_flags WHERE date = ?",
+        (the_date,),
+    ).fetchone()
+    if flag is not None:
+        return bool(flag["not_logged"])
+    count = conn.execute(
+        "SELECT COUNT(*) AS n FROM water_intake WHERE date = ?",
+        (the_date,),
+    ).fetchone()
+    return (count["n"] if count else 0) == 0
+
+
+class WaterLoggingStatusBody(BaseModel):
+    not_logged: bool
+
+
+@app.get("/api/water/logging-status/{the_date}")
+def get_water_logging_status(the_date: str):
+    conn = get_db()
+    flag = conn.execute(
+        "SELECT not_logged FROM water_logging_flags WHERE date = ?",
+        (the_date,),
+    ).fetchone()
+    explicit = flag is not None
+    not_logged = _water_excluded_for_date(conn, the_date)
+    conn.close()
+    return {"date": the_date, "not_logged": not_logged, "explicit": explicit}
+
+
+@app.post("/api/water/logging-status/{the_date}")
+def set_water_logging_status(the_date: str, body: WaterLoggingStatusBody):
+    conn = get_db()
+    conn.execute(
+        """
+        INSERT INTO water_logging_flags (date, not_logged, set_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(date) DO UPDATE SET not_logged = excluded.not_logged, set_at = excluded.set_at
+        """,
+        (the_date, 1 if body.not_logged else 0, datetime.utcnow().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+    return {"date": the_date, "not_logged": body.not_logged, "explicit": True}
 
 
 # --- Workouts ---
@@ -5141,10 +5199,13 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
         (yesterday_str,),
     ).fetchone())
 
-    water = row_to_dict(conn.execute(
-        "SELECT ROUND(SUM(amount_ml)) AS total_ml FROM water_intake WHERE date = ?",
-        (yesterday_str,),
-    ).fetchone())
+    if _water_excluded_for_date(conn, yesterday_str):
+        water = None
+    else:
+        water = row_to_dict(conn.execute(
+            "SELECT ROUND(SUM(amount_ml)) AS total_ml FROM water_intake WHERE date = ?",
+            (yesterday_str,),
+        ).fetchone())
 
     planned_activities = rows_to_list(conn.execute(
         "SELECT sport_type, target_distance_m, target_duration_sec, notes "
@@ -5178,7 +5239,7 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
             for r in flagged
         ]
 
-    return {
+    metrics = {
         "briefing_date": today_str,
         "yesterday": yesterday_str,
         "last_night_sleep": sleep,
@@ -5191,11 +5252,13 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
         "yesterday_stress": stress,
         "yesterday_journal": journal,
         "yesterday_nutrition": nutrition,
-        "yesterday_water": water,
         "todays_planned_activities": planned_activities,
         "todays_supplements": supplements,
         "open_bloodwork_alerts": open_bloodwork_alerts,
     }
+    if water is not None:
+        metrics["yesterday_water"] = water
+    return metrics
 
 
 class MorningBriefingBody(BaseModel):

@@ -361,6 +361,31 @@ export async function fetchWaterDaily(start: string, end: string): Promise<Water
   return res.json();
 }
 
+export interface WaterLoggingStatus {
+  date: string;
+  not_logged: boolean;
+  explicit: boolean;
+}
+
+export async function fetchWaterLoggingStatus(date: string): Promise<WaterLoggingStatus> {
+  const res = await apiFetch(`/api/water/logging-status/${date}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function setWaterLoggingStatus(
+  date: string,
+  notLogged: boolean,
+): Promise<WaterLoggingStatus> {
+  const res = await apiFetch(`/api/water/logging-status/${date}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ not_logged: notLogged }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 // --- Health goals ---
 
 export async function fetchGoals(): Promise<UserGoals> {
