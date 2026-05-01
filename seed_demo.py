@@ -544,6 +544,30 @@ def seed_genome(conn: sqlite3.Connection) -> int:
     return 1
 
 
+def seed_blood_pressure(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    count = 0
+    for d in dates:
+        if d.toordinal() % 3 != 0:
+            continue
+        for slot_time, sys_base, dia_base in (("08:15", 122, 78), ("21:45", 118, 75)):
+            if rng.random() < 0.25:
+                continue
+            sys_v = sys_base + rng.randint(-6, 8)
+            dia_v = dia_base + rng.randint(-5, 6)
+            if sys_v <= dia_v:
+                sys_v = dia_v + 30
+            pulse_v = 60 + rng.randint(-4, 12) if rng.random() < 0.85 else None
+            conn.execute(
+                "INSERT INTO blood_pressure_entries "
+                "(date, time, systolic_mmhg, diastolic_mmhg, pulse_bpm, notes, created_at) "
+                "VALUES (?,?,?,?,?,?,?)",
+                (d.isoformat(), slot_time, sys_v, dia_v, pulse_v, None, now),
+            )
+            count += 1
+    return count
+
+
 def seed_meals_and_water(conn: sqlite3.Connection) -> None:
     today = date.today()
     now = datetime.utcnow().isoformat(timespec="seconds")
@@ -595,6 +619,7 @@ def main() -> None:
         seed_workouts(conn, dates, rng)
         seed_cgm(conn, dates, rng)
         seed_cog_processing(conn, dates, rng)
+        seed_blood_pressure(conn, dates, rng)
         seed_supplements(conn)
         seed_meals_and_water(conn)
         seed_nutrition_goals(conn)

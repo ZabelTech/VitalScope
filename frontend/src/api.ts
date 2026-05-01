@@ -5,6 +5,8 @@ import type {
   AnalyteDataPoint,
   BiologicalAgeEntry,
   BiologicalAgeEntryInput,
+  BloodPressureEntry,
+  BloodPressureEntryInput,
   BloodworkAnalysisResult,
   GenotypePhenotypeData,
   BloodworkPanel,
@@ -979,6 +981,37 @@ export async function createGripStrength(body: GripStrengthEntryInput): Promise<
 
 export async function deleteGripStrength(id: number): Promise<void> {
   const res = await apiFetch(`/api/grip-strength/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+// --- Blood pressure ---
+
+export async function listBloodPressure(start: string, end: string): Promise<BloodPressureEntry[]> {
+  const params = new URLSearchParams({ start, end });
+  const res = await apiFetch(`/api/blood-pressure?${params}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function createBloodPressure(body: BloodPressureEntryInput): Promise<BloodPressureEntry> {
+  const res = await apiFetch("/api/blood-pressure", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `API error: ${res.status}`;
+    try {
+      const data = await res.json();
+      if (data?.detail) detail = data.detail;
+    } catch {}
+    throw new Error(detail);
+  }
+  return res.json();
+}
+
+export async function deleteBloodPressure(id: number): Promise<void> {
+  const res = await apiFetch(`/api/blood-pressure/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 

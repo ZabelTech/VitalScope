@@ -4364,6 +4364,20 @@ input[type="range"]::-moz-range-thumb {
   margin-top: 8px;
 }
 
+.longevity-form-success {
+  color: #22c55e;
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
+
+.longevity-entry-list-title {
+  color: #94a3b8;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 12px 0 6px;
+}
+
 /* Clock charts */
 
 .longevity-clock-chart {

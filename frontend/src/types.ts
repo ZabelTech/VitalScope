@@ -619,6 +619,26 @@ export interface GripStrengthEntryInput {
   notes?: string | null;
 }
 
+export interface BloodPressureEntry {
+  id: number;
+  date: string;
+  time: string | null;
+  systolic_mmhg: number;
+  diastolic_mmhg: number;
+  pulse_bpm: number | null;
+  notes: string | null;
+  created_at: string;
+}
+
+export interface BloodPressureEntryInput {
+  date: string;
+  time?: string | null;
+  systolic_mmhg: number;
+  diastolic_mmhg: number;
+  pulse_bpm?: number | null;
+  notes?: string | null;
+}
+
 export interface Vo2MaxEntry {
   date: string;
   value: number;

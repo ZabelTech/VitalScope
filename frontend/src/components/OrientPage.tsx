@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { format, subDays } from "date-fns";
+import { BloodPressureSection } from "./BloodPressureSection";
 import { CognitionSection } from "./CognitionSection";
 import { DateRangePicker } from "./DateRangePicker";
 import { GenotypePhenotypeSection } from "./GenotypePhenotypeSection";
@@ -26,6 +27,7 @@ export function OrientPage() {
           { id: "trends", label: "Trends", content: <TrendsPage start={start} end={end} /> },
           { id: "cognition", label: "Cognition", content: <CognitionSection start={start} end={end} /> },
           { id: "longevity", label: "Biological age & longevity", content: <LongevitySection /> },
+          { id: "blood-pressure", label: "Blood pressure", content: <BloodPressureSection /> },
           {
             id: "genotype-phenotype",
             label: "Genotype × phenotype",
