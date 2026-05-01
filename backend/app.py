@@ -269,6 +269,7 @@ AI_CONTEXT_CATEGORIES: list[tuple[str, str, str]] = [
     ("protocols", "Protocols", "Lifestyle"),
     ("journal", "Journal entries", "Lifestyle"),
     ("cognition", "Cognition tests", "Lifestyle"),
+    ("profile", "Personal profile (Anamnese)", "Personal"),
 ]
 _AI_CONTEXT_KEYS = {k for (k, _, _) in AI_CONTEXT_CATEGORIES}
 
@@ -330,6 +331,122 @@ def update_ai_context_settings(body: AiContextUpdateBody, request: Request):
     finally:
         conn.close()
     return _ai_context_response(ctx)
+
+
+# --- User profile (Anamnese) ---
+USER_PROFILE_FIELDS = (
+    "name",
+    "birthday",
+    "sex",
+    "known_diseases",
+    "former_health_conditions",
+    "life_events",
+    "interests",
+    "self_characterisation",
+    "admired",
+    "disliked",
+)
+
+
+def _user_profile_row_to_dict(row) -> dict:
+    if not row:
+        return {f: None for f in USER_PROFILE_FIELDS} | {"updated_at": None}
+    return {f: row[f] for f in USER_PROFILE_FIELDS} | {"updated_at": row["updated_at"]}
+
+
+def _get_user_profile(conn: sqlite3.Connection) -> Optional[dict]:
+    row = conn.execute("SELECT * FROM user_profile WHERE id = 1").fetchone()
+    if not row:
+        return None
+    profile = {f: row[f] for f in USER_PROFILE_FIELDS if row[f]}
+    if not profile:
+        return None
+    birthday = profile.get("birthday")
+    if birthday:
+        try:
+            bd = date.fromisoformat(birthday)
+            today = date.today()
+            profile["age_years"] = today.year - bd.year - ((today.month, today.day) < (bd.month, bd.day))
+        except ValueError:
+            pass
+    return profile
+
+
+@app.get("/api/user-profile")
+def get_user_profile(request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM user_profile WHERE id = 1").fetchone()
+    finally:
+        conn.close()
+    return _user_profile_row_to_dict(row)
+
+
+class UserProfileBody(BaseModel):
+    name: Optional[str] = None
+    birthday: Optional[str] = None
+    sex: Optional[str] = None
+    known_diseases: Optional[str] = None
+    former_health_conditions: Optional[str] = None
+    life_events: Optional[str] = None
+    interests: Optional[str] = None
+    self_characterisation: Optional[str] = None
+    admired: Optional[str] = None
+    disliked: Optional[str] = None
+
+
+@app.put("/api/user-profile")
+def update_user_profile(body: UserProfileBody, request: Request):
+    if not _is_authenticated(request):
+        raise HTTPException(status_code=401)
+    if DEMO_MODE:
+        raise HTTPException(status_code=403, detail="Profile is read-only in demo mode")
+    if body.birthday:
+        try:
+            date.fromisoformat(body.birthday)
+        except ValueError:
+            raise HTTPException(status_code=422, detail="birthday must be YYYY-MM-DD")
+    if body.sex not in (None, "", "male", "female"):
+        raise HTTPException(status_code=422, detail="sex must be 'male', 'female', or null")
+    sex = body.sex or None
+
+    def clean(v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        v = v.strip()
+        return v or None
+
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn = get_db()
+    try:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO user_profile
+                (id, name, birthday, sex, known_diseases, former_health_conditions,
+                 life_events, interests, self_characterisation, admired, disliked, updated_at)
+            VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                clean(body.name),
+                clean(body.birthday),
+                sex,
+                clean(body.known_diseases),
+                clean(body.former_health_conditions),
+                clean(body.life_events),
+                clean(body.interests),
+                clean(body.self_characterisation),
+                clean(body.admired),
+                clean(body.disliked),
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM user_profile WHERE id = 1").fetchone()
+    finally:
+        conn.close()
+    return _user_profile_row_to_dict(row)
 
 
 def get_db() -> sqlite3.Connection:
@@ -841,6 +958,24 @@ def ensure_daily_landing_tables() -> None:
             value      REAL NOT NULL,
             unit       TEXT NOT NULL,
             updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_profile (
+            id                        INTEGER PRIMARY KEY CHECK (id = 1),
+            name                      TEXT,
+            birthday                  TEXT,
+            sex                       TEXT CHECK (sex IN ('male','female') OR sex IS NULL),
+            known_diseases            TEXT,
+            former_health_conditions  TEXT,
+            life_events               TEXT,
+            interests                 TEXT,
+            self_characterisation     TEXT,
+            admired                   TEXT,
+            disliked                  TEXT,
+            updated_at                TEXT
         )
         """
     )
@@ -5222,6 +5357,11 @@ def _gather_orient_metrics(
         "window_days": window_days,
     }
 
+    if ctx.get("profile"):
+        profile = _get_user_profile(conn)
+        if profile:
+            result["user_profile"] = profile
+
     if ctx.get("heart_rate"):
         result["heart_rate"] = rows_to_list(conn.execute(
             "SELECT date, resting_hr, avg_7d_resting_hr FROM heart_rate_daily "
@@ -5529,6 +5669,11 @@ def _gather_explain_context(
         "context_window": f"{start} to {end}",
     }
 
+    if ctx.get("profile"):
+        profile = _get_user_profile(conn)
+        if profile:
+            out["user_profile"] = profile
+
     if ctx.get("heart_rate"):
         out["heart_rate"] = rows_to_list(conn.execute(
             "SELECT date, resting_hr FROM heart_rate_daily WHERE date BETWEEN ? AND ? ORDER BY date",
@@ -5746,6 +5891,11 @@ def _gather_morning_metrics(conn: sqlite3.Connection, ctx: dict[str, bool]) -> d
         "briefing_date": today_str,
         "yesterday": yesterday_str,
     }
+
+    if ctx.get("profile"):
+        profile = _get_user_profile(conn)
+        if profile:
+            metrics["user_profile"] = profile
 
     if ctx.get("sleep"):
         metrics["last_night_sleep"] = row_to_dict(conn.execute(
@@ -6078,6 +6228,11 @@ def _gather_night_briefing_data(
         return [dict(r) for r in rows]
 
     out: dict = {"target_date": target_date}
+
+    if ctx.get("profile"):
+        profile = _get_user_profile(conn)
+        if profile:
+            out["user_profile"] = profile
 
     if ctx.get("garmin_activities"):
         out["activities_today"] = rows_to_list(conn.execute(
