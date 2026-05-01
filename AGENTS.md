@@ -18,8 +18,9 @@ uvicorn backend.app:app --reload --port 8000
 # Frontend (proxies /api → :8000)
 cd frontend && npm run dev        # → http://localhost:5173
 
-# Type-check the frontend after changes
-cd frontend && npx tsc --noEmit
+# Type-check the frontend after changes (must use -b — root tsconfig.json
+# is project-references-only, so plain `tsc --noEmit` silently no-ops)
+cd frontend && npx tsc -b --noEmit
 
 # Inspect the DB
 python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sqlite3.Row; ..."
@@ -173,7 +174,7 @@ When `VITALSCOPE_DEMO=1`, `_get_ai_provider()` short-circuits to `DemoProvider` 
 
 ## Before reporting a task done
 
-- Frontend changes → `cd frontend && npx tsc --noEmit` must exit 0.
+- Frontend changes → `cd frontend && npx tsc -b --noEmit` must exit 0. The `-b` flag is required: the root `tsconfig.json` is project-references-only, so plain `tsc --noEmit` silently no-ops and lets type errors slip through to the Docker build.
 - Backend changes → hit the new/changed endpoint with `curl` to confirm it returns valid JSON, not a 500 / 404.
 - Sync script changes → run the script once with the real incremental path (no `--full`) and confirm it doesn't re-fetch everything or infinite-loop.
 - **Always review `README.md` and `AGENTS.md` after implementing a feature or fix** and update whatever is now stale: page/route lists, architecture tree, route-groups table, data-model notes, gotchas, and any conventions the change introduced or invalidated. Treat the docs as part of the task, not a follow-up.
