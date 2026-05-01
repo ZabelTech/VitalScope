@@ -765,6 +765,15 @@ export type ProtocolCategory =
   | "fasting"
   | "training_block";
 
+export type ProtocolTimeOfDay = "morning" | "noon" | "evening";
+
+export type ProtocolRecurrenceType =
+  | "daily"
+  | "days_of_week"
+  | "every_n_days"
+  | "weekly_on"
+  | "as_needed";
+
 export interface Protocol {
   id: number;
   name: string;
@@ -776,6 +785,11 @@ export interface Protocol {
   end_date: string | null;
   notes: string | null;
   created_at: string;
+  time_of_day: ProtocolTimeOfDay | null;
+  recurrence_type: ProtocolRecurrenceType;
+  recurrence_days: string | null;
+  recurrence_n: number | null;
+  recurrence_anchor_date: string | null;
 }
 
 export interface ProtocolEvent {
@@ -798,6 +812,15 @@ export interface ProtocolInput {
   start_date: string;
   end_date?: string | null;
   notes?: string | null;
+  time_of_day?: ProtocolTimeOfDay | null;
+  recurrence_type?: ProtocolRecurrenceType;
+  recurrence_days?: string | null;
+  recurrence_n?: number | null;
+  recurrence_anchor_date?: string | null;
+}
+
+export interface ScheduledProtocol extends Protocol {
+  taken: boolean;
 }
 
 export interface ProtocolEventInput {
