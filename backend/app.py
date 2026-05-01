@@ -5635,8 +5635,16 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
     ).fetchone())
 
     body_battery = row_to_dict(conn.execute(
-        "SELECT charged, drained FROM body_battery_daily WHERE date = ?",
-        (today_str,),
+        """
+        SELECT
+            (SELECT level FROM body_battery_readings
+             WHERE date = ? ORDER BY timestamp DESC LIMIT 1) AS current_level,
+            (SELECT MAX(level) FROM body_battery_readings WHERE date = ?) AS peak_today,
+            (SELECT MIN(level) FROM body_battery_readings WHERE date = ?) AS low_today,
+            (SELECT charged FROM body_battery_daily WHERE date = ?) AS charged,
+            (SELECT drained FROM body_battery_daily WHERE date = ?) AS drained
+        """,
+        (today_str, today_str, today_str, today_str, today_str),
     ).fetchone())
 
     garmin_sessions = rows_to_list(conn.execute(
@@ -5734,7 +5742,7 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
         "last_night_sleep": sleep,
         "hrv": hrv,
         "resting_hr": hr,
-        "body_battery_at_wake": body_battery,
+        "body_battery": body_battery,
         "yesterday_garmin_sessions": garmin_sessions,
         "yesterday_strong_workouts": strong_workouts,
         "yesterday_steps": steps,
