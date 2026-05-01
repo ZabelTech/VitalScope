@@ -82,7 +82,7 @@ test("Record blood pressure manually", async ({ page }) => {
   await page.locator('a[href="#blood-pressure"]').click();
 
   const section = page.locator("section#blood-pressure");
-  await expect(section.getByRole("heading", { name: "Blood Pressure" })).toBeVisible();
+  await expect(section.getByRole("heading", { level: 2, name: "Blood Pressure" })).toBeVisible();
 
   await section.getByPlaceholder("Systolic (mmHg)").fill("121");
   await section.getByPlaceholder("Diastolic (mmHg)").fill("78");
