@@ -66,6 +66,8 @@ ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
 BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("BRIEFING_AI_TIMEOUT_SEC", "90"))
 NIGHT_BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("NIGHT_BRIEFING_AI_TIMEOUT_SEC", "90"))
 
+BLOODWORK_AI_MAX_AGE_DAYS = 180
+
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
     "openai": OPENAI_API_KEY,
@@ -4633,7 +4635,10 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
     ).fetchall())
 
     bp = conn.execute(
-        "SELECT id, date, notes FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+        "SELECT id, date, notes FROM bloodwork_panels "
+        "WHERE date >= date('now', '-' || ? || ' days') "
+        "ORDER BY date DESC LIMIT 1",
+        (BLOODWORK_AI_MAX_AGE_DAYS,),
     ).fetchone()
     bloodwork = None
     if bp:
@@ -4661,7 +4666,7 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
         (start_date, end_date),
     ).fetchall())
 
-    return {
+    result = {
         "analysis_date": end_date,
         "window_days": window_days,
         "heart_rate": hr,
@@ -4672,9 +4677,11 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
         "steps": steps,
         "weight": weight,
         "recent_workouts": workouts,
-        "bloodwork": bloodwork,
         "journal_cognition": cognition,
     }
+    if bloodwork is not None:
+        result["bloodwork"] = bloodwork
+    return result
 
 
 class OrientAnalyzeBody(BaseModel):
@@ -5161,7 +5168,10 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
     ).fetchall())
 
     bp = conn.execute(
-        "SELECT id, date FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+        "SELECT id, date FROM bloodwork_panels "
+        "WHERE date >= date('now', '-' || ? || ' days') "
+        "ORDER BY date DESC LIMIT 1",
+        (BLOODWORK_AI_MAX_AGE_DAYS,),
     ).fetchone()
     open_bloodwork_alerts: list[str] = []
     if bp:
@@ -5178,7 +5188,7 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
             for r in flagged
         ]
 
-    return {
+    result = {
         "briefing_date": today_str,
         "yesterday": yesterday_str,
         "last_night_sleep": sleep,
@@ -5194,8 +5204,10 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
         "yesterday_water": water,
         "todays_planned_activities": planned_activities,
         "todays_supplements": supplements,
-        "open_bloodwork_alerts": open_bloodwork_alerts,
     }
+    if open_bloodwork_alerts:
+        result["open_bloodwork_alerts"] = open_bloodwork_alerts
+    return result
 
 
 class MorningBriefingBody(BaseModel):
