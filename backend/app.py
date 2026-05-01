@@ -66,6 +66,8 @@ ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
 BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("BRIEFING_AI_TIMEOUT_SEC", "90"))
 NIGHT_BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("NIGHT_BRIEFING_AI_TIMEOUT_SEC", "90"))
 
+BLOODWORK_AI_MAX_AGE_DAYS = 180
+
 _AI_KEY_BY_PROVIDER = {
     "anthropic": ANTHROPIC_API_KEY,
     "openai": OPENAI_API_KEY,
@@ -446,6 +448,69 @@ def ensure_protocol_tables() -> None:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_events_date ON protocol_events(date)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_events_pid ON protocol_events(protocol_id)")
+
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(protocols)").fetchall()}
+    needs_rebuild = (
+        "time_of_day" not in cols
+        or "recurrence_type" not in cols
+        or "recurrence_days" not in cols
+        or "recurrence_n" not in cols
+        or "recurrence_anchor_date" not in cols
+    )
+    if needs_rebuild:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        conn.execute(
+            """
+            CREATE TABLE protocols_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL CHECK (category IN (
+                    'drug','peptide','ped','supplement_stack','hormesis','fasting','training_block'
+                )),
+                dose TEXT,
+                unit TEXT,
+                cadence TEXT,
+                start_date TEXT NOT NULL,
+                end_date TEXT,
+                notes TEXT,
+                created_at TEXT NOT NULL,
+                time_of_day TEXT CHECK (time_of_day IS NULL OR time_of_day IN ('morning','noon','evening')),
+                recurrence_type TEXT NOT NULL DEFAULT 'daily' CHECK (recurrence_type IN (
+                    'daily','days_of_week','every_n_days','weekly_on','as_needed'
+                )),
+                recurrence_days TEXT,
+                recurrence_n INTEGER,
+                recurrence_anchor_date TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO protocols_new (
+                id, name, category, dose, unit, cadence, start_date, end_date, notes, created_at,
+                time_of_day, recurrence_type, recurrence_days, recurrence_n, recurrence_anchor_date
+            )
+            SELECT id, name, category, dose, unit, cadence, start_date, end_date, notes, created_at,
+                   NULL, 'daily', NULL, NULL, NULL
+            FROM protocols
+            """
+        )
+        conn.execute("DROP TABLE protocols")
+        conn.execute("ALTER TABLE protocols_new RENAME TO protocols")
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS protocol_adherence (
+            date TEXT NOT NULL,
+            protocol_id INTEGER NOT NULL REFERENCES protocols(id) ON DELETE CASCADE,
+            time_of_day TEXT,
+            taken INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, protocol_id, time_of_day)
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_protocol_adherence_date ON protocol_adherence(date)")
     conn.commit()
     conn.close()
 
@@ -712,6 +777,26 @@ def ensure_daily_landing_tables() -> None:
             nutrient_key TEXT NOT NULL,
             amount       REAL NOT NULL,
             PRIMARY KEY (template_id, nutrient_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meal_presets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL UNIQUE,
+            notes      TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meal_preset_nutrients (
+            preset_id    INTEGER NOT NULL REFERENCES meal_presets(id) ON DELETE CASCADE,
+            nutrient_key TEXT NOT NULL REFERENCES nutrient_defs(key),
+            amount       REAL NOT NULL,
+            PRIMARY KEY (preset_id, nutrient_key)
         )
         """
     )
@@ -1223,9 +1308,14 @@ SELECT date, weekly_avg, last_night_avg, last_night_5min_high,
        baseline_low_upper, baseline_balanced_low, baseline_balanced_upper
 FROM hrv_daily;
 
-CREATE VIEW IF NOT EXISTS v_body_battery_daily AS
-SELECT date, charged, drained
-FROM body_battery_daily;
+DROP VIEW IF EXISTS v_body_battery_daily;
+CREATE VIEW v_body_battery_daily AS
+SELECT d.date,
+       d.charged,
+       d.drained,
+       (SELECT MAX(level) FROM body_battery_readings r WHERE r.date = d.date) AS max_level,
+       (SELECT MIN(level) FROM body_battery_readings r WHERE r.date = d.date) AS min_level
+FROM body_battery_daily d;
 
 CREATE VIEW IF NOT EXISTS v_body_battery_readings AS
 SELECT timestamp, date, level
@@ -1422,7 +1512,10 @@ def hrv_stats(start: Optional[str] = None, end: Optional[str] = None):
 @app.get("/api/body-battery/stats")
 def body_battery_stats(start: Optional[str] = None, end: Optional[str] = None):
     s, e = default_range(start, end)
-    return {"charged": stats_for_column("v_body_battery_daily", "charged", s, e)}
+    return {
+        "max_level": stats_for_column("v_body_battery_daily", "max_level", s, e),
+        "charged": stats_for_column("v_body_battery_daily", "charged", s, e),
+    }
 
 
 @app.get("/api/sleep/stats")
@@ -1627,18 +1720,36 @@ def _compute_processing_speed_summary(session: ProcessingSpeedSessionIn) -> dict
     }
 
 
-def _processing_speed_baseline(conn: sqlite3.Connection, target_date: str, window: int) -> dict[str, Any]:
-    rows = conn.execute(
-        """
-        SELECT throughput_pm
-        FROM cog_processing_sessions
-        WHERE quality_flag = 'ok'
-          AND date < ?
-          AND date >= date(?, ?)
-        ORDER BY date DESC, created_at DESC
-        """,
-        (target_date, target_date, f"-{window} day"),
-    ).fetchall()
+def _processing_speed_baseline(
+    conn: sqlite3.Connection,
+    target_date: str,
+    window: int,
+    before_session_id: Optional[int] = None,
+) -> dict[str, Any]:
+    if before_session_id is not None:
+        rows = conn.execute(
+            """
+            SELECT throughput_pm
+            FROM cog_processing_sessions
+            WHERE quality_flag = 'ok'
+              AND id < ?
+              AND date >= date(?, ?)
+            ORDER BY date DESC, created_at DESC
+            """,
+            (before_session_id, target_date, f"-{window} day"),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT throughput_pm
+            FROM cog_processing_sessions
+            WHERE quality_flag = 'ok'
+              AND date < ?
+              AND date >= date(?, ?)
+            ORDER BY date DESC, created_at DESC
+            """,
+            (target_date, target_date, f"-{window} day"),
+        ).fetchall()
     values = [float(r["throughput_pm"]) for r in rows]
     if len(values) < 3:
         return {"window_days": window, "count": len(values), "mean": None, "std": None, "confidence": "low"}
@@ -1719,7 +1830,7 @@ def submit_processing_speed_session(session: ProcessingSpeedSessionIn):
                 trial.presented_at,
             ),
         )
-    baseline = _processing_speed_baseline(conn, session.date, 7)
+    baseline = _processing_speed_baseline(conn, session.date, 7, before_session_id=session_id)
     delta_vs_baseline = None
     z_score = None
     if baseline["mean"] is not None:
@@ -1750,22 +1861,17 @@ def get_processing_speed_daily(
     start: Optional[str] = None,
     end: Optional[str] = None,
     baseline_window: int = Query(7, ge=3, le=30),
+    aggregate: Optional[str] = Query(None, pattern="^(day)$"),
 ):
     s, e = default_range(start, end)
     conn = get_db()
     rows = conn.execute(
         """
-        WITH latest AS (
-          SELECT date, MAX(created_at) AS created_at
-          FROM cog_processing_sessions
-          WHERE date >= ? AND date <= ?
-          GROUP BY date
-        )
-        SELECT s.date, s.attempted, s.correct, s.accuracy, s.median_rt_ms, s.throughput_pm,
-               s.quality_flag, s.created_at
-        FROM cog_processing_sessions s
-        JOIN latest l ON l.date = s.date AND l.created_at = s.created_at
-        ORDER BY s.date
+        SELECT id AS session_id, date, started_at, attempted, correct, accuracy,
+               median_rt_ms, throughput_pm, quality_flag, created_at
+        FROM cog_processing_sessions
+        WHERE date >= ? AND date <= ?
+        ORDER BY date, started_at, created_at, id
         """,
         (s, e),
     ).fetchall()
@@ -1798,26 +1904,33 @@ def get_processing_speed_daily(
 
         points.append(point)
 
+    if aggregate == "day":
+        by_date: dict[str, dict[str, Any]] = {}
+        for p in points:
+            by_date[p["date"]] = p
+        return list(by_date.values())
+
     return points
 
 
 @app.get("/api/cognition/processing-speed/baseline")
 def get_processing_speed_baseline(date: str, window: int = Query(7, ge=3, le=30)):
     conn = get_db()
-    baseline = _processing_speed_baseline(conn, date, window)
     row = conn.execute(
         """
-        SELECT throughput_pm
+        SELECT id, throughput_pm
         FROM cog_processing_sessions
         WHERE date = ?
-        ORDER BY created_at DESC
+        ORDER BY created_at DESC, id DESC
         LIMIT 1
         """,
         (date,),
     ).fetchone()
-    conn.close()
     if row is None:
+        conn.close()
         raise HTTPException(status_code=404, detail="No processing-speed session for that date")
+    baseline = _processing_speed_baseline(conn, date, window, before_session_id=int(row["id"]))
+    conn.close()
     today_throughput = float(row["throughput_pm"])
     z_score = None
     delta_vs_baseline = None
@@ -2227,6 +2340,13 @@ ProtocolCategory = Literal[
     "drug", "peptide", "ped", "supplement_stack", "hormesis", "fasting", "training_block"
 ]
 
+ProtocolTimeOfDay = Literal["morning", "noon", "evening"]
+ProtocolRecurrenceType = Literal[
+    "daily", "days_of_week", "every_n_days", "weekly_on", "as_needed"
+]
+
+_WEEKDAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
 
 class ProtocolIn(BaseModel):
     name: str
@@ -2237,6 +2357,11 @@ class ProtocolIn(BaseModel):
     start_date: str
     end_date: Optional[str] = None
     notes: Optional[str] = None
+    time_of_day: Optional[ProtocolTimeOfDay] = None
+    recurrence_type: ProtocolRecurrenceType = "daily"
+    recurrence_days: Optional[str] = None
+    recurrence_n: Optional[int] = None
+    recurrence_anchor_date: Optional[str] = None
 
 
 class ProtocolEventIn(BaseModel):
@@ -2248,7 +2373,14 @@ class ProtocolEventIn(BaseModel):
     notes: Optional[str] = None
 
 
+class ProtocolAdherenceIn(BaseModel):
+    protocol_id: int
+    time_of_day: Optional[ProtocolTimeOfDay] = None
+    taken: bool
+
+
 def _row_to_protocol(row: sqlite3.Row) -> dict:
+    keys = row.keys() if hasattr(row, "keys") else []
     return {
         "id": row["id"],
         "name": row["name"],
@@ -2260,7 +2392,77 @@ def _row_to_protocol(row: sqlite3.Row) -> dict:
         "end_date": row["end_date"],
         "notes": row["notes"],
         "created_at": row["created_at"],
+        "time_of_day": row["time_of_day"] if "time_of_day" in keys else None,
+        "recurrence_type": row["recurrence_type"] if "recurrence_type" in keys else "daily",
+        "recurrence_days": row["recurrence_days"] if "recurrence_days" in keys else None,
+        "recurrence_n": row["recurrence_n"] if "recurrence_n" in keys else None,
+        "recurrence_anchor_date": row["recurrence_anchor_date"] if "recurrence_anchor_date" in keys else None,
     }
+
+
+def _parse_recurrence_days(value: Optional[str]) -> list[str]:
+    if not value:
+        return []
+    return [tok.strip().lower() for tok in value.split(",") if tok.strip()]
+
+
+def _normalize_recurrence_days(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    parts = _parse_recurrence_days(value)
+    valid = [d for d in parts if d in _WEEKDAY_NAMES]
+    return ",".join(valid) if valid else None
+
+
+def _protocol_scheduled_for_date(row: sqlite3.Row, date_str: str) -> bool:
+    try:
+        target = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except ValueError:
+        return False
+    start_str = row["start_date"]
+    if start_str:
+        try:
+            start = datetime.strptime(start_str, "%Y-%m-%d").date()
+            if target < start:
+                return False
+        except ValueError:
+            pass
+    end_str = row["end_date"]
+    if end_str:
+        try:
+            end = datetime.strptime(end_str, "%Y-%m-%d").date()
+            if target > end:
+                return False
+        except ValueError:
+            pass
+
+    keys = row.keys() if hasattr(row, "keys") else []
+    rtype = row["recurrence_type"] if "recurrence_type" in keys else "daily"
+    if rtype == "daily":
+        return True
+    if rtype == "as_needed":
+        return False
+    weekday = _WEEKDAY_NAMES[target.weekday()]
+    if rtype == "days_of_week":
+        days = _parse_recurrence_days(row["recurrence_days"] if "recurrence_days" in keys else None)
+        return weekday in days
+    if rtype == "weekly_on":
+        days = _parse_recurrence_days(row["recurrence_days"] if "recurrence_days" in keys else None)
+        return bool(days) and days[0] == weekday
+    if rtype == "every_n_days":
+        n = row["recurrence_n"] if "recurrence_n" in keys else None
+        anchor_str = row["recurrence_anchor_date"] if "recurrence_anchor_date" in keys else None
+        if not n or n <= 0 or not anchor_str:
+            return False
+        try:
+            anchor = datetime.strptime(anchor_str, "%Y-%m-%d").date()
+        except ValueError:
+            return False
+        delta = (target - anchor).days
+        if delta < 0:
+            return False
+        return delta % n == 0
+    return False
 
 
 def _row_to_protocol_event(row: sqlite3.Row) -> dict:
@@ -2291,8 +2493,11 @@ def create_protocol(body: ProtocolIn):
     conn = get_db()
     cur = conn.execute(
         """
-        INSERT INTO protocols (name, category, dose, unit, cadence, start_date, end_date, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO protocols (
+            name, category, dose, unit, cadence, start_date, end_date, notes, created_at,
+            time_of_day, recurrence_type, recurrence_days, recurrence_n, recurrence_anchor_date
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             body.name.strip(),
@@ -2304,6 +2509,11 @@ def create_protocol(body: ProtocolIn):
             body.end_date,
             body.notes.strip() if body.notes else None,
             datetime.utcnow().isoformat(timespec="seconds"),
+            body.time_of_day,
+            body.recurrence_type,
+            _normalize_recurrence_days(body.recurrence_days),
+            body.recurrence_n,
+            body.recurrence_anchor_date,
         ),
     )
     new_id = cur.lastrowid
@@ -2320,7 +2530,9 @@ def update_protocol(pid: int, body: ProtocolIn):
         """
         UPDATE protocols
         SET name = ?, category = ?, dose = ?, unit = ?, cadence = ?,
-            start_date = ?, end_date = ?, notes = ?
+            start_date = ?, end_date = ?, notes = ?,
+            time_of_day = ?, recurrence_type = ?, recurrence_days = ?,
+            recurrence_n = ?, recurrence_anchor_date = ?
         WHERE id = ?
         """,
         (
@@ -2332,6 +2544,11 @@ def update_protocol(pid: int, body: ProtocolIn):
             body.start_date,
             body.end_date,
             body.notes.strip() if body.notes else None,
+            body.time_of_day,
+            body.recurrence_type,
+            _normalize_recurrence_days(body.recurrence_days),
+            body.recurrence_n,
+            body.recurrence_anchor_date,
             pid,
         ),
     )
@@ -2450,6 +2667,81 @@ def delete_protocol_event(eid: int):
     return {"status": "ok"}
 
 
+@app.get("/api/protocols/{entry_date}/scheduled")
+def get_scheduled_protocols(entry_date: str):
+    try:
+        datetime.strptime(entry_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date; expected YYYY-MM-DD")
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT * FROM protocols
+        WHERE start_date <= ? AND (end_date IS NULL OR end_date >= ?)
+        ORDER BY
+            CASE COALESCE(time_of_day, 'zzz')
+                WHEN 'morning' THEN 0
+                WHEN 'noon' THEN 1
+                WHEN 'evening' THEN 2
+                ELSE 3
+            END,
+            name
+        """,
+        (entry_date, entry_date),
+    ).fetchall()
+    adherence_rows = conn.execute(
+        "SELECT protocol_id, time_of_day, taken FROM protocol_adherence WHERE date = ?",
+        (entry_date,),
+    ).fetchall()
+    conn.close()
+    adherence_map: dict[tuple[int, str], int] = {}
+    for ar in adherence_rows:
+        slot = ar["time_of_day"] or ""
+        adherence_map[(ar["protocol_id"], slot)] = ar["taken"]
+    out: list[dict] = []
+    for row in rows:
+        if not _protocol_scheduled_for_date(row, entry_date):
+            continue
+        proto = _row_to_protocol(row)
+        slot_key = proto["time_of_day"] or ""
+        proto["taken"] = bool(adherence_map.get((proto["id"], slot_key), 0))
+        out.append(proto)
+    return out
+
+
+@app.post("/api/protocols/{entry_date}/adherence")
+def save_protocol_adherence(entry_date: str, body: ProtocolAdherenceIn):
+    try:
+        datetime.strptime(entry_date, "%Y-%m-%d")
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date; expected YYYY-MM-DD")
+    conn = get_db()
+    proto = conn.execute(
+        "SELECT id FROM protocols WHERE id = ?", (body.protocol_id,)
+    ).fetchone()
+    if proto is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Protocol not found")
+    slot = body.time_of_day if body.time_of_day else ""
+    conn.execute(
+        """
+        INSERT INTO protocol_adherence (date, protocol_id, time_of_day, taken)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(date, protocol_id, time_of_day) DO UPDATE SET taken = excluded.taken
+        """,
+        (entry_date, body.protocol_id, slot, int(body.taken)),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "status": "ok",
+        "date": entry_date,
+        "protocol_id": body.protocol_id,
+        "time_of_day": body.time_of_day,
+        "taken": body.taken,
+    }
+
+
 # --- Nutrition ---
 
 CATEGORY_ORDER_SQL = """CASE category
@@ -2496,6 +2788,18 @@ class MealTemplateIn(BaseModel):
 
 class MealTemplateLogBody(BaseModel):
     date: str
+
+
+class MealPresetIn(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    nutrients: Optional[dict[str, float]] = None
+    from_meal_id: Optional[int] = None
+
+
+class MealPresetApplyBody(BaseModel):
+    date: str
+    time: Optional[str] = None
 
 
 class PlannedSessionIn(BaseModel):
@@ -2636,6 +2940,118 @@ def create_meal(body: MealIn):
         )
     conn.commit()
     result = _fetch_meals(conn, "WHERE id = ?", (new_id,))
+    conn.close()
+    return result[0]
+
+
+# --- Meal presets ---
+
+def _fetch_meal_presets(conn: sqlite3.Connection, where: str, params: tuple) -> list[dict]:
+    rows = conn.execute(
+        f"SELECT * FROM meal_presets {where} ORDER BY name, id", params
+    ).fetchall()
+    if not rows:
+        return []
+    pids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(pids))
+    nutrient_rows = conn.execute(
+        f"SELECT preset_id, nutrient_key, amount FROM meal_preset_nutrients WHERE preset_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    by_pid: dict[int, dict[str, float]] = {pid: {} for pid in pids}
+    for r in nutrient_rows:
+        by_pid[r["preset_id"]][r["nutrient_key"]] = r["amount"]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "notes": r["notes"],
+            "created_at": r["created_at"],
+            "nutrients": by_pid.get(r["id"], {}),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/meals/presets")
+def list_meal_presets():
+    conn = get_db()
+    result = _fetch_meal_presets(conn, "", ())
+    conn.close()
+    return result
+
+
+@app.post("/api/meals/presets")
+def create_meal_preset(body: MealPresetIn):
+    if not body.name.strip():
+        raise HTTPException(status_code=422, detail="Preset name is required")
+    if body.from_meal_id is None and body.nutrients is None:
+        raise HTTPException(status_code=422, detail="Provide nutrients or from_meal_id")
+    conn = get_db()
+    nutrients: dict[str, float] = {}
+    if body.from_meal_id is not None:
+        meal_rows = _fetch_meals(conn, "WHERE id = ?", (body.from_meal_id,))
+        if not meal_rows:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Source meal not found")
+        for n in meal_rows[0]["nutrients"]:
+            nutrients[n["key"]] = float(n["amount"])
+    if body.nutrients:
+        for k, v in body.nutrients.items():
+            nutrients[k] = float(v)
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    try:
+        cur = conn.execute(
+            "INSERT INTO meal_presets (name, notes, created_at) VALUES (?, ?, ?)",
+            (body.name.strip(), body.notes, now),
+        )
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Preset name already exists")
+    pid = cur.lastrowid
+    for k, v in nutrients.items():
+        conn.execute(
+            "INSERT INTO meal_preset_nutrients (preset_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (pid, k, v),
+        )
+    conn.commit()
+    result = _fetch_meal_presets(conn, "WHERE id = ?", (pid,))
+    conn.close()
+    return result[0]
+
+
+@app.delete("/api/meals/presets/{preset_id}")
+def delete_meal_preset(preset_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM meal_presets WHERE id = ?", (preset_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"status": "ok"}
+
+
+@app.post("/api/meals/presets/{preset_id}/apply")
+def apply_meal_preset(preset_id: int, body: MealPresetApplyBody):
+    conn = get_db()
+    presets = _fetch_meal_presets(conn, "WHERE id = ?", (preset_id,))
+    if not presets:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Preset not found")
+    preset = presets[0]
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO meals (date, time, name, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+        (body.date, body.time, preset["name"], preset["notes"], now),
+    )
+    meal_id = cur.lastrowid
+    for k, v in preset["nutrients"].items():
+        conn.execute(
+            "INSERT INTO meal_nutrients (meal_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (meal_id, k, v),
+        )
+    conn.commit()
+    result = _fetch_meals(conn, "WHERE id = ?", (meal_id,))
     conn.close()
     return result[0]
 
@@ -3753,6 +4169,8 @@ class DemoProvider(AIProvider):
     ) -> dict:
         await asyncio.sleep(0.4)
         tool_name = tool.get("name")
+        if tool_name == "record_meal_estimate":
+            return _demo_meal_payload(tool)
         if tool_name == "record_panel_comparison":
             return _demo_comparison_payload()
         if tool_name == "record_health_orientation":
@@ -4037,6 +4455,11 @@ class AnalyzeImageBody(BaseModel):
     user_notes: Optional[str] = None
 
 
+class AnalyzeMealTextBody(BaseModel):
+    description: str
+    user_notes: Optional[str] = None
+
+
 def _build_analyze_tool_schema(conn: sqlite3.Connection) -> dict:
     """Build a strict tool-use schema from the live nutrient_defs table so a
     newly-added custom nutrient is picked up without a code change."""
@@ -4182,6 +4605,64 @@ async def analyze_meal_image(body: AnalyzeImageBody):
         user_text=user_text,
         media_b64=img_b64,
         mime=mime,
+        tool=tool,
+    )
+
+    raw_nutrients = payload.get("nutrients", {}) or {}
+    nutrients: list[dict] = []
+    unknown_keys: list[str] = []
+    for key, value in raw_nutrients.items():
+        if value is None:
+            unknown_keys.append(key)
+        else:
+            try:
+                nutrients.append({"nutrient_key": key, "amount": float(value)})
+            except (TypeError, ValueError):
+                unknown_keys.append(key)
+
+    return {
+        "model": _get_ai_provider().model,
+        "suggested_name": payload.get("suggested_name") or "Meal",
+        "suggested_notes": payload.get("suggested_notes") or "",
+        "confidence": payload.get("confidence") or "medium",
+        "nutrients": nutrients,
+        "unknown_keys": sorted(unknown_keys),
+    }
+
+
+@app.post("/api/meals/analyze-text")
+async def analyze_meal_text(body: AnalyzeMealTextBody):
+    if not AI_AVAILABLE:
+        raise HTTPException(
+            status_code=503,
+            detail=f"AI analysis not configured (provider={AI_PROVIDER}, no API key set)",
+        )
+
+    description = (body.description or "").strip()
+    if not description:
+        raise HTTPException(status_code=422, detail="description is required")
+
+    conn = get_db()
+    try:
+        tool = _build_analyze_tool_schema(conn)
+    finally:
+        conn.close()
+
+    system_prompt = (
+        "You are a registered-dietitian-grade nutrient estimator. Given a free-text meal "
+        "description, call record_meal_estimate with your best numeric estimate for each "
+        "listed nutrient. Estimate a single serving as described. Never invent numbers — "
+        "prefer null when uncertain. The user knows what they ate; trust their description "
+        "for ingredients and portion sizes."
+    )
+    user_text = _append_user_context(
+        f"Estimate the nutrient content of this meal:\n\n{description}",
+        body.user_notes,
+    )
+
+    payload = await _call_ai_text_tool(
+        system=system_prompt,
+        user_text=user_text,
         tool=tool,
     )
 
@@ -4633,7 +5114,10 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
     ).fetchall())
 
     bp = conn.execute(
-        "SELECT id, date, notes FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+        "SELECT id, date, notes FROM bloodwork_panels "
+        "WHERE date >= date('now', '-' || ? || ' days') "
+        "ORDER BY date DESC LIMIT 1",
+        (BLOODWORK_AI_MAX_AGE_DAYS,),
     ).fetchone()
     bloodwork = None
     if bp:
@@ -4661,7 +5145,7 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
         (start_date, end_date),
     ).fetchall())
 
-    return {
+    result = {
         "analysis_date": end_date,
         "window_days": window_days,
         "heart_rate": hr,
@@ -4672,9 +5156,11 @@ def _gather_orient_metrics(conn: sqlite3.Connection, window_days: int = 14) -> d
         "steps": steps,
         "weight": weight,
         "recent_workouts": workouts,
-        "bloodwork": bloodwork,
         "journal_cognition": cognition,
     }
+    if bloodwork is not None:
+        result["bloodwork"] = bloodwork
+    return result
 
 
 class OrientAnalyzeBody(BaseModel):
@@ -5161,7 +5647,10 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
     ).fetchall())
 
     bp = conn.execute(
-        "SELECT id, date FROM bloodwork_panels ORDER BY date DESC LIMIT 1"
+        "SELECT id, date FROM bloodwork_panels "
+        "WHERE date >= date('now', '-' || ? || ' days') "
+        "ORDER BY date DESC LIMIT 1",
+        (BLOODWORK_AI_MAX_AGE_DAYS,),
     ).fetchone()
     open_bloodwork_alerts: list[str] = []
     if bp:
@@ -5178,7 +5667,7 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
             for r in flagged
         ]
 
-    return {
+    result = {
         "briefing_date": today_str,
         "yesterday": yesterday_str,
         "last_night_sleep": sleep,
@@ -5194,8 +5683,10 @@ def _gather_morning_metrics(conn: sqlite3.Connection) -> dict:
         "yesterday_water": water,
         "todays_planned_activities": planned_activities,
         "todays_supplements": supplements,
-        "open_bloodwork_alerts": open_bloodwork_alerts,
     }
+    if open_bloodwork_alerts:
+        result["open_bloodwork_alerts"] = open_bloodwork_alerts
+    return result
 
 
 class MorningBriefingBody(BaseModel):

@@ -28,7 +28,7 @@ def _run(params: dict) -> RunResult:
 register(Plugin(
     name="garmin_health",
     label="Garmin Connect — Health",
-    default_interval_minutes=360,
+    default_interval_minutes=1,
     description="Heart rate, HRV, sleep, stress, body battery, steps.",
     param_schema=[
         ParamSpec("email", "Email", "text", required=True, env_var="GARMIN_EMAIL"),

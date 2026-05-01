@@ -60,12 +60,31 @@ export function CognitionSection({ start, end }: Props) {
   );
 
 
-  const processingData = (processing ?? []).map((d) => ({
-    ...d,
-    accuracy_pct: Math.round(d.accuracy * 100),
-    adjusted_plot: d.baseline_confidence === "ok" ? d.adjusted_score : null,
-    low_quality_throughput: d.quality_flag === "low" ? d.throughput_pm : null,
-  }));
+  const processingData = (processing ?? [])
+    .map((d) => ({
+      ...d,
+      ts: new Date(d.started_at ?? d.created_at).getTime(),
+      accuracy_pct: Math.round(d.accuracy * 100),
+      adjusted_plot: d.baseline_confidence === "ok" ? d.adjusted_score : null,
+      low_quality_throughput: d.quality_flag === "low" ? d.throughput_pm : null,
+    }))
+    .sort((a, b) => a.ts - b.ts);
+
+  const formatProcessingTick = (ms: number) => {
+    const d = new Date(ms);
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${m}-${day}`;
+  };
+  const formatProcessingLabel = (ms: unknown) => {
+    const t = typeof ms === "number" ? ms : Number(ms);
+    if (!Number.isFinite(t)) return String(ms ?? "");
+    const d = new Date(t);
+    return d.toISOString().slice(0, 16).replace("T", " ");
+  };
+  const processingDomain: [number, number] | undefined = processingData.length
+    ? [processingData[0].ts, processingData[processingData.length - 1].ts]
+    : undefined;
 
   const corrData = (cognition ?? [])
     .filter((d): d is CognitionDaily & { focus: number } => d.focus !== null)
@@ -165,10 +184,17 @@ export function CognitionSection({ start, end }: Props) {
           <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
             <ComposedChart data={processingData}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="date" tick={{ fontSize: 11 }} />
+              <XAxis
+                dataKey="ts"
+                type="number"
+                scale="time"
+                domain={processingDomain ?? ["auto", "auto"]}
+                tick={{ fontSize: 11 }}
+                tickFormatter={formatProcessingTick}
+              />
               <YAxis yAxisId="left" tick={{ fontSize: 11 }} />
               {processingView === "raw" && <YAxis yAxisId="right" orientation="right" domain={[0, 100]} tick={{ fontSize: 11 }} />}
-              <Tooltip />
+              <Tooltip labelFormatter={formatProcessingLabel} />
               <Legend />
               {processingView === "raw" ? (
                 <>
@@ -178,7 +204,7 @@ export function CognitionSection({ start, end }: Props) {
                     dataKey="throughput_pm"
                     name="Throughput/min"
                     stroke="#8b5cf6"
-                    dot={{ r: 2 }}
+                    dot={{ r: 3 }}
                     connectNulls
                   />
                   <Scatter
@@ -207,7 +233,7 @@ export function CognitionSection({ start, end }: Props) {
                     dataKey="adjusted_plot"
                     name="Adjusted score (z)"
                     stroke="#22c55e"
-                    dot={{ r: 2 }}
+                    dot={{ r: 3 }}
                     connectNulls
                   />
                 </>
@@ -215,7 +241,7 @@ export function CognitionSection({ start, end }: Props) {
             </ComposedChart>
           </ResponsiveContainer></div>
           <p className="chart-empty">
-            Red points mark low-quality sessions in raw view. Adjusted view only plots days with enough prior high-quality baseline history (3+ sessions).
+            Each point is one session — multiple runs per day are plotted separately. Red points mark low-quality sessions in raw view. Adjusted view only plots sessions with enough prior high-quality baseline history (3+ sessions).
           </p>
         </>
       )}

@@ -9,7 +9,11 @@ interface Props { start: string; end: string }
 
 export function BodyBatteryChart({ start, end }: Props) {
   const { data, loading } = useMetricData<BodyBatteryDaily[]>("body-battery/daily", start, end);
-  const { data: stats } = useMetricData<{ charged: StatValues }>("body-battery/stats", start, end);
+  const { data: stats } = useMetricData<{ max_level: StatValues; charged: StatValues }>(
+    "body-battery/stats",
+    start,
+    end,
+  );
 
   if (loading) return <div className="chart-loading">Loading body battery...</div>;
 
@@ -22,7 +26,12 @@ export function BodyBatteryChart({ start, end }: Props) {
   return (
     <div className="chart-section">
       <h2>Body Battery</h2>
-      <MetricCards items={[{ label: "Charged", stats: stats?.charged ?? null }]} />
+      <MetricCards
+        items={[
+          { label: "Daily Peak", stats: stats?.max_level ?? null },
+          { label: "Charge Gained", stats: stats?.charged ?? null },
+        ]}
+      />
       <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%">
         <BarChart data={chartData}>
           <CartesianGrid strokeDasharray="3 3" />

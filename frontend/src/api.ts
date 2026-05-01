@@ -27,6 +27,7 @@ import type {
   LongevityAnalyte,
   Meal,
   MealAnalysisResult,
+  MealPreset,
   MealTemplate,
   NutrientDef,
   NutrientCategory,
@@ -49,6 +50,8 @@ import type {
   ProtocolEvent,
   ProtocolInput,
   ProtocolEventInput,
+  ProtocolTimeOfDay,
+  ScheduledProtocol,
   Supplement,
   SupplementIntake,
   TimeOfDay,
@@ -461,6 +464,50 @@ export async function logMealTemplate(id: number, date: string): Promise<Meal> {
   return res.json();
 }
 
+// --- Meal presets ---
+
+export async function listMealPresets(): Promise<MealPreset[]> {
+  const res = await apiFetch("/api/meals/presets");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export interface MealPresetInput {
+  name: string;
+  notes?: string | null;
+  nutrients?: Record<string, number>;
+  from_meal_id?: number;
+}
+
+export async function createMealPreset(body: MealPresetInput): Promise<MealPreset> {
+  const res = await apiFetch("/api/meals/presets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteMealPreset(id: number): Promise<void> {
+  const res = await apiFetch(`/api/meals/presets/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function applyMealPreset(
+  id: number,
+  date: string,
+  time?: string | null
+): Promise<Meal> {
+  const res = await apiFetch(`/api/meals/presets/${id}/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date, time: time ?? null }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
 // --- Planned sessions ---
 
 export async function listPlannedSessions(start: string, end: string): Promise<PlannedSession[]> {
@@ -531,6 +578,25 @@ export async function analyzeMealImage(
   user_notes?: string,
 ): Promise<MealAnalysisResult> {
   return postAnalyze("/api/meals/analyze-image", upload_id, user_notes);
+}
+
+export async function analyzeMealText(
+  description: string,
+  user_notes?: string,
+): Promise<MealAnalysisResult> {
+  const body: { description: string; user_notes?: string } = { description };
+  const trimmed = user_notes?.trim();
+  if (trimmed) body.user_notes = trimmed;
+  const res = await apiFetch("/api/meals/analyze-text", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(detail.detail || `API error: ${res.status}`);
+  }
+  return res.json();
 }
 
 export async function analyzeFormCheckImage(
@@ -1049,6 +1115,24 @@ export async function updateProtocolEvent(id: number, body: ProtocolEventInput):
 
 export async function deleteProtocolEvent(id: number): Promise<void> {
   const res = await apiFetch(`/api/protocol-events/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function fetchScheduledProtocols(date: string): Promise<ScheduledProtocol[]> {
+  const res = await apiFetch(`/api/protocols/${date}/scheduled`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function saveProtocolAdherence(
+  date: string,
+  body: { protocol_id: number; time_of_day: ProtocolTimeOfDay | null; taken: boolean }
+): Promise<void> {
+  const res = await apiFetch(`/api/protocols/${date}/adherence`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
 }
 

@@ -20,6 +20,8 @@ export interface BodyBatteryDaily {
   date: string;
   charged: number | null;
   drained: number | null;
+  max_level: number | null;
+  min_level: number | null;
 }
 
 export interface SleepDaily {
@@ -194,7 +196,9 @@ export interface ProcessingSpeedSessionResult {
 }
 
 export interface ProcessingSpeedDaily {
+  session_id: number;
   date: string;
+  started_at: string;
   attempted: number;
   correct: number;
   accuracy: number;
@@ -428,6 +432,14 @@ export interface MealTemplate {
   notes: string | null;
   created_at: string;
   nutrients: MealNutrient[];
+}
+
+export interface MealPreset {
+  id: number;
+  name: string;
+  notes: string | null;
+  created_at: string;
+  nutrients: Record<string, number>;
 }
 
 export type PlannedSessionKind = "zone2" | "strength" | "hiit" | "mobility" | "rest" | "sauna" | "cold";
@@ -761,6 +773,15 @@ export type ProtocolCategory =
   | "fasting"
   | "training_block";
 
+export type ProtocolTimeOfDay = "morning" | "noon" | "evening";
+
+export type ProtocolRecurrenceType =
+  | "daily"
+  | "days_of_week"
+  | "every_n_days"
+  | "weekly_on"
+  | "as_needed";
+
 export interface Protocol {
   id: number;
   name: string;
@@ -772,6 +793,11 @@ export interface Protocol {
   end_date: string | null;
   notes: string | null;
   created_at: string;
+  time_of_day: ProtocolTimeOfDay | null;
+  recurrence_type: ProtocolRecurrenceType;
+  recurrence_days: string | null;
+  recurrence_n: number | null;
+  recurrence_anchor_date: string | null;
 }
 
 export interface ProtocolEvent {
@@ -794,6 +820,15 @@ export interface ProtocolInput {
   start_date: string;
   end_date?: string | null;
   notes?: string | null;
+  time_of_day?: ProtocolTimeOfDay | null;
+  recurrence_type?: ProtocolRecurrenceType;
+  recurrence_days?: string | null;
+  recurrence_n?: number | null;
+  recurrence_anchor_date?: string | null;
+}
+
+export interface ScheduledProtocol extends Protocol {
+  taken: boolean;
 }
 
 export interface ProtocolEventInput {

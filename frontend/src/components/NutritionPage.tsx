@@ -10,14 +10,25 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import {
+  applyMealPreset,
   createMeal,
+  createMealPreset,
   deleteMeal,
+  deleteMealPreset,
   fetchGlucosePostprandial,
+  listMealPresets,
   listMeals,
   listNutrientDefs,
 } from "../api";
-import type { GlucoseReading, Meal, NutrientCategory, NutrientDef } from "../types";
-import { MealFormFields, type MealFormOutput } from "./MealFormFields";
+import type {
+  GlucoseReading,
+  Meal,
+  MealPreset,
+  NutrientCategory,
+  NutrientDef,
+} from "../types";
+import { MealFormFields, type MealFormOutput, type MealFormValues } from "./MealFormFields";
+import { MealTextDescribe } from "./MealTextDescribe";
 import { NutritionGaps } from "./NutritionGaps";
 import { WaterQuickLog } from "./WaterQuickLog";
 
@@ -69,12 +80,23 @@ export function NutritionPage() {
   const [date, setDate] = useState<string>(todayISO());
   const [defs, setDefs] = useState<NutrientDef[]>([]);
   const [meals, setMeals] = useState<Meal[]>([]);
+  const [presets, setPresets] = useState<MealPreset[]>([]);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
   const [gapsKey, setGapsKey] = useState(0);
+  const [draftFromPreset, setDraftFromPreset] = useState<MealPreset | null>(null);
 
   useEffect(() => {
     listNutrientDefs().then(setDefs).catch(() => setStatus("error"));
+    reloadPresets();
   }, []);
+
+  async function reloadPresets() {
+    try {
+      setPresets(await listMealPresets());
+    } catch {
+      // non-fatal
+    }
+  }
 
   async function reload() {
     setStatus("loading");
@@ -114,6 +136,34 @@ export function NutritionPage() {
     await reload();
   }
 
+  async function handleApplyPreset(presetId: number) {
+    await applyMealPreset(presetId, date);
+    await reload();
+  }
+
+  function handleUseDraft(preset: MealPreset) {
+    setDraftFromPreset(preset);
+  }
+
+  async function handleSavePresetFromMeal(meal: Meal) {
+    const name = window.prompt("Preset name:", meal.name);
+    if (!name) return;
+    try {
+      await createMealPreset({ name: name.trim(), notes: meal.notes, from_meal_id: meal.id });
+      await reloadPresets();
+    } catch (err) {
+      window.alert(`Failed to save preset: ${(err as Error).message}`);
+    }
+  }
+
+  async function handleDeletePreset(id: number) {
+    if (!window.confirm("Delete this preset?")) return;
+    await deleteMealPreset(id);
+    await reloadPresets();
+  }
+
+  const isPast = date < todayISO();
+
   return (
     <div className="journal-page">
       <div className="overview-card journal-form">
@@ -122,9 +172,15 @@ export function NutritionPage() {
           <input
             type="date"
             value={date}
+            max={todayISO()}
             onChange={(e) => setDate(e.target.value)}
           />
         </label>
+        {isPast && (
+          <p className="journal-hint">
+            Logging retroactively for {date} — meals added below will be saved against this date.
+          </p>
+        )}
         {status === "error" && <p className="journal-err">Failed to load nutrition data</p>}
       </div>
 
@@ -138,14 +194,24 @@ export function NutritionPage() {
                 {m.time ? `${m.time} · ` : ""}
                 {m.name}
               </span>
-              <button
-                type="button"
-                className="supplement-delete"
-                onClick={() => handleDeleteMeal(m.id)}
-                aria-label={`Delete ${m.name}`}
-              >
-                ×
-              </button>
+              <div>
+                <button
+                  type="button"
+                  className="chip"
+                  onClick={() => handleSavePresetFromMeal(m)}
+                  aria-label={`Save ${m.name} as preset`}
+                >
+                  Save as preset
+                </button>
+                <button
+                  type="button"
+                  className="supplement-delete"
+                  onClick={() => handleDeleteMeal(m.id)}
+                  aria-label={`Delete ${m.name}`}
+                >
+                  ×
+                </button>
+              </div>
             </div>
             <div className="meal-nutrients">
               {m.nutrients.map((n) => {
@@ -166,10 +232,32 @@ export function NutritionPage() {
           </div>
         ))}
 
+        <PresetChooser
+          presets={presets}
+          onApply={handleApplyPreset}
+          onUseDraft={handleUseDraft}
+          onDelete={handleDeletePreset}
+        />
+
         <AddMealForm
           date={date}
           defsByCategory={defsByCategory}
           onAdded={reload}
+          draftFromPreset={draftFromPreset}
+          onDraftConsumed={() => setDraftFromPreset(null)}
+        />
+      </div>
+
+      <div className="overview-card journal-form">
+        <MealTextDescribe
+          date={date}
+          label="Describe a meal (AI)"
+          hint={
+            isPast
+              ? "Type what you ate — the AI fills in nutrients, then save it against the selected date."
+              : "Type what you ate and let the AI estimate the nutrients."
+          }
+          onSaved={reload}
         />
       </div>
 
@@ -180,17 +268,132 @@ export function NutritionPage() {
   );
 }
 
+function PresetChooser({
+  presets,
+  onApply,
+  onUseDraft,
+  onDelete,
+}: {
+  presets: MealPreset[];
+  onApply: (id: number) => Promise<void>;
+  onUseDraft: (p: MealPreset) => void;
+  onDelete: (id: number) => Promise<void>;
+}) {
+  const [selectedId, setSelectedId] = useState<number | "">("");
+  const [busy, setBusy] = useState(false);
+  const [manageOpen, setManageOpen] = useState(false);
+
+  if (presets.length === 0 && !manageOpen) {
+    return (
+      <p className="journal-hint">
+        No presets yet. Save a meal as a preset to re-log it later.
+      </p>
+    );
+  }
+
+  const selected = presets.find((p) => p.id === selectedId) ?? null;
+
+  async function handleApplyClick() {
+    if (selected == null) return;
+    setBusy(true);
+    try {
+      await onApply(selected.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleUseDraftClick() {
+    if (selected == null) return;
+    onUseDraft(selected);
+  }
+
+  return (
+    <div className="journal-form" style={{ marginTop: 8 }}>
+      <div className="meal-header-inputs">
+        <select
+          value={selectedId}
+          onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : "")}
+        >
+          <option value="">Pick a preset…</option>
+          {presets.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={selected == null || busy}
+          onClick={handleApplyClick}
+        >
+          {busy ? "Logging…" : "Log preset"}
+        </button>
+        <button type="button" disabled={selected == null} onClick={handleUseDraftClick}>
+          Use as draft
+        </button>
+        <button type="button" className="chip" onClick={() => setManageOpen((o) => !o)}>
+          {manageOpen ? "Hide presets" : "Manage presets"}
+        </button>
+      </div>
+      {manageOpen && (
+        <div className="meal-nutrients" style={{ marginTop: 8 }}>
+          {presets.length === 0 && <span className="supplement-dosage">No presets.</span>}
+          {presets.map((p) => (
+            <span key={p.id} className="meal-nutrient-chip">
+              {p.name}
+              <button
+                type="button"
+                className="supplement-delete"
+                onClick={() => onDelete(p.id)}
+                aria-label={`Delete ${p.name}`}
+                style={{ marginLeft: 6 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AddMealForm({
   date,
   defsByCategory,
   onAdded,
+  draftFromPreset,
+  onDraftConsumed,
 }: {
   date: string;
   defsByCategory: Record<NutrientCategory, NutrientDef[]>;
   onAdded: () => void;
+  draftFromPreset: MealPreset | null;
+  onDraftConsumed: () => void;
 }) {
   const [saving, setSaving] = useState(false);
   const [resetKey, setResetKey] = useState(0);
+
+  useEffect(() => {
+    if (draftFromPreset) {
+      setResetKey((k) => k + 1);
+    }
+  }, [draftFromPreset]);
+
+  const initial: Partial<MealFormValues> | undefined = useMemo(() => {
+    if (!draftFromPreset) return undefined;
+    const amounts: Record<string, string> = {};
+    for (const [k, v] of Object.entries(draftFromPreset.nutrients)) {
+      amounts[k] = String(v);
+    }
+    return {
+      name: draftFromPreset.name,
+      time: "",
+      notes: draftFromPreset.notes ?? "",
+      amounts,
+    };
+  }, [draftFromPreset]);
 
   async function handleSubmit(out: MealFormOutput) {
     setSaving(true);
@@ -202,7 +405,8 @@ function AddMealForm({
         notes: out.notes,
         nutrients: out.nutrients,
       });
-      setResetKey((k) => k + 1); // remount form → clears inputs
+      setResetKey((k) => k + 1);
+      onDraftConsumed();
       onAdded();
     } finally {
       setSaving(false);
@@ -213,6 +417,7 @@ function AddMealForm({
     <MealFormFields
       key={resetKey}
       defsByCategory={defsByCategory}
+      initial={initial}
       submitLabel="Add meal"
       onSubmit={handleSubmit}
       saving={saving}
@@ -220,4 +425,3 @@ function AddMealForm({
     />
   );
 }
-

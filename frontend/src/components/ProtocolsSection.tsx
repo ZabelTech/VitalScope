@@ -7,7 +7,15 @@ import {
   listProtocolEvents,
   listProtocols,
 } from "../api";
-import type { Protocol, ProtocolCategory, ProtocolEvent, ProtocolEventInput, ProtocolInput } from "../types";
+import type {
+  Protocol,
+  ProtocolCategory,
+  ProtocolEvent,
+  ProtocolEventInput,
+  ProtocolInput,
+  ProtocolRecurrenceType,
+  ProtocolTimeOfDay,
+} from "../types";
 
 function todayISO(): string {
   return new Date().toISOString().slice(0, 10);
@@ -42,6 +50,68 @@ const CATEGORY_COLORS: Record<ProtocolCategory, string> = {
 const ALL_CATEGORIES: ProtocolCategory[] = [
   "drug", "peptide", "ped", "supplement_stack", "hormesis", "fasting", "training_block",
 ];
+
+const WEEKDAYS: { key: string; label: string }[] = [
+  { key: "mon", label: "Mon" },
+  { key: "tue", label: "Tue" },
+  { key: "wed", label: "Wed" },
+  { key: "thu", label: "Thu" },
+  { key: "fri", label: "Fri" },
+  { key: "sat", label: "Sat" },
+  { key: "sun", label: "Sun" },
+];
+
+const RECURRENCE_LABELS: Record<ProtocolRecurrenceType, string> = {
+  daily: "Daily",
+  days_of_week: "Days of week",
+  every_n_days: "Every N days",
+  weekly_on: "Weekly on",
+  as_needed: "As needed",
+};
+
+const RECURRENCE_OPTIONS: ProtocolRecurrenceType[] = [
+  "daily", "days_of_week", "every_n_days", "weekly_on", "as_needed",
+];
+
+const TIME_OF_DAY_OPTIONS: { value: "" | ProtocolTimeOfDay; label: string }[] = [
+  { value: "", label: "No fixed slot" },
+  { value: "morning", label: "Morning" },
+  { value: "noon", label: "Noon" },
+  { value: "evening", label: "Evening" },
+];
+
+function describeSchedule(p: Protocol): string | null {
+  switch (p.recurrence_type) {
+    case "daily":
+      return "Daily";
+    case "as_needed":
+      return "As needed";
+    case "days_of_week": {
+      const days = (p.recurrence_days ?? "").split(",").filter(Boolean);
+      if (days.length === 0) return null;
+      const labels = days.map((d) => WEEKDAYS.find((w) => w.key === d)?.label ?? d);
+      return labels.join(", ");
+    }
+    case "weekly_on": {
+      const day = (p.recurrence_days ?? "").split(",")[0];
+      const label = WEEKDAYS.find((w) => w.key === day)?.label ?? day;
+      return label ? `Weekly on ${label}` : null;
+    }
+    case "every_n_days":
+      if (!p.recurrence_n) return null;
+      return `Every ${p.recurrence_n} day${p.recurrence_n === 1 ? "" : "s"}`;
+    default:
+      return null;
+  }
+}
+
+function toggleDayInList(list: string, day: string): string {
+  const set = new Set(list.split(",").filter(Boolean));
+  if (set.has(day)) set.delete(day);
+  else set.add(day);
+  const ordered = WEEKDAYS.map((w) => w.key).filter((k) => set.has(k));
+  return ordered.join(",");
+}
 
 type SaveStatus = "idle" | "saving" | "saved" | "error";
 
@@ -97,6 +167,11 @@ export function ProtocolsSection() {
   const [addStart, setAddStart] = useState(today);
   const [addNotes, setAddNotes] = useState("");
   const [addSaving, setAddSaving] = useState(false);
+  const [addTimeOfDay, setAddTimeOfDay] = useState<"" | ProtocolTimeOfDay>("");
+  const [addRecurrenceType, setAddRecurrenceType] = useState<ProtocolRecurrenceType>("daily");
+  const [addRecurrenceDays, setAddRecurrenceDays] = useState<string>("");
+  const [addRecurrenceN, setAddRecurrenceN] = useState<string>("");
+  const [addRecurrenceAnchor, setAddRecurrenceAnchor] = useState<string>(today);
 
   async function reload() {
     try {
@@ -243,6 +318,18 @@ export function ProtocolsSection() {
         cadence: addCadence.trim() || undefined,
         start_date: addStart,
         notes: addNotes.trim() || undefined,
+        time_of_day: addTimeOfDay || null,
+        recurrence_type: addRecurrenceType,
+        recurrence_days:
+          addRecurrenceType === "days_of_week" || addRecurrenceType === "weekly_on"
+            ? addRecurrenceDays || null
+            : null,
+        recurrence_n:
+          addRecurrenceType === "every_n_days" && addRecurrenceN
+            ? parseInt(addRecurrenceN, 10)
+            : null,
+        recurrence_anchor_date:
+          addRecurrenceType === "every_n_days" ? addRecurrenceAnchor || null : null,
       };
       await createProtocol(body);
       setAddName("");
@@ -251,6 +338,11 @@ export function ProtocolsSection() {
       setAddCadence("");
       setAddStart(today);
       setAddNotes("");
+      setAddTimeOfDay("");
+      setAddRecurrenceType("daily");
+      setAddRecurrenceDays("");
+      setAddRecurrenceN("");
+      setAddRecurrenceAnchor(today);
       setAddOpen(false);
       await reload();
     } finally {
@@ -433,7 +525,16 @@ export function ProtocolsSection() {
                     {[p.dose, p.unit].filter(Boolean).join(" ")}
                   </span>
                 )}
-                {p.cadence && <span className="protocol-meta">{p.cadence}</span>}
+                {(() => {
+                  const sched = describeSchedule(p);
+                  const slot = p.time_of_day
+                    ? p.time_of_day.charAt(0).toUpperCase() + p.time_of_day.slice(1)
+                    : null;
+                  const meta = [sched, slot, !sched && p.cadence ? p.cadence : null]
+                    .filter(Boolean)
+                    .join(" · ");
+                  return meta ? <span className="protocol-meta">{meta}</span> : null;
+                })()}
                 <span className="protocol-day-count">day {days}</span>
                 <div className="protocol-row-actions">
                   <button
@@ -548,10 +649,26 @@ export function ProtocolsSection() {
               />
               <input
                 type="text"
-                placeholder="Cadence (e.g. weekly)"
+                placeholder="Cadence note (free text, optional)"
                 value={addCadence}
                 onChange={(e) => setAddCadence(e.target.value)}
               />
+              <select
+                value={addTimeOfDay}
+                onChange={(e) => setAddTimeOfDay(e.target.value as "" | ProtocolTimeOfDay)}
+              >
+                {TIME_OF_DAY_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+              <select
+                value={addRecurrenceType}
+                onChange={(e) => setAddRecurrenceType(e.target.value as ProtocolRecurrenceType)}
+              >
+                {RECURRENCE_OPTIONS.map((r) => (
+                  <option key={r} value={r}>{RECURRENCE_LABELS[r]}</option>
+                ))}
+              </select>
               <div className="protocol-add-date-row">
                 <label className="stat-label">Start</label>
                 <input
@@ -561,6 +678,63 @@ export function ProtocolsSection() {
                 />
               </div>
             </div>
+            {addRecurrenceType === "days_of_week" && (
+              <div className="protocol-add-recurrence">
+                <span className="stat-label">Days</span>
+                <div className="protocol-add-weekday-row">
+                  {WEEKDAYS.map((w) => {
+                    const checked = addRecurrenceDays.split(",").includes(w.key);
+                    return (
+                      <label key={w.key} className="journal-radio">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => setAddRecurrenceDays(toggleDayInList(addRecurrenceDays, w.key))}
+                        />
+                        {w.label}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {addRecurrenceType === "weekly_on" && (
+              <div className="protocol-add-recurrence">
+                <span className="stat-label">Day</span>
+                <select
+                  value={addRecurrenceDays.split(",")[0] ?? ""}
+                  onChange={(e) => setAddRecurrenceDays(e.target.value)}
+                >
+                  <option value="">Select day</option>
+                  {WEEKDAYS.map((w) => (
+                    <option key={w.key} value={w.key}>{w.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            {addRecurrenceType === "every_n_days" && (
+              <div className="protocol-add-recurrence">
+                <label className="protocol-add-date-row">
+                  <span className="stat-label">Every</span>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="N"
+                    value={addRecurrenceN}
+                    onChange={(e) => setAddRecurrenceN(e.target.value)}
+                  />
+                  <span className="stat-label">days</span>
+                </label>
+                <label className="protocol-add-date-row">
+                  <span className="stat-label">Anchor</span>
+                  <input
+                    type="date"
+                    value={addRecurrenceAnchor}
+                    onChange={(e) => setAddRecurrenceAnchor(e.target.value)}
+                  />
+                </label>
+              </div>
+            )}
             <textarea
               placeholder="Notes (optional)"
               value={addNotes}
