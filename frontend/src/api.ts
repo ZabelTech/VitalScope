@@ -27,6 +27,7 @@ import type {
   LongevityAnalyte,
   Meal,
   MealAnalysisResult,
+  MealPreset,
   MealTemplate,
   NutrientDef,
   NutrientCategory,
@@ -456,6 +457,50 @@ export async function logMealTemplate(id: number, date: string): Promise<Meal> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ date }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+// --- Meal presets ---
+
+export async function listMealPresets(): Promise<MealPreset[]> {
+  const res = await apiFetch("/api/meals/presets");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export interface MealPresetInput {
+  name: string;
+  notes?: string | null;
+  nutrients?: Record<string, number>;
+  from_meal_id?: number;
+}
+
+export async function createMealPreset(body: MealPresetInput): Promise<MealPreset> {
+  const res = await apiFetch("/api/meals/presets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function deleteMealPreset(id: number): Promise<void> {
+  const res = await apiFetch(`/api/meals/presets/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+}
+
+export async function applyMealPreset(
+  id: number,
+  date: string,
+  time?: string | null
+): Promise<Meal> {
+  const res = await apiFetch(`/api/meals/presets/${id}/apply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ date, time: time ?? null }),
   });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();

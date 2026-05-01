@@ -430,6 +430,14 @@ export interface MealTemplate {
   nutrients: MealNutrient[];
 }
 
+export interface MealPreset {
+  id: number;
+  name: string;
+  notes: string | null;
+  created_at: string;
+  nutrients: Record<string, number>;
+}
+
 export type PlannedSessionKind = "zone2" | "strength" | "hiit" | "mobility" | "rest" | "sauna" | "cold";
 
 export interface PlannedSession {
