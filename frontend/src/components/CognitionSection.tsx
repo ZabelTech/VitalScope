@@ -76,9 +76,9 @@ export function CognitionSection({ start, end }: Props) {
     const day = String(d.getDate()).padStart(2, "0");
     return `${m}-${day}`;
   };
-  const formatProcessingLabel = (ms: number | string) => {
+  const formatProcessingLabel = (ms: unknown) => {
     const t = typeof ms === "number" ? ms : Number(ms);
-    if (!Number.isFinite(t)) return String(ms);
+    if (!Number.isFinite(t)) return String(ms ?? "");
     const d = new Date(t);
     return d.toISOString().slice(0, 16).replace("T", " ");
   };
