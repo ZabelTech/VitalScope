@@ -34,3 +34,6 @@ npm-debug.log*
 
 # Fly.io (will appear later)
 .fly/
+
+# Claude Code agent worktrees
+.claude/worktrees/
