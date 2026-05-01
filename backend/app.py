@@ -782,6 +782,26 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS meal_presets (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            name       TEXT NOT NULL UNIQUE,
+            notes      TEXT,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS meal_preset_nutrients (
+            preset_id    INTEGER NOT NULL REFERENCES meal_presets(id) ON DELETE CASCADE,
+            nutrient_key TEXT NOT NULL REFERENCES nutrient_defs(key),
+            amount       REAL NOT NULL,
+            PRIMARY KEY (preset_id, nutrient_key)
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS planned_sessions (
             id             INTEGER PRIMARY KEY AUTOINCREMENT,
             date           TEXT NOT NULL,
@@ -2770,6 +2790,18 @@ class MealTemplateLogBody(BaseModel):
     date: str
 
 
+class MealPresetIn(BaseModel):
+    name: str
+    notes: Optional[str] = None
+    nutrients: Optional[dict[str, float]] = None
+    from_meal_id: Optional[int] = None
+
+
+class MealPresetApplyBody(BaseModel):
+    date: str
+    time: Optional[str] = None
+
+
 class PlannedSessionIn(BaseModel):
     date: str
     kind: Literal["zone2", "strength", "hiit", "mobility", "rest", "sauna", "cold"]
@@ -2908,6 +2940,118 @@ def create_meal(body: MealIn):
         )
     conn.commit()
     result = _fetch_meals(conn, "WHERE id = ?", (new_id,))
+    conn.close()
+    return result[0]
+
+
+# --- Meal presets ---
+
+def _fetch_meal_presets(conn: sqlite3.Connection, where: str, params: tuple) -> list[dict]:
+    rows = conn.execute(
+        f"SELECT * FROM meal_presets {where} ORDER BY name, id", params
+    ).fetchall()
+    if not rows:
+        return []
+    pids = [r["id"] for r in rows]
+    placeholders = ",".join("?" * len(pids))
+    nutrient_rows = conn.execute(
+        f"SELECT preset_id, nutrient_key, amount FROM meal_preset_nutrients WHERE preset_id IN ({placeholders})",
+        pids,
+    ).fetchall()
+    by_pid: dict[int, dict[str, float]] = {pid: {} for pid in pids}
+    for r in nutrient_rows:
+        by_pid[r["preset_id"]][r["nutrient_key"]] = r["amount"]
+    return [
+        {
+            "id": r["id"],
+            "name": r["name"],
+            "notes": r["notes"],
+            "created_at": r["created_at"],
+            "nutrients": by_pid.get(r["id"], {}),
+        }
+        for r in rows
+    ]
+
+
+@app.get("/api/meals/presets")
+def list_meal_presets():
+    conn = get_db()
+    result = _fetch_meal_presets(conn, "", ())
+    conn.close()
+    return result
+
+
+@app.post("/api/meals/presets")
+def create_meal_preset(body: MealPresetIn):
+    if not body.name.strip():
+        raise HTTPException(status_code=422, detail="Preset name is required")
+    if body.from_meal_id is None and body.nutrients is None:
+        raise HTTPException(status_code=422, detail="Provide nutrients or from_meal_id")
+    conn = get_db()
+    nutrients: dict[str, float] = {}
+    if body.from_meal_id is not None:
+        meal_rows = _fetch_meals(conn, "WHERE id = ?", (body.from_meal_id,))
+        if not meal_rows:
+            conn.close()
+            raise HTTPException(status_code=404, detail="Source meal not found")
+        for n in meal_rows[0]["nutrients"]:
+            nutrients[n["key"]] = float(n["amount"])
+    if body.nutrients:
+        for k, v in body.nutrients.items():
+            nutrients[k] = float(v)
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    try:
+        cur = conn.execute(
+            "INSERT INTO meal_presets (name, notes, created_at) VALUES (?, ?, ?)",
+            (body.name.strip(), body.notes, now),
+        )
+    except sqlite3.IntegrityError:
+        conn.close()
+        raise HTTPException(status_code=409, detail="Preset name already exists")
+    pid = cur.lastrowid
+    for k, v in nutrients.items():
+        conn.execute(
+            "INSERT INTO meal_preset_nutrients (preset_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (pid, k, v),
+        )
+    conn.commit()
+    result = _fetch_meal_presets(conn, "WHERE id = ?", (pid,))
+    conn.close()
+    return result[0]
+
+
+@app.delete("/api/meals/presets/{preset_id}")
+def delete_meal_preset(preset_id: int):
+    conn = get_db()
+    cur = conn.execute("DELETE FROM meal_presets WHERE id = ?", (preset_id,))
+    conn.commit()
+    conn.close()
+    if cur.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Preset not found")
+    return {"status": "ok"}
+
+
+@app.post("/api/meals/presets/{preset_id}/apply")
+def apply_meal_preset(preset_id: int, body: MealPresetApplyBody):
+    conn = get_db()
+    presets = _fetch_meal_presets(conn, "WHERE id = ?", (preset_id,))
+    if not presets:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Preset not found")
+    preset = presets[0]
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    cur = conn.execute(
+        "INSERT INTO meals (date, time, name, notes, created_at) VALUES (?, ?, ?, ?, ?)",
+        (body.date, body.time, preset["name"], preset["notes"], now),
+    )
+    meal_id = cur.lastrowid
+    for k, v in preset["nutrients"].items():
+        conn.execute(
+            "INSERT INTO meal_nutrients (meal_id, nutrient_key, amount) VALUES (?, ?, ?)",
+            (meal_id, k, v),
+        )
+    conn.commit()
+    result = _fetch_meals(conn, "WHERE id = ?", (meal_id,))
     conn.close()
     return result[0]
 
