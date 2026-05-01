@@ -49,7 +49,7 @@ test("Run daily OODA loop", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Plan" })).toBeVisible();
 
   await page.getByRole("link", { name: "Act" }).click();
-  await expect(page.getByRole("heading", { name: "Meals & water" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Supplements & alcohol" })).toBeVisible();
 });
 
 test("Log meal and review postprandial response", async ({ page }) => {
@@ -65,7 +65,7 @@ test("Log meal and review postprandial response", async ({ page }) => {
   });
 
   await login(page);
-  await page.getByRole("link", { name: "Act", exact: true }).click();
+  await page.getByLabel("Entries").click();
 
   await page.getByPlaceholder("Name (e.g. Breakfast)").fill("E2E Oatmeal");
   await page.locator('input[type="time"]').first().fill("08:00");

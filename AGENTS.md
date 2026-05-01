@@ -172,6 +172,17 @@ Aggregates today's recovery data (last night's sleep, HRV, resting HR, body batt
 
 When `VITALSCOPE_DEMO=1`, `_get_ai_provider()` short-circuits to `DemoProvider` (also in `backend/app.py`) — no API key is consulted, all analyse endpoints succeed, and the returned `model` / `ai_provider` strings are both `"demo"`. `DemoProvider.analyze_with_tool` dispatches on `tool["name"]` for vision endpoints (`_demo_meal_payload`, `_demo_form_check_payload`, `_demo_bloodwork_payload`); `DemoProvider.analyze_text_with_tool` dispatches for text-only endpoints (`_demo_meal_payload` for `POST /api/meals/analyze-text`, `_demo_orient_payload`, `_demo_morning_briefing_payload`). The meal payload helper is reused across both modalities since the tool schema (`record_meal_estimate`) is identical. If you add a new analyse endpoint, add a matching case in the relevant method or the demo build will 500 on an empty dict.
 
+## After opening a PR — own it until green
+
+When you open a pull request (or push to an existing PR branch), you are responsible for landing it. Don't hand off to the user.
+
+- **Always subscribe to PR activity** with `mcp__github__subscribe_pr_activity` immediately after the PR exists. Do this proactively without waiting to be asked. The subscription delivers CI failures, review comments, and merge-conflict signals into the conversation as `<github-webhook-activity>` events.
+- **Auto-fix CI failures.** When a check fails, fetch the failing job's logs (and the spec/source it covers), identify the root cause, and push a fix on the same branch. Don't ask before fixing — just fix it. If a CI failure is genuinely ambiguous (e.g. a flaky external dep, an expected snapshot diff that needs human judgement), summarise the failure and ask before acting.
+- **Auto-resolve merge conflicts.** When the PR shows conflicts with the base branch, rebase or merge the base in, resolve conflicts following the existing code's intent, push, and verify CI re-runs green. Prefer `git rebase origin/main` for a clean history; only fall back to `git merge` if rebasing would clobber other people's commits already on the remote PR branch.
+- **Don't strip CI checks to silence them.** If e2e fails because the UI moved, update the e2e spec to match the new UI — never delete the test or skip it. Same for type errors, lint, etc. The check exists for a reason.
+- **The `require-e2e-for-feature` script** (`scripts/require_e2e_for_feature.sh`) requires every change under `frontend/src/`, `backend/`, or `sync_*.py` to also touch at least one `frontend/e2e/*.spec.ts`. When you change a feature, update or add an e2e spec in the same commit — don't push the feature change first and the test second.
+- **Stop when the user explicitly tells you to stop**, when the failure is outside your authority (e.g. needs a secret, infrastructure change, or product decision), or when you've tried twice and the same fix isn't sticking. Otherwise: keep iterating until the PR is mergeable.
+
 ## Before reporting a task done
 
 - Frontend changes → `cd frontend && npx tsc -b --noEmit` must exit 0. The `-b` flag is required: the root `tsconfig.json` is project-references-only, so plain `tsc --noEmit` silently no-ops and lets type errors slip through to the Docker build.
