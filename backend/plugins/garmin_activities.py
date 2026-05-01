@@ -28,7 +28,7 @@ def _run(params: dict) -> RunResult:
 register(Plugin(
     name="garmin_activities",
     label="Garmin Connect — Activities",
-    default_interval_minutes=720,
+    default_interval_minutes=1,
     description="Workout and activity history from Garmin.",
     param_schema=[
         ParamSpec("email", "Email", "text", required=True, env_var="GARMIN_EMAIL"),
