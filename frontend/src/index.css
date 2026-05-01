@@ -686,6 +686,25 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   font-size: 0.8rem;
 }
 
+.journal-checkbox {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.journal-checkbox input[type="checkbox"] {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.journal-checkbox > span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
 .stat-sublabel {
   font-size: 0.8em;
   color: #64748b;
