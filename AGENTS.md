@@ -195,6 +195,7 @@ When you open a pull request (or push to an existing PR branch), you are respons
 - Frontend changes → `cd frontend && npx tsc -b --noEmit` must exit 0. The `-b` flag is required: the root `tsconfig.json` is project-references-only, so plain `tsc --noEmit` silently no-ops and lets type errors slip through to the Docker build.
 - Backend changes → hit the new/changed endpoint with `curl` to confirm it returns valid JSON, not a 500 / 404.
 - Sync script changes → run the script once with the real incremental path (no `--full`) and confirm it doesn't re-fetch everything or infinite-loop.
+- **Run the full Playwright e2e suite locally — every time, no exceptions.** Frontend / backend / sync-script changes all require this. See "Running the e2e suite" below for the one-time Chrome-for-Testing bootstrap (do it once at the start of a session) and the per-run command. "I'll let CI catch it" is not acceptable — CI takes minutes, the local run takes ~30 seconds, and a red CI run blocks the preview deploy.
 - **Always review `README.md` and `AGENTS.md` after implementing a feature or fix** and update whatever is now stale: page/route lists, architecture tree, route-groups table, data-model notes, gotchas, and any conventions the change introduced or invalidated. Treat the docs as part of the task, not a follow-up.
 
 ## Rebase on main before every push
@@ -226,11 +227,13 @@ cd frontend && npx playwright test --config=playwright.local.config.ts  # all gr
 
 If you've already pushed and `main` has moved, fetch + rebase + force-push with `--force-with-lease` (never plain `--force`) so you don't clobber a teammate who pushed to the same branch.
 
-## Running the e2e suite before every push
+## Running the e2e suite
 
-**Always run the full Playwright e2e suite locally before `git push`.** CI runs it on every PR (`.github/workflows/preview-deploy.yml` → `e2e-usecases`) and a red CI run blocks the preview deploy. Pushing without running locally means waiting on CI to discover failures you could have caught in 10 seconds.
+**Run the full Playwright e2e suite locally before reporting any frontend / backend / sync-script change as done — and again before every `git push`.** CI runs the same suite on every PR (`.github/workflows/preview-deploy.yml` → `e2e-usecases`) and a red CI run blocks the preview deploy. The local run takes ~30 seconds; pushing without it means waiting on CI to surface failures you could have caught immediately.
 
-The Claude Code sandbox blocks `cdn.playwright.dev`, so `npx playwright install chromium` fails with `403 Host not in allowlist`. Use Chrome for Testing from `storage.googleapis.com` instead, which is reachable. One-time setup:
+### One-time bootstrap (do this once per session)
+
+`npx playwright install chromium` doesn't work in this environment because `cdn.playwright.dev` isn't reachable; use Chrome for Testing from `storage.googleapis.com` instead. Run these two blocks once at the start of a session and you're set for every test run after:
 
 ```bash
 # Match the chromium version in node_modules/playwright-core; bump as Playwright upgrades
@@ -241,7 +244,7 @@ unzip -q /tmp/cft.zip -d /opt/cft
 /opt/cft/chrome-linux64/chrome --version    # sanity check
 ```
 
-Then create `frontend/playwright.local.config.ts` (gitignored — never commit it):
+Then create `frontend/playwright.local.config.ts` (already in `.gitignore`):
 
 ```ts
 import baseConfig from "./playwright.config";
@@ -261,16 +264,18 @@ export default defineConfig({
 });
 ```
 
-Run the suite:
+### Per-run command
 
 ```bash
-# Wipe the local demo DB first — playwright.config.ts uses
-# reuseExistingServer:true, so a stale uvicorn from a prior run keeps
-# the same vitalscope.db alive and tests that mutate state (e.g. "Log
-# meal and review postprandial response") see their own previous
-# inserts and fail with strict-mode locator collisions.
-rm -f vitalscope.db
+# Wipe the local demo DB and any leftover server state first —
+# playwright.config.ts uses reuseExistingServer:true, so a stale uvicorn
+# from a prior run keeps the same vitalscope.db alive and tests that
+# mutate state (e.g. "Log meal and review postprandial response") see
+# their own previous inserts and fail with strict-mode locator
+# collisions. Same applies to genome_wiki/ and uploads/.
+pkill -f "uvicorn backend" 2>/dev/null; pkill -f vite 2>/dev/null
+rm -f vitalscope.db && rm -rf genome_wiki uploads
 cd frontend && npx playwright test --config=playwright.local.config.ts
 ```
 
-This boots the same demo backend + Vite dev server stack the CI job uses (see `webServer` in `playwright.config.ts`), so a local pass is a strong proxy for CI green. If it fails, fix the spec or the feature **before** pushing — never push hoping CI will tell you what's wrong.
+This boots the same demo backend + Vite dev server stack the CI job uses (see `webServer` in `playwright.config.ts`), so a local pass is a strong proxy for CI green. If it fails, fix the spec or the feature **before** pushing — never push hoping CI will tell you what's wrong, and never declare a task done with red tests.
