@@ -93,6 +93,25 @@ test("Record blood pressure manually", async ({ page }) => {
   await expect(section.getByText("pulse 64 bpm")).toBeVisible();
 });
 
+test("Section nav scrolls edge-to-edge on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 420, height: 912 });
+  await login(page);
+  await page.getByRole("link", { name: "Orient" }).click();
+  await expect(page.getByRole("heading", { name: "AI Analysis" })).toBeVisible();
+
+  const nav = page.locator("nav.ooda-section-nav").first();
+  await expect(nav).toBeVisible();
+  await nav.scrollIntoViewIfNeeded();
+
+  const layout = await nav.evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, viewport: window.innerWidth };
+  });
+
+  expect(layout.left).toBeLessThanOrEqual(1);
+  expect(layout.right).toBeGreaterThanOrEqual(layout.viewport - 1);
+});
+
 test("Set plugin credentials and automation schedule", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();
