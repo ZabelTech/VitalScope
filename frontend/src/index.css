@@ -55,10 +55,10 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 /* Nav bar — brand + entries + anamnese + cog on the top row, nav links wrap below on mobile */
 .top-bar {
   display: grid;
-  grid-template-columns: 1fr auto auto auto;
+  grid-template-columns: 1fr auto auto auto auto;
   grid-template-areas:
-    "brand entries anamnese cog"
-    "nav   nav     nav      nav";
+    "brand reload entries anamnese cog"
+    "nav   nav    nav     nav      nav";
   align-items: center;
   column-gap: 8px;
   row-gap: 12px;
@@ -70,6 +70,7 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 .nav-cog        { grid-area: cog; }
 .nav-entries    { grid-area: entries; }
 .nav-anamnese   { grid-area: anamnese; }
+.nav-reload     { grid-area: reload; }
 
 .top-bar h1 {
   font-size: clamp(1.25rem, 1rem + 2vw, 1.5rem);
@@ -121,6 +122,11 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
   border-radius: 8px;
   color: #94a3b8;
   text-decoration: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
 .nav-cog:hover { background: #1e293b; color: #e2e8f0; }
@@ -128,8 +134,8 @@ button, a, [role="button"], input[type="checkbox"], input[type="radio"] {
 
 @media (min-width: 640px) {
   .top-bar {
-    grid-template-columns: auto 1fr auto auto auto;
-    grid-template-areas: "brand nav entries anamnese cog";
+    grid-template-columns: auto 1fr auto auto auto auto;
+    grid-template-areas: "brand nav reload entries anamnese cog";
     column-gap: 24px;
     row-gap: 0;
     margin-bottom: 32px;
