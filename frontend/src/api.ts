@@ -1271,3 +1271,92 @@ export async function fetchGlucosePostprandial(
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }
+
+// --- Genome Wiki ---
+
+import type {
+  GenomeWikiAnswer,
+  GenomeWikiIndexEntry,
+  GenomeWikiIngestResult,
+  GenomeWikiLintResult,
+  GenomeWikiPage,
+  GenomeWikiSettings,
+} from "./types";
+
+export async function fetchGenomeWikiSettings(): Promise<GenomeWikiSettings> {
+  const res = await apiFetch("/api/settings/genome-wiki");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function updateGenomeWikiSettings(maxPages: number): Promise<{ max_pages: number }> {
+  const res = await apiFetch("/api/settings/genome-wiki", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ max_pages: maxPages }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchGenomeWikiIndex(opts?: {
+  type?: string;
+  gene?: string;
+}): Promise<GenomeWikiIndexEntry[]> {
+  const params = new URLSearchParams();
+  if (opts?.type) params.set("type", opts.type);
+  if (opts?.gene) params.set("gene", opts.gene);
+  const qs = params.toString();
+  const res = await apiFetch(`/api/genome-wiki/pages${qs ? "?" + qs : ""}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchGenomeWikiPage(path: string): Promise<GenomeWikiPage> {
+  const cleaned = path.replace(/^\/+/, "");
+  const res = await apiFetch(`/api/genome-wiki/pages/${cleaned}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function ingestSnpediaBundle(opts: {
+  snpedia_upload_id: number;
+  genome_upload_id?: number;
+  limit?: number;
+}): Promise<GenomeWikiIngestResult> {
+  const res = await apiFetch("/api/genome-wiki/ingest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(opts),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function submitGenomeWikiQuery(question: string): Promise<GenomeWikiAnswer> {
+  const res = await apiFetch("/api/genome-wiki/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function submitGenomeWikiReport(
+  topic: "pharmacogenomics" | "longevity" | "performance" | "nutrition" | "methylation",
+): Promise<GenomeWikiAnswer> {
+  const res = await apiFetch("/api/genome-wiki/report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ topic }),
+  });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function runGenomeWikiLint(): Promise<GenomeWikiLintResult> {
+  const res = await apiFetch("/api/genome-wiki/lint", { method: "POST" });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}

@@ -1,3 +1,4 @@
+import { GenomeWikiQA } from "./GenomeWikiQA";
 import { GoalsPage } from "./GoalsPage";
 import { MorningBriefing } from "./MorningBriefing";
 import { NightBriefingCard } from "./NightBriefingCard";
@@ -23,6 +24,7 @@ export function DecidePage() {
         { id: "goals", label: "Goals", content: <GoalsPage /> },
         { id: "plan", label: "Plan", content: <PlanPage /> },
         { id: "protocols", label: "Protocols", content: <ProtocolsSection /> },
+        { id: "genome-wiki-qa", label: "Genome Q&A", content: <GenomeWikiQA /> },
       ]}
     />
   );

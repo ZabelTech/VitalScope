@@ -31,6 +31,9 @@ All sync sources are wrapped as **plugins** that the backend schedules and runs 
 ```
 /home/robert/vitalscope/
 ├── vitalscope.db                 # SQLite, ~18 MB
+├── genome_wiki/                  # AI-maintained personal-genome wiki (Karpathy-style)
+│   ├── raw/snpedia/              #   Immutable SNPedia bundle pages, one per RS ID
+│   └── wiki/                     #   AI-compiled markdown pages: variants/, genes/, systems/, …
 ├── requirements.txt              # garminconnect, fastapi, uvicorn, pydantic, apscheduler, requests
 ├── venv/                         # Python venv
 ├── sync_garmin.py                # HR / HRV / sleep / stress / body battery / steps
@@ -224,9 +227,12 @@ Every card across the app carries two icons in its header: **ⓘ** opens a popov
   - **Trends** — historical charts with a date range picker (30d / 90d / 6mo / 1yr / All). Each metric has a row of Min / Max / Avg / Median / Volatility cards above its chart. Glucose chart shows avg / min / max daily lines with a 70–180 mg/dL target-range band. Training chart is merged: stacked bars of weekly Garmin sessions + Strong sessions with a distance line overlay. Calories + water chart at the bottom.
   - **Blood pressure** — read-only chart + history of manual systolic / diastolic / optional pulse readings. Add new readings under Entries → Blood pressure.
   - **Activity history** — merged Garmin + Strong card list with click-to-expand details.
+  - **Genotype × phenotype** — your genotype calls translated into phenotypes (metaboliser status, disease-risk modifiers, drug response) using the curated `variant_registry`.
+  - **Genomic wiki** — a Karpathy-style LLM-maintained wiki for personal-genome interpretation. Pages live as real `.md` files under `$VITALSCOPE_GENOME_WIKI` (defaults next to the SQLite DB; on Fly `/data/genome_wiki/`) so the artifact is portable to Obsidian / any other LLM agent. Per-variant pages cite their SNPedia source via `[[wikilinks]]`; gene and system pages synthesise across them. Every page carries write-time validators (resolved citations, ACMG-only vocabulary, auto-injected disclaimer) and the lint sub-tab surfaces orphans, missing concepts, contradictions, and stale pages.
 - **`/decide` Decide** — what is the plan?
   - **Goals** — daily step goal (from Garmin) + placeholder for upcoming targets (sleep, HRV, RHR, weight, calories, macros).
   - **Plan** — tabs for Supplements (the master list grouped Morning/Noon/Evening, drives the Journal check-off), Food (placeholder), Activity (placeholder).
+  - **Genome Q&A** — ask anything about your genome. The agent reads the relevant wiki pages, answers in four sections (what it is / your data / what it means / what we don't know), and files the answer back to `wiki/synthesis/qa/<slug>.md` so explorations compound.
 - **`/act` Act** — what to do today?
   - **Today** — `TodayDashboard`: quick snapshot + recent activity card + processing-speed task in the journal card (first run includes 6 untimed practice trials, then a 75-second scored run).
   - **Supplements & alcohol** — `IntakeLog`: check off today's supplements and log alcohol.
@@ -234,7 +240,7 @@ Every card across the app carries two icons in its header: **ⓘ** opens a popov
   - **Protocols** — `ProtocolsSection`: define and log intervention protocols (drugs, peptides, PEDs, supplement stacks, hormesis sessions, fasting windows, training blocks). Quick-log cards for Zone 2, sauna (°C + min), cold plunge (°C + min), and TRE window (start/end time). Active protocols show a running day-count; one-tap event logging with dose auto-fill.
   - **Blood pressure** (Entries) — `BloodPressureForm`: log a manual systolic / diastolic / optional pulse reading. The chart + history live on Orient → Blood pressure.
   - **Bloodwork** — upload a lab PDF/image and have the AI extract panels into `bloodwork_panels` / `bloodwork_results`.
-  - **Genome** — upload a raw genotype file and have the AI parse summary info.
+  - **Genome** — upload a raw genotype file and have the AI parse summary info. Below the VCF uploader is a **SNPedia bundle** uploader: drop a ZIP of SNPedia `.md` pages keyed by RS ID, click "Compile genomic wiki", and the AI compiles per-variant / per-gene / per-system pages into the Orient → Genomic wiki browser.
 - **`/settings` Settings** — sync plugins. One card per plugin (Garmin Health, Garmin Activities, Strong, Eufy, CGM) with Enabled toggle, interval, credential fields, Save, Run now, last-run status, and recent-runs log.
 
 ### Running the frontend

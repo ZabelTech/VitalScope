@@ -12,7 +12,9 @@ test("AI Context settings card renders categories and is read-only in demo mode"
   await login(page);
   await page.getByLabel("Settings").click();
 
-  const card = page.locator("section.ai-context-card");
+  const card = page.locator("section.ai-context-card", {
+    has: page.getByRole("heading", { name: "AI Context" }),
+  });
   await expect(card).toBeVisible();
   await expect(card.getByRole("heading", { name: "AI Context" })).toBeVisible();
   await expect(card.getByText(/categories shared with AI/)).toBeVisible();

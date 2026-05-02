@@ -24,6 +24,15 @@ cd frontend && npx tsc -b --noEmit
 
 # Inspect the DB
 python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sqlite3.Row; ..."
+
+# Bulk-add raw genome-wiki sources without going through the upload UI.
+# Stages files into <GENOME_WIKI_ROOT>/raw/snpedia/<rsid>.md by RS ID
+# inferred from filename or body. Add --ingest to also run the AI compile
+# pipeline (bundles the staged files into a synthetic uploads row + zip
+# and routes through the same endpoint the UI uses).
+python3 add_genome_wiki_raw.py path/to/snpedia-pages/             # stage only
+python3 add_genome_wiki_raw.py path/to/dir/ --ingest --limit 50   # stage + compile
+python3 add_genome_wiki_raw.py path/to/rs1801133.md --rs-id rs1801133 --ingest
 ```
 
 **Backend reload**: if you edit `backend/app.py` while uvicorn is running without `--reload`, restart it manually or the new endpoint returns 404.
@@ -40,6 +49,7 @@ python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sq
 | New "today" card | Today-snapshot cards live in `TodayDashboard.tsx` (Act → Today) and `TodayMetrics.tsx` (Observe → Today's metrics). Wrap each card in `<Card id="…">` and use `<CardHeader id="…">…<AgeBadge at={...}/></CardHeader>` so the help/hide icons render and users see data freshness. `AgeBadge` is currently duplicated in `TodayDashboard.tsx` and `TodayMetrics.tsx`; if you change it, change both. Add a `CardInfo` entry in `frontend/src/cardInfo.ts` for any new card_id (TS will fail without it). |
 | New type | `frontend/src/types.ts`. Keep interfaces flat — the backend returns `sqlite3.Row` dicts, so types should mirror column names exactly. |
 | New section under an existing OODA page | Preferred. Add an entry to the `sections` array of `ActPage` / `ObservePage` / `OrientPage` / `DecidePage` — each entry is `{ id, label, content }`. The `OodaPage` frame renders an anchor nav + stacked sections automatically. |
+| New genome-wiki page type | Pick a folder under `wiki/` (e.g. `wiki/drugs/`, `wiki/risks/`), add it to `_PAGE_TYPES` and `_infer_type_from_path()` in the `# --- Genome Wiki ---` section of `backend/app.py`, define a tool schema (`record_<type>_page`) modelled on `_VARIANT_PAGE_TOOL`, and call it from the ingest pipeline at the right pass. The validators in `_validate_wiki_page()` apply automatically. Add a CardInfo entry only if the type is surfaced as its own UI section (the existing browser handles new types generically via the type filter on `GET /api/genome-wiki/pages`). |
 | New top-level route | Rare. If you really need one, add a `<Route>` in `App.tsx` and a `<NavLink>` in `NavBar.tsx`. Think twice before breaking the OODA layout — most new things are sections, not routes. `SettingsPage` and `AnamnesePage` are the current exceptions (utility, deliberately outside the loop). The `.top-bar` grid uses named areas (`brand entries anamnese cog`) — adding a fourth icon means extending the grid template in `index.css`, not just dropping a `<NavLink>` in. |
 
 ## Data model notes
@@ -72,6 +82,7 @@ python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sq
 - **AI context (per-category sharing)**: `ai_context_settings(key TEXT PK, enabled INTEGER NOT NULL DEFAULT 1)` — one row per data category the user has explicitly toggled. Row absent → enabled (defaults preserve existing behaviour). Canonical category list lives in `AI_CONTEXT_CATEGORIES` in `backend/app.py` as `(key, label, group)` tuples; the frontend renders whatever the backend returns from `GET /api/settings/ai-context`, so adding a category there surfaces it in the Settings UI automatically. Read via `_get_ai_context(conn) -> dict[str, bool]`; every AI prompt-builder (`_gather_morning_metrics`, `_gather_orient_metrics`, `_gather_night_briefing_data`, `_gather_explain_context`) takes this dict and skips both the DB query and the dict assignment for any key whose flag is false. The bloodwork comparison narrative in `POST /api/bloodwork-panels` also respects `ctx["bloodwork"]`. **Image-only endpoints** (meal photo, form-check photo, bloodwork PDF upload) do not read the user's DB and are therefore not gated — the user is explicitly handing over that one artifact. When you add a new AI endpoint that pulls from the DB, plumb `ctx = _get_ai_context(conn)` through and gate every category read.
 - **User profile (Anamnese)**: `user_profile(id INTEGER PK CHECK (id = 1), name, birthday, sex CHECK (sex IN ('male','female')), known_diseases, former_health_conditions, life_events, interests, self_characterisation, admired, disliked, updated_at)` — single-row biographical sketch. Use `INSERT OR REPLACE` with `id = 1` to upsert. Edited via the standalone `AnamnesePage` (route `/anamnese`, user icon between entries and settings in the top bar). Read by `_get_user_profile(conn)` which returns `None` when the row is absent or every field is null, and adds a derived `age_years` when `birthday` parses. Each of the four `_gather_*` prompt-builders injects this dict under a `user_profile` key when `ctx["profile"]` is true, so the AI sees biographical framing without anyone having to plumb a separate parameter. The `profile` AI-context category is in the `Personal` group — that group exists only for this category, and any future biographical-style data should reuse it.
 - **Processing-speed task**: `cog_processing_sessions` stores one row per completed run (summary metrics + quality flags + interruption telemetry + deterministic `stimulus_seed`). `cog_processing_trials` stores per-trial payload (`PRIMARY KEY (session_id, trial_index)`, `ON DELETE CASCADE`). Use `POST /api/cognition/processing-speed/session` for writes and `GET /api/cognition/processing-speed/daily` / `GET /api/cognition/processing-speed/baseline` for trend + baseline reads. `/daily` returns **one row per session** (not per date) — each row carries `session_id` and `started_at` so the chart can plot multiple same-day runs separately, plus `include_in_quality_adjusted`, `baseline_confidence`, and `adjusted_score` (rolling z-score over prior high-quality individual sessions, filtered by `id < current_id` so same-day earlier sessions count). Pass `?aggregate=day` to collapse to one-row-per-date (latest session wins). `/baseline` likewise excludes the current session by id rather than by date. Frontend runtime requires a 6-trial untimed practice block on first run (and again after a 7+ day gap) before enabling the 75-second scored run. `journal_entries.avg_rt_ms` / `rt_trials` are still populated for backwards-compatible charts and should mirror the latest session summary for that date.
+- **Genome wiki**: a Karpathy-style LLM-maintained wiki for personal-genome interpretation. Storage is **filesystem-first** under `$VITALSCOPE_GENOME_WIKI` (defaults to `<dirname(VITALSCOPE_DB)>/genome_wiki`, on Fly `/data/genome_wiki/`) — the canonical artifact is a real `raw/` + `wiki/` markdown tree with YAML frontmatter and Obsidian-style `[[wikilinks]]`, so the user can open it in Obsidian or any LLM agent. Two small DB tables back it: `genome_wiki_index(path PK, type, title, summary, rs_id, gene, last_reviewed, sha256, updated_at)` is a derived index rebuilt by `_rebuild_wiki_index()` from the filesystem, and `genome_wiki_contradictions(id PK, page_path, claim, sources_json, detected_at, resolved_at)` records the lint pass's skeptic findings. Page taxonomy: `wiki/variants/<rsid>_<gene>.md`, `wiki/genes/<gene>.md`, `wiki/systems/<name>.md`, `wiki/sources/snpedia/<rsid>.md`, `wiki/synthesis/qa/<slug>.md`, `wiki/synthesis/reports/<topic>_<date>.md`, `wiki/lint/{contradictions,orphans}.md`, plus `wiki/index.md` and an append-only `wiki/log.md`. Every write goes through `_write_wiki_page()` which runs validators (resolved `[[sources/...]]` links, citation density on medical claims, banned colloquial vocabulary, auto-injected disclaimer on `variant`/`gene`/`drug`/`risk` pages, path-escape check) and rejects on failure. Endpoints: `POST /api/genome-wiki/ingest` (unzips a `kind='snpedia'` upload, ranks variants by registry-floor → ClinVar significance → SNPedia magnitude → RS ID, then runs the variant/gene/system AI passes capped by `ai_config.genome_wiki_max_pages`), `GET /api/genome-wiki/pages[?type=&gene=]` and `GET /api/genome-wiki/pages/{path:path}` for browsing, `POST /api/genome-wiki/query` (files the answer back to `wiki/synthesis/qa/<slug>.md`), `POST /api/genome-wiki/report` (one of `pharmacogenomics`/`longevity`/`performance`/`nutrition`/`methylation`), `POST /api/genome-wiki/lint`. Settings live in `ai_config.genome_wiki_max_pages` (default 100, range 0–5000, where 0 means registry-only) — surface via `GET/PUT /api/settings/genome-wiki`. AI context category `genotype` (Health group) gates whether the four `_gather_*` prompt-builders inject the gene + system page summaries plus open contradictions into briefings via `_genome_wiki_context_for_ai(conn, gene_cap=8)`. Frontend: `GenomeWikiSection.tsx` (Orient, browser + lint sub-tab, includes a minimal markdown renderer that turns `[[...]]` into in-app navigation), `GenomeWikiQA.tsx` (Decide), `GenomeSection.tsx` extended with a `SnpediaWikiPanel` sub-component for SNPedia bundle upload + "Compile genomic wiki". Demo seed via `seed_genome_wiki(conn)` in `seed_demo.py` writes 5 variants + 4 genes + 1 system. SNPedia bundles are `.zip` files (one `.md` per RS ID, RS ID extracted from filename); raw extracted to `raw/snpedia/<rsid>.md`, immutable from the LLM's perspective but the user can re-upload a fresher snapshot to refresh.
 
 ## Sync-script conventions
 
@@ -193,6 +204,7 @@ When you open a pull request (or push to an existing PR branch), you are respons
 - Frontend changes → `cd frontend && npx tsc -b --noEmit` must exit 0. The `-b` flag is required: the root `tsconfig.json` is project-references-only, so plain `tsc --noEmit` silently no-ops and lets type errors slip through to the Docker build.
 - Backend changes → hit the new/changed endpoint with `curl` to confirm it returns valid JSON, not a 500 / 404.
 - Sync script changes → run the script once with the real incremental path (no `--full`) and confirm it doesn't re-fetch everything or infinite-loop.
+- **Run the full Playwright e2e suite locally — every time, no exceptions.** Frontend / backend / sync-script changes all require this. See "Running the e2e suite" below for the one-time Chrome-for-Testing bootstrap (do it once at the start of a session) and the per-run command. "I'll let CI catch it" is not acceptable — CI takes minutes, the local run takes ~30 seconds, and a red CI run blocks the preview deploy.
 - **Always review `README.md` and `AGENTS.md` after implementing a feature or fix** and update whatever is now stale: page/route lists, architecture tree, route-groups table, data-model notes, gotchas, and any conventions the change introduced or invalidated. Treat the docs as part of the task, not a follow-up.
 
 ## Rebase on main before every push
@@ -224,11 +236,13 @@ cd frontend && npx playwright test --config=playwright.local.config.ts  # all gr
 
 If you've already pushed and `main` has moved, fetch + rebase + force-push with `--force-with-lease` (never plain `--force`) so you don't clobber a teammate who pushed to the same branch.
 
-## Running the e2e suite before every push
+## Running the e2e suite
 
-**Always run the full Playwright e2e suite locally before `git push`.** CI runs it on every PR (`.github/workflows/preview-deploy.yml` → `e2e-usecases`) and a red CI run blocks the preview deploy. Pushing without running locally means waiting on CI to discover failures you could have caught in 10 seconds.
+**Run the full Playwright e2e suite locally before reporting any frontend / backend / sync-script change as done — and again before every `git push`.** CI runs the same suite on every PR (`.github/workflows/preview-deploy.yml` → `e2e-usecases`) and a red CI run blocks the preview deploy. The local run takes ~30 seconds; pushing without it means waiting on CI to surface failures you could have caught immediately.
 
-The Claude Code sandbox blocks `cdn.playwright.dev`, so `npx playwright install chromium` fails with `403 Host not in allowlist`. Use Chrome for Testing from `storage.googleapis.com` instead, which is reachable. One-time setup:
+### One-time bootstrap (do this once per session)
+
+`npx playwright install chromium` doesn't work in this environment because `cdn.playwright.dev` isn't reachable; use Chrome for Testing from `storage.googleapis.com` instead. Run these two blocks once at the start of a session and you're set for every test run after:
 
 ```bash
 # Match the chromium version in node_modules/playwright-core; bump as Playwright upgrades
@@ -239,7 +253,7 @@ unzip -q /tmp/cft.zip -d /opt/cft
 /opt/cft/chrome-linux64/chrome --version    # sanity check
 ```
 
-Then create `frontend/playwright.local.config.ts` (gitignored — never commit it):
+Then create `frontend/playwright.local.config.ts` (already in `.gitignore`):
 
 ```ts
 import baseConfig from "./playwright.config";
@@ -259,16 +273,18 @@ export default defineConfig({
 });
 ```
 
-Run the suite:
+### Per-run command
 
 ```bash
-# Wipe the local demo DB first — playwright.config.ts uses
-# reuseExistingServer:true, so a stale uvicorn from a prior run keeps
-# the same vitalscope.db alive and tests that mutate state (e.g. "Log
-# meal and review postprandial response") see their own previous
-# inserts and fail with strict-mode locator collisions.
-rm -f vitalscope.db
+# Wipe the local demo DB and any leftover server state first —
+# playwright.config.ts uses reuseExistingServer:true, so a stale uvicorn
+# from a prior run keeps the same vitalscope.db alive and tests that
+# mutate state (e.g. "Log meal and review postprandial response") see
+# their own previous inserts and fail with strict-mode locator
+# collisions. Same applies to genome_wiki/ and uploads/.
+pkill -f "uvicorn backend" 2>/dev/null; pkill -f vite 2>/dev/null
+rm -f vitalscope.db && rm -rf genome_wiki uploads
 cd frontend && npx playwright test --config=playwright.local.config.ts
 ```
 
-This boots the same demo backend + Vite dev server stack the CI job uses (see `webServer` in `playwright.config.ts`), so a local pass is a strong proxy for CI green. If it fails, fix the spec or the feature **before** pushing — never push hoping CI will tell you what's wrong.
+This boots the same demo backend + Vite dev server stack the CI job uses (see `webServer` in `playwright.config.ts`), so a local pass is a strong proxy for CI green. If it fails, fix the spec or the feature **before** pushing — never push hoping CI will tell you what's wrong, and never declare a task done with red tests.

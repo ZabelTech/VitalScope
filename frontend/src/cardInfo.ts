@@ -400,6 +400,24 @@ export const CARD_INFO = {
     science:
       "Leong 2015 (PURE study, 140K adults): each 5 kg lower grip strength = 16% higher all-cause mortality, independent of age and chronic disease.",
   },
+  "orient.genome-wiki": {
+    title: "Genomic wiki",
+    source:
+      "AI-compiled markdown pages under genome_wiki/wiki/ — synthesised from your matched SNPedia bundle plus the curated variant registry, written by the LLM, audited by the lint pass.",
+    meaning:
+      "A browseable, longitudinal interpretation of your variants. Per-variant pages cite their SNPedia source; gene and system pages synthesise across them. Every clinical claim is wikilinked to a source page so you can trace it back to the raw bundle.",
+    science:
+      "Karpathy LLM-Wiki pattern (April 2026) applied to personal genomics. Pages use ACMG/AMP terminology (Pathogenic / Likely Pathogenic / VUS / Likely Benign / Benign / drug-response / risk-factor). Informational only — not a medical device. Confirm any clinical action with a CLIA-certified lab and a board-certified geneticist.",
+  },
+  "decide.genome-wiki-qa": {
+    title: "Genome Q&A",
+    source:
+      "Questions answered by the AI from the wiki context (genome_wiki_index + page bodies). Each answer is filed back to wiki/synthesis/qa/<slug>.md so explorations compound.",
+    meaning:
+      "Ask anything about your genome. The agent reads the relevant wiki pages, answers in four sections (what it is / your data / what it means / what we don't know), and saves the answer for next time. Every clinical claim wikilinks to a source page.",
+    science:
+      "Hallucination is the design's biggest risk. Mitigations: write-time citation validators, ACMG-only vocabulary, auto-injected disclaimer, lint pass. Still informational only — confirm clinical actions with a board-certified geneticist.",
+  },
 } as const satisfies Record<string, CardInfo>;
 
 export type CardId = keyof typeof CARD_INFO;

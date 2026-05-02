@@ -544,6 +544,190 @@ def seed_genome(conn: sqlite3.Connection) -> int:
     return 1
 
 
+def seed_genome_wiki(conn: sqlite3.Connection) -> int:
+    """Write a small wiki tree to GENOME_WIKI_ROOT so the Orient browser
+    renders something in demo / preview deploys. Idempotent — skips if any
+    variant pages already exist on disk.
+    """
+    root = backend.app.GENOME_WIKI_ROOT
+    variants_dir = root / "wiki" / "variants"
+    if variants_dir.exists() and any(variants_dir.glob("*.md")):
+        return 0
+
+    samples = [
+        ("rs1801133", "MTHFR", "0/1", "heterozygous",
+         "C/T heterozygous; about a 35% reduction in MTHFR enzyme activity. "
+         "Folate-cycle support (5-MTHF, methylcobalamin) is preferable to "
+         "synthetic folic acid for this genotype."),
+        ("rs429358", "APOE", "0/0", "homozygous_ref",
+         "T/T at this locus; no ε4 component contributed here. Combine with "
+         "rs7412 to determine the full APOE haplotype."),
+        ("rs7412", "APOE", "0/1", "heterozygous",
+         "C/T at rs7412; one ε2 component allele. ε2 carriers typically show "
+         "lower LDL but are at risk of type III hyperlipoproteinaemia when "
+         "homozygous (ε2/ε2)."),
+        ("rs762551", "CYP1A2", "1/1", "homozygous_alt",
+         "A/A; CYP1A2 is strongly inducible — caffeine clears quickly. "
+         "Late-day intake has less sleep impact than in slow metabolisers."),
+        ("rs2228570", "VDR", "1/1", "homozygous_alt",
+         "f/f at FokI; the VDR protein is the longer, less transcriptionally "
+         "active isoform. Higher vitamin D intake may be needed to reach "
+         "equivalent serum 25(OH)D targets."),
+    ]
+
+    raw_dir = root / "raw" / "snpedia"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    for rs, gene, _gt, _zyg, summary in samples:
+        (raw_dir / f"{rs}.md").write_text(
+            f"# {rs.upper()}\n\nGene: {gene}\nMagnitude: 2.5\n\n{summary}\n",
+            encoding="utf-8",
+        )
+
+    def _yaml_dump(d: dict) -> str:
+        out = []
+        for k, v in d.items():
+            if isinstance(v, list):
+                out.append(f"{k}:")
+                for item in v:
+                    out.append(f"  - {item}")
+            elif isinstance(v, bool):
+                out.append(f"{k}: {'true' if v else 'false'}")
+            elif isinstance(v, (int, float)):
+                out.append(f"{k}: {v}")
+            else:
+                s = str(v).replace("\n", " ").strip()
+                out.append(f"{k}: {s}")
+        return "\n".join(out)
+
+    today_iso = date.today().isoformat()
+
+    def _write(rel: str, frontmatter: dict, body: str) -> None:
+        path = (root / rel).resolve()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        text = f"---\n{_yaml_dump(frontmatter)}\n---\n\n{body.rstrip()}\n"
+        path.write_text(text, encoding="utf-8")
+
+    DISCLAIMER = (
+        "> Informational only — not a medical device. Confirm with a "
+        "CLIA-certified lab and a board-certified geneticist before any "
+        "clinical action."
+    )
+
+    for rs, gene, gt, zyg, summary in samples:
+        _write(
+            f"wiki/sources/snpedia/{rs}.md",
+            {
+                "type": "source", "rsid": rs, "title": f"SNPedia source: {rs}",
+                "summary": f"Raw SNPedia bundle entry for {rs}",
+                "source_file": f"raw/snpedia/{rs}.md",
+                "fetched_at": today_iso, "informational_only": True,
+            },
+            f"Provenance for [[raw/snpedia/{rs}]]. Demo seed.",
+        )
+        body = (
+            f"## What it is\n\n"
+            f"`{rs}` is a single-nucleotide variant in the {gene} gene. "
+            f"Demo seed for the Orient → Genomic wiki browser. "
+            f"[[sources/snpedia/{rs}]]\n\n"
+            f"## Your data\n\n"
+            f"Demo genotype: `{gt}` ({zyg}). [[sources/snpedia/{rs}]]\n\n"
+            f"## What it means\n\n"
+            f"{summary} [[sources/snpedia/{rs}]]\n\n"
+            f"## What we don't know\n\n"
+            f"Ancestry-specific frequencies are not encoded in this demo seed.\n\n"
+            f"{DISCLAIMER}"
+        )
+        _write(
+            f"wiki/variants/{rs}_{gene}.md",
+            {
+                "type": "variant", "rsid": rs, "gene": gene,
+                "my_genotype": gt, "my_zygosity": zyg,
+                "evidence_strength": "moderate",
+                "title": f"{rs} ({gene})",
+                "summary": summary[:120],
+                "source_paths": [f"sources/snpedia/{rs}"],
+                "related": [f"genes/{gene}"],
+                "last_reviewed": today_iso, "informational_only": True,
+            },
+            body,
+        )
+
+    by_gene: dict[str, list[tuple[str, str]]] = {}
+    for rs, gene, _gt, _zyg, summary in samples:
+        by_gene.setdefault(gene, []).append((rs, summary))
+    for gene, vs in by_gene.items():
+        bullets = "\n".join(
+            f"- [[variants/{rs}_{gene}]] — {summary[:100]}" for rs, summary in vs
+        )
+        body = (
+            f"## Overview\n\n"
+            f"{gene} is tracked in your wiki because of variants flagged below. "
+            f"Demo seed. [[sources/snpedia/{vs[0][0]}]]\n\n"
+            f"## Your variants in {gene}\n\n{bullets}\n\n"
+            f"## What we don't know\n\n"
+            f"Demo content does not synthesise across full real variant context.\n\n"
+            f"{DISCLAIMER}"
+        )
+        _write(
+            f"wiki/genes/{gene}.md",
+            {
+                "type": "gene", "gene": gene, "title": f"{gene}",
+                "summary": f"Demo gene page for {gene}",
+                "last_reviewed": today_iso, "informational_only": True,
+            },
+            body,
+        )
+
+    methylation_body = (
+        "## System overview\n\n"
+        "The methylation cycle depends on MTHFR (and MTRR / MTR / COMT). Demo "
+        "seed; in a real ingest this page would synthesise across all of the "
+        "user's variants in this system. [[genes/MTHFR]]\n\n"
+        "## What we don't know\n\n"
+        "B12 / folate status from bloodwork is not yet integrated.\n\n"
+        + DISCLAIMER
+    )
+    _write(
+        "wiki/systems/methylation.md",
+        {
+            "type": "system", "system": "methylation",
+            "title": "Methylation",
+            "summary": "Folate/B12 cycle and downstream methyl-donor availability.",
+            "last_reviewed": today_iso, "informational_only": True,
+        },
+        methylation_body,
+    )
+
+    index_lines = [
+        "# Genome wiki index", "", "## variant", "",
+    ]
+    for rs, gene, _gt, _zyg, _s in samples:
+        index_lines.append(f"- [[variants/{rs}_{gene}]]")
+    index_lines.extend(["", "## gene", ""])
+    for gene in by_gene:
+        index_lines.append(f"- [[genes/{gene}]]")
+    index_lines.extend(["", "## system", "", "- [[systems/methylation]]"])
+    _write(
+        "wiki/index.md",
+        {
+            "type": "index", "title": "Genome wiki index",
+            "last_reviewed": today_iso, "informational_only": True,
+        },
+        "\n".join(index_lines),
+    )
+
+    log_path = root / "wiki" / "log.md"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path.write_text(
+        f"- {today_iso} — DEMO SEED — wrote {len(samples)} variants, "
+        f"{len(by_gene)} genes, 1 system\n",
+        encoding="utf-8",
+    )
+
+    backend.app._rebuild_wiki_index(conn)
+    return 1
+
+
 def seed_blood_pressure(conn: sqlite3.Connection, dates: list[date], rng: random.Random) -> int:
     now = datetime.utcnow().isoformat(timespec="seconds")
     count = 0
@@ -625,6 +809,7 @@ def main() -> None:
         seed_nutrition_goals(conn)
         seed_planned_activities(conn)
         seed_genome(conn)
+        seed_genome_wiki(conn)
         conn.commit()
         print("seed_demo: done", flush=True)
     finally:
