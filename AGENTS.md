@@ -24,6 +24,15 @@ cd frontend && npx tsc -b --noEmit
 
 # Inspect the DB
 python3 -c "import sqlite3; c=sqlite3.connect('vitalscope.db'); c.row_factory=sqlite3.Row; ..."
+
+# Bulk-add raw genome-wiki sources without going through the upload UI.
+# Stages files into <GENOME_WIKI_ROOT>/raw/snpedia/<rsid>.md by RS ID
+# inferred from filename or body. Add --ingest to also run the AI compile
+# pipeline (bundles the staged files into a synthetic uploads row + zip
+# and routes through the same endpoint the UI uses).
+python3 add_genome_wiki_raw.py path/to/snpedia-pages/             # stage only
+python3 add_genome_wiki_raw.py path/to/dir/ --ingest --limit 50   # stage + compile
+python3 add_genome_wiki_raw.py path/to/rs1801133.md --rs-id rs1801133 --ingest
 ```
 
 **Backend reload**: if you edit `backend/app.py` while uvicorn is running without `--reload`, restart it manually or the new endpoint returns 404.
