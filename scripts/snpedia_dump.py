@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 import requests
 
 DB_PATH = Path(os.environ.get("VITALSCOPE_DB") or Path(__file__).resolve().parents[1] / "vitalscope.db")
-API_BASE = os.environ.get("SNPEDIA_API_BASE", "https://www.snpedia.com/api.php")
+API_BASE = os.environ.get("SNPEDIA_API_BASE", "https://bots.snpedia.com/api.php")
 USER_AGENT = os.environ.get("SNPEDIA_USER_AGENT", "VitalScope-SNPediaSync/1.0 (personal health dashboard)")
 
 SCHEMA = """
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS snpedia_sync_state (
 RSID_RE = re.compile(r"\brs\d+\b", re.IGNORECASE)
 GENOTYPE_TITLE_RE = re.compile(r"\b(rs\d+)\(([ACGT]);([ACGT])\)", re.IGNORECASE)
 DOI_RE = re.compile(r"10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
-PMID_RE = re.compile(r"\bpmid\s*[: ]\s*(\d+)\b", re.IGNORECASE)
+PMID_RE = re.compile(r"\bpmid\s*[=:|\s]\s*(\d+)\b", re.IGNORECASE)
 URL_RE = re.compile(r"https?://[^\s\]|}]+", re.IGNORECASE)
 
 
@@ -112,33 +112,52 @@ def save_state(conn: sqlite3.Connection, apcontinue: str | None, completed: bool
 
 
 def fetch_all_pages(session: requests.Session, start_from: str | None, limit: int | None):
-  apcontinue = start_from
+  base_params = {
+    "action": "query",
+    "format": "json",
+    "generator": "allpages",
+    "gaplimit": "max",
+    "prop": "revisions|extlinks",
+    "rvprop": "ids|timestamp|content",
+    "ellimit": "max",
+    "gapnamespace": 0,
+  }
+  cont_params: dict[str, str] = {}
+  if start_from:
+    cont_params["gapcontinue"] = start_from
+  current_gap = start_from
+  accumulated: dict[int, dict] = {}
   seen = 0
   while True:
-    params = {
-      "action": "query",
-      "format": "json",
-      "generator": "allpages",
-      "gaplimit": "max",
-      "prop": "revisions|extlinks",
-      "rvprop": "ids|timestamp|content",
-      "ellimit": "max",
-      "gapnamespace": 0,
-    }
-    if apcontinue:
-      params["gapcontinue"] = apcontinue
+    params = {**base_params, **cont_params}
     response = session.get(API_BASE, params=params, timeout=60)
     response.raise_for_status()
     payload = response.json()
-    pages = list((payload.get("query") or {}).get("pages", {}).values())
-    yield pages, payload
-    seen += len(pages)
-    if limit and seen >= limit:
-      break
+    pages = (payload.get("query") or {}).get("pages") or {}
+    for pid_str, page in pages.items():
+      pid = int(pid_str)
+      if pid in accumulated:
+        existing = accumulated[pid]
+        if page.get("extlinks"):
+          existing.setdefault("extlinks", []).extend(page["extlinks"])
+        if page.get("revisions") and not existing.get("revisions"):
+          existing["revisions"] = page["revisions"]
+      else:
+        accumulated[pid] = dict(page)
     cont = payload.get("continue") or {}
-    apcontinue = cont.get("gapcontinue")
-    if not apcontinue:
-      break
+    next_gap = cont.get("gapcontinue", current_gap if cont else None)
+    gap_advanced = bool(cont) and "gapcontinue" in cont and cont["gapcontinue"] != current_gap
+    if not cont or gap_advanced:
+      batch = list(accumulated.values())
+      yield batch, payload
+      seen += len(batch)
+      accumulated = {}
+      current_gap = next_gap
+      if not cont:
+        return
+      if limit and seen >= limit:
+        return
+    cont_params = {k: str(v) for k, v in cont.items()}
 
 
 def save_page(conn: sqlite3.Connection, page: dict) -> None:
@@ -168,11 +187,18 @@ def save_page(conn: sqlite3.Connection, page: dict) -> None:
   )
   text = str(rev.get("*") or rev.get("slots", {}).get("main", {}).get("*") or "")
   rsids = {m.group(0).lower() for m in RSID_RE.finditer(title + "\n" + text)}
+  title_lower = title.lower()
   for rsid in rsids:
-    conn.execute(
-      "INSERT INTO snpedia_variants(rsid, page_id, source_title) VALUES (?, ?, ?) ON CONFLICT(rsid) DO UPDATE SET page_id=excluded.page_id, source_title=excluded.source_title",
-      (rsid, page_id, title),
-    )
+    if title_lower == rsid:
+      conn.execute(
+        "INSERT INTO snpedia_variants(rsid, page_id, source_title) VALUES (?, ?, ?) ON CONFLICT(rsid) DO UPDATE SET page_id=excluded.page_id, source_title=excluded.source_title",
+        (rsid, page_id, title),
+      )
+    else:
+      conn.execute(
+        "INSERT OR IGNORE INTO snpedia_variants(rsid, page_id, source_title) VALUES (?, ?, ?)",
+        (rsid, page_id, title),
+      )
 
   for m in GENOTYPE_TITLE_RE.finditer(title):
     rsid = m.group(1).lower()
@@ -207,17 +233,52 @@ def save_page(conn: sqlite3.Connection, page: dict) -> None:
     )
 
 
+def reparse_local(conn: sqlite3.Connection, progress_every: int) -> None:
+  total = conn.execute("SELECT COUNT(*) FROM snpedia_pages").fetchone()[0]
+  progress = Progress(started_at=time.time(), total=total)
+  print(f"reparsing {total} stored pages — wiping derived tables", flush=True)
+  conn.execute("DELETE FROM snpedia_variants")
+  conn.execute("DELETE FROM snpedia_genotypes")
+  conn.execute("DELETE FROM snpedia_external_links")
+  conn.execute("DELETE FROM snpedia_references")
+  conn.commit()
+  cur = conn.execute("SELECT raw_json FROM snpedia_pages")
+  while True:
+    rows = cur.fetchmany(500)
+    if not rows:
+      break
+    for (raw,) in rows:
+      if not raw:
+        continue
+      page = json.loads(raw)
+      save_page(conn, page)
+      progress.processed += 1
+      if progress.processed % progress_every == 0:
+        progress.emit()
+    conn.commit()
+  progress.emit()
+
+
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--full", action="store_true")
   parser.add_argument("--limit", type=int)
   parser.add_argument("--progress-every", type=int, default=250)
+  parser.add_argument("--reparse", action="store_true", help="re-derive variants/genotypes/extlinks/references from stored raw_json without hitting the API")
   args = parser.parse_args()
+
+  conn = open_db()
+
+  if args.reparse:
+    try:
+      reparse_local(conn, args.progress_every)
+    finally:
+      conn.close()
+    return
 
   session = requests.Session()
   session.headers["User-Agent"] = USER_AGENT
 
-  conn = open_db()
   start_from = None if args.full else get_state(conn)
   total_guess = args.limit or 1
   progress = Progress(started_at=time.time(), total=total_guess)
