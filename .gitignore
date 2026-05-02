@@ -25,6 +25,8 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/playwright.local.config.ts
+frontend/test-results/
 npm-debug.log*
 
 # Editor / OS

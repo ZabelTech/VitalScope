@@ -8752,6 +8752,42 @@ def _extract_snpedia_bundle(zip_path: Path) -> dict[str, str]:
     return pages
 
 
+def _bootstrap_demo_genome_upload(conn: sqlite3.Connection) -> int:
+    """Demo-only: synthesise a genome_uploads row + variants from the
+    curated variant_registry so the wiki ingest pipeline has something to
+    match SNPedia pages against. Picks the homozygous-ref genotype for
+    each registry entry as a deterministic placeholder.
+    """
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    today_str = date.today().isoformat()
+    cur = conn.execute(
+        "INSERT INTO genome_uploads (date, source_upload_id, variant_count, "
+        "rs_count, chromosomes, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (today_str, None, 0, 0, json.dumps([]),
+         "demo bootstrap — synthesised from variant_registry", now),
+    )
+    gu_id = cur.lastrowid
+    rows = conn.execute("SELECT * FROM variant_registry").fetchall()
+    for r in rows:
+        try:
+            genotypes = json.loads(r["genotypes"] or "{}")
+        except Exception:
+            genotypes = {}
+        gt = "0/0" if "0/0" in genotypes else (next(iter(genotypes), "0/0"))
+        info = genotypes.get(gt) or {}
+        conn.execute(
+            "INSERT INTO genome_variants "
+            "(genome_upload_id, rs_id, gene, variant_name, domain, genotype, "
+            "zygosity, impact_label, interpretation, created_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (gu_id, r["rs_id"], r["gene"], r["variant_name"], r["domain"], gt,
+             info.get("zygosity", "homozygous_ref"),
+             info.get("label", ""), info.get("interpretation", ""), now),
+        )
+    conn.commit()
+    return gu_id
+
+
 def _registry_entry(conn: sqlite3.Connection, rs: str) -> Optional[dict]:
     row = conn.execute(
         "SELECT * FROM variant_registry WHERE rs_id = ?", (rs,)
@@ -8967,9 +9003,17 @@ async def ingest_genome_wiki(body: GenomeWikiIngestIn):
             "SELECT id FROM genome_uploads ORDER BY date DESC, id DESC LIMIT 1"
         ).fetchone()
         if not latest:
-            conn.close()
-            raise HTTPException(status_code=400, detail="no genome upload to match against")
-        gu_id = latest["id"]
+            if DEMO_MODE:
+                # In demo mode, synthesize a genome_upload from the curated
+                # variant_registry so the wiki ingest pipeline has something
+                # to match SNPedia pages against. Real users go through the
+                # VCF upload flow first.
+                gu_id = _bootstrap_demo_genome_upload(conn)
+            else:
+                conn.close()
+                raise HTTPException(status_code=400, detail="no genome upload to match against")
+        else:
+            gu_id = latest["id"]
 
     variants = [
         dict(r) for r in conn.execute(

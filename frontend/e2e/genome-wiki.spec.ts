@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+const FIXTURE_PATH = "e2e/fixtures/snpedia.zip";
+
 async function login(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Begin the Cycle" }).first().click();
@@ -8,19 +10,42 @@ async function login(page: Page) {
   await expect(page.getByRole("link", { name: "Observe" })).toBeVisible();
 }
 
-test("Browse seeded genomic wiki pages from Orient", async ({ page }) => {
+// Drive upload → compile through the Decide → Entries → DNA UI. This both
+// tests the feature and seeds the wiki for the browse / Q&A tests below
+// (the demo backend uses reuseExistingServer so state carries between
+// tests in this file).
+test("Upload SNPedia bundle and compile the genomic wiki", async ({ page }) => {
+  await login(page);
+  // The SNPedia uploader lives on the Entries page → DNA section.
+  // OodaPage stacks all sections, so a direct goto is enough.
+  await page.goto("/entries");
+
+  const panel = page.locator(".genome-snpedia-panel");
+  await panel.scrollIntoViewIfNeeded();
+  await expect(panel).toBeVisible();
+  await panel.locator('input[type="file"]').setInputFiles(FIXTURE_PATH);
+  // Wait for the upload to finish — the "compile" button enables when
+  // an upload row exists.
+  const compileBtn = panel.getByRole("button", { name: /Compile genomic wiki/ });
+  await expect(compileBtn).toBeEnabled({ timeout: 15_000 });
+  await compileBtn.click();
+  await expect(panel.getByText(/Considered/)).toBeVisible({ timeout: 30_000 });
+});
+
+test("Browse the compiled wiki from Orient and follow a wikilink", async ({ page }) => {
   await login(page);
   await page.getByRole("link", { name: "Orient" }).click();
 
-  const card = page.locator("section.card.genome-wiki-card");
-  await card.scrollIntoViewIfNeeded();
+  const card = page.locator(".genome-wiki-card");
   await expect(card).toBeVisible();
+  await card.scrollIntoViewIfNeeded();
   await expect(card.getByRole("heading", { name: "Genomic wiki" })).toBeVisible();
 
-  // The demo seed populates several variant pages; pick one we know exists.
+  // The fixture covers rs1801133 (MTHFR); demo provider names the page
+  // "rs1801133 (MTHFR) — demo".
   const mthfrEntry = card.locator(".genome-wiki-nav-item", {
-    hasText: "rs1801133 (MTHFR)",
-  });
+    hasText: /rs1801133/,
+  }).first();
   await expect(mthfrEntry).toBeVisible();
   await mthfrEntry.click();
 
@@ -37,30 +62,28 @@ test("Browse seeded genomic wiki pages from Orient", async ({ page }) => {
   }).first();
   await expect(sourceLink).toBeVisible();
   await sourceLink.click();
-  await expect(reader.getByText(/Provenance for/)).toBeVisible();
+  await expect(reader.getByText(/Provenance/)).toBeVisible();
 });
 
 test("Ask a genome question and see the answer filed back", async ({ page }) => {
   await login(page);
   await page.getByRole("link", { name: "Decide" }).click();
 
-  const card = page.locator("section.card", {
+  const card = page.locator(".overview-card", {
     has: page.getByRole("heading", { name: "Genome Q&A" }),
   });
-  await card.scrollIntoViewIfNeeded();
   await expect(card).toBeVisible();
+  await card.scrollIntoViewIfNeeded();
 
   await card.locator("textarea").fill("What does my MTHFR C677T mean for folate?");
   await card.getByRole("button", { name: "Ask" }).click();
 
-  // The demo provider returns synchronously after a 0.4s sleep; wait for the
-  // answer to land in the history list. The QA row carries the question's
-  // title; demo's title is "Demo answer".
+  // Demo provider returns synchronously after a 0.4s sleep; wait for the
+  // answer to land in the history list.
   const askedRow = card.locator(".genome-wiki-qa-row").first();
   await expect(askedRow).toBeVisible({ timeout: 15_000 });
   await expect(askedRow).toHaveClass(/genome-wiki-qa-row--active/);
 
-  // The expanded body renders the four standard sections.
   const body = card.locator(".genome-wiki-qa-body").first();
   await expect(body.getByRole("heading", { name: "What it is" })).toBeVisible();
   await expect(body.getByRole("heading", { name: "What we don't know" })).toBeVisible();
