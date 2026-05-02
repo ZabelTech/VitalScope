@@ -5,6 +5,7 @@ vitalscope.db-wal
 vitalscope.db-shm
 data/
 uploads/
+genome_wiki/
 
 # Secrets & credentials
 .env

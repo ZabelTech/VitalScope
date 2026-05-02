@@ -3,6 +3,7 @@ import { format, subDays } from "date-fns";
 import { BloodPressureSection } from "./BloodPressureSection";
 import { CognitionSection } from "./CognitionSection";
 import { DateRangePicker } from "./DateRangePicker";
+import { GenomeWikiSection } from "./GenomeWikiSection";
 import { GenotypePhenotypeSection } from "./GenotypePhenotypeSection";
 import { LongevitySection } from "./LongevitySection";
 import { OodaPage } from "./OodaPage";
@@ -33,6 +34,11 @@ export function OrientPage() {
             id: "genotype-phenotype",
             label: "Genotype × phenotype",
             content: <GenotypePhenotypeSection />,
+          },
+          {
+            id: "genome-wiki",
+            label: "Genomic wiki",
+            content: <GenomeWikiSection />,
           },
         ]}
       />

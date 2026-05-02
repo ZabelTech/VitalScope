@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   createJournalQuestion,
   deleteJournalQuestion,
+  fetchGenomeWikiSettings,
   getAiContextSettings,
   getAiSettings,
   listJournalQuestions,
@@ -10,6 +11,7 @@ import {
   runPluginNow,
   updateAiContextSettings,
   updateAiSettings,
+  updateGenomeWikiSettings,
   updateJournalQuestion,
   updatePlugin,
   type PluginConfig,
@@ -50,6 +52,7 @@ export function SettingsPage() {
       </div>
       <AiConfigCard demo={runtime?.demo ?? false} />
       <AiContextCard demo={runtime?.demo ?? false} />
+      <GenomeWikiCard demo={runtime?.demo ?? false} />
       <JournalConfigCard />
       {status === "loading" && <p>Loading…</p>}
       {status === "error" && <p className="journal-err">Failed to load plugins</p>}
@@ -519,6 +522,97 @@ function AiContextCard({ demo }: { demo: boolean }) {
     </section>
   );
 }
+
+function GenomeWikiCard({ demo }: { demo: boolean }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const [maxPages, setMaxPages] = useState<number>(100);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [rawCount, setRawCount] = useState<number>(0);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchGenomeWikiSettings()
+      .then((s) => {
+        setMaxPages(s.max_pages);
+        setCounts(s.wiki_page_counts || {});
+        setRawCount(s.raw_snpedia_count || 0);
+      })
+      .catch(() => setError("Failed to load genome-wiki settings"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function onSave() {
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await updateGenomeWikiSettings(maxPages);
+      setMaxPages(res.max_pages);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const totalWikiPages = Object.values(counts).reduce((a, b) => a + b, 0);
+
+  return (
+    <section className="card ai-context-card">
+      <header
+        className="ai-context-header"
+        onClick={() => setCollapsed((c) => !c)}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span style={{ fontSize: "0.8em", opacity: 0.6, lineHeight: 1 }}>
+            {collapsed ? "▸" : "▾"}
+          </span>
+          <div>
+            <h3 style={{ margin: 0 }}>Genome wiki</h3>
+            <p style={{ margin: "0.1rem 0 0", opacity: 0.7, fontSize: "0.9em" }}>
+              {loading
+                ? "Loading…"
+                : `${rawCount} SNPedia raw pages · ${totalWikiPages} compiled wiki pages · cap ${maxPages}`}
+            </p>
+          </div>
+        </div>
+      </header>
+      {!collapsed && (
+        <div className="ai-context-body">
+          <p className="ai-context-blurb">
+            How many variants the AI compiles into wiki pages per ingest.
+            Pages from the curated registry are always included regardless
+            of cap. Set 0 to limit ingest to registry-only pages. Range:
+            0–5000.
+          </p>
+          {error && <p className="journal-err">{error}</p>}
+          <label className="ai-context-row" style={{ alignItems: "center", gap: "0.5rem" }}>
+            <span>Max compiled pages per ingest</span>
+            <input
+              type="number"
+              min={0}
+              max={5000}
+              step={10}
+              value={maxPages}
+              onChange={(e) => setMaxPages(Math.max(0, Math.min(5000, Number(e.target.value) || 0)))}
+              disabled={demo || saving}
+              style={{ width: "6rem" }}
+            />
+            <button
+              type="button"
+              onClick={onSave}
+              disabled={demo || saving}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+          </label>
+        </div>
+      )}
+    </section>
+  );
+}
+
 
 function PluginCard({
   plugin,

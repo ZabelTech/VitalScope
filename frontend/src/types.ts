@@ -324,7 +324,7 @@ export interface DateRange {
   latest: string;
 }
 
-export type UploadKind = "meal" | "form" | "bloodwork" | "genome";
+export type UploadKind = "meal" | "form" | "bloodwork" | "genome" | "snpedia";
 
 export interface Upload {
   id: number;
@@ -976,4 +976,66 @@ export interface ConcentrationCurve {
   curve: ConcentrationPoint[];
   baseline_curve: ConcentrationPoint[] | null;
   intakes: CaffeineIntake[];
+}
+
+export type GenomeWikiPageType =
+  | "index"
+  | "me"
+  | "log"
+  | "variant"
+  | "gene"
+  | "system"
+  | "trait"
+  | "drug"
+  | "risk"
+  | "ancestry"
+  | "source"
+  | "qa"
+  | "report"
+  | "lint";
+
+export interface GenomeWikiIndexEntry {
+  path: string;
+  type: GenomeWikiPageType;
+  title: string;
+  summary: string | null;
+  rs_id: string | null;
+  gene: string | null;
+  last_reviewed: string | null;
+  updated_at: string;
+}
+
+export interface GenomeWikiPage {
+  path: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+  raw: string;
+}
+
+export interface GenomeWikiSettings {
+  root: string;
+  raw_snpedia_count: number;
+  wiki_page_counts: Record<string, number>;
+  max_pages: number;
+}
+
+export interface GenomeWikiIngestResult {
+  considered: number;
+  written: number;
+  skipped_for_cap: number;
+  skipped_rs_ids: string[];
+  errors: { rs_id?: string; gene?: string; system?: string; error: unknown }[];
+  written_paths: string[];
+}
+
+export interface GenomeWikiAnswer {
+  path: string;
+  frontmatter: Record<string, unknown>;
+  body: string;
+}
+
+export interface GenomeWikiLintResult {
+  orphans: string[];
+  missing: { page: string; target: string }[];
+  stale: { path: string; last_reviewed: string }[];
 }

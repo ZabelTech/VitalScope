@@ -1,7 +1,13 @@
 import { format, subYears } from "date-fns";
-import { useCallback, useEffect, useState } from "react";
-import { deleteGenomeUpload, fetchGenomeVariants, listGenomeUploads } from "../api";
-import type { GenomeUpload, GenomeVariant } from "../types";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  apiFetch,
+  deleteGenomeUpload,
+  fetchGenomeVariants,
+  ingestSnpediaBundle,
+  listGenomeUploads,
+} from "../api";
+import type { GenomeUpload, GenomeVariant, GenomeWikiIngestResult } from "../types";
 import { Card, CardHeader } from "./Card";
 import { ImageUpload } from "./ImageUpload";
 
@@ -48,6 +54,8 @@ export function GenomeSection() {
         hint="Accepts .vcf or .vcf.gz — up to 50 MB."
         onSaved={reload}
       />
+
+      <SnpediaWikiPanel />
 
       <div className="bloodwork-panels-list">
         <h3 className="stat-label">Saved genomes</h3>
@@ -171,6 +179,123 @@ function GenomeDetail({ upload, onDelete }: { upload: GenomeUpload; onDelete: ()
           Delete
         </button>
       </div>
+    </div>
+  );
+}
+
+// SNPedia bundle uploader + "Compile genomic wiki" trigger. Sits below the
+// VCF upload because the wiki ingest needs an existing genome upload to
+// match SNPedia pages against.
+function SnpediaWikiPanel() {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadId, setUploadId] = useState<number | null>(null);
+  const [uploadName, setUploadName] = useState<string | null>(null);
+  const [compiling, setCompiling] = useState(false);
+  const [result, setResult] = useState<GenomeWikiIngestResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setError(null);
+    setResult(null);
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("kind", "snpedia");
+      fd.append("date", today);
+      fd.append("file", file);
+      const res = await apiFetch("/api/uploads", { method: "POST", body: fd });
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(`upload failed: ${res.status} ${t}`);
+      }
+      const json = await res.json();
+      setUploadId(json.id);
+      setUploadName(file.name);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUploading(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  }
+
+  async function onCompile() {
+    if (!uploadId) return;
+    setCompiling(true);
+    setError(null);
+    try {
+      const r = await ingestSnpediaBundle({ snpedia_upload_id: uploadId });
+      setResult(r);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCompiling(false);
+    }
+  }
+
+  return (
+    <div className="genome-snpedia-panel">
+      <h3 className="stat-label">Genomic wiki (SNPedia)</h3>
+      <p className="journal-hint">
+        Upload a ZIP bundle of SNPedia pages (one .md per RS ID) that match
+        your genome. The AI compiles per-variant, per-gene, and per-system
+        wiki pages into the Orient → Genomic wiki browser.
+      </p>
+      <div className="genome-snpedia-actions">
+        <input
+          ref={inputRef}
+          type="file"
+          accept=".zip,application/zip,application/x-zip-compressed"
+          onChange={onFile}
+          disabled={uploading || compiling}
+        />
+        <button
+          type="button"
+          className="chip chip-primary"
+          onClick={onCompile}
+          disabled={!uploadId || compiling}
+        >
+          {compiling ? "Compiling…" : "Compile genomic wiki"}
+        </button>
+      </div>
+      {uploading && <p className="journal-hint">Uploading…</p>}
+      {uploadName && uploadId && !compiling && !result && (
+        <p className="journal-hint">
+          Bundle "{uploadName}" uploaded. Click "Compile genomic wiki" to
+          run the AI ingest pass.
+        </p>
+      )}
+      {error && <p className="orient-ai-error">{error}</p>}
+      {result && (
+        <div className="genome-snpedia-result">
+          <p>
+            Considered <strong>{result.considered}</strong>; wrote{" "}
+            <strong>{result.written}</strong>; skipped for cap{" "}
+            <strong>{result.skipped_for_cap}</strong>.
+          </p>
+          {result.skipped_for_cap > 0 && (
+            <p className="journal-hint">
+              Raise the per-run cap in Settings → AI Context to include
+              the skipped variants.
+            </p>
+          )}
+          {result.errors.length > 0 && (
+            <details>
+              <summary>{result.errors.length} errors</summary>
+              <ul>
+                {result.errors.slice(0, 12).map((e, i) => (
+                  <li key={i}>
+                    <code>{JSON.stringify(e)}</code>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }

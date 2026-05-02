@@ -45,6 +45,7 @@ const SIZE_LIMITS: Record<UploadKind, number> = {
   form: 5 * 1024 * 1024,
   bloodwork: 10 * 1024 * 1024,
   genome: 50 * 1024 * 1024,
+  snpedia: 50 * 1024 * 1024,
 };
 
 function isAcceptedFile(kind: UploadKind, mime: string): boolean {

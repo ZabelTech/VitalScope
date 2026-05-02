@@ -35,6 +35,12 @@ ENV_NAME = os.environ.get("VITALSCOPE_ENV", "dev")
 BUILD_SHA = os.environ.get("VITALSCOPE_SHA", "")
 UPLOADS_DIR = Path(os.environ.get("VITALSCOPE_UPLOADS", DB_PATH.parent / "uploads"))
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+GENOME_WIKI_ROOT = Path(os.environ.get("VITALSCOPE_GENOME_WIKI", DB_PATH.parent / "genome_wiki"))
+GENOME_WIKI_ROOT.mkdir(parents=True, exist_ok=True)
+(GENOME_WIKI_ROOT / "raw" / "snpedia").mkdir(parents=True, exist_ok=True)
+for _sub in ("variants", "genes", "systems", "traits", "drugs", "risks",
+             "ancestry", "sources/snpedia", "synthesis/qa", "synthesis/reports", "lint"):
+    (GENOME_WIKI_ROOT / "wiki" / _sub).mkdir(parents=True, exist_ok=True)
 
 # --- AI provider config ---
 # VITALSCOPE_AI_PROVIDER picks which SDK we talk to. OpenRouter reuses the
@@ -66,6 +72,7 @@ BLOODWORK_AI_TIMEOUT_SEC = int(os.environ.get("BLOODWORK_AI_TIMEOUT_SEC", "60"))
 ORIENT_AI_TIMEOUT_SEC = int(os.environ.get("ORIENT_AI_TIMEOUT_SEC", "90"))
 BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("BRIEFING_AI_TIMEOUT_SEC", "90"))
 NIGHT_BRIEFING_AI_TIMEOUT_SEC = int(os.environ.get("NIGHT_BRIEFING_AI_TIMEOUT_SEC", "90"))
+GENOME_WIKI_AI_TIMEOUT_SEC = int(os.environ.get("GENOME_WIKI_AI_TIMEOUT_SEC", "60"))
 
 BLOODWORK_AI_MAX_AGE_DAYS = 180
 
@@ -264,6 +271,7 @@ AI_CONTEXT_CATEGORIES: list[tuple[str, str, str]] = [
     ("biological_age", "Biological age", "Health"),
     ("grip_strength", "Grip strength", "Health"),
     ("blood_pressure", "Blood pressure", "Health"),
+    ("genotype", "Genotype & genome wiki", "Health"),
     ("nutrition", "Nutrition & meals", "Lifestyle"),
     ("water", "Water intake", "Lifestyle"),
     ("supplements", "Supplements", "Lifestyle"),
@@ -1106,7 +1114,7 @@ def ensure_daily_landing_tables() -> None:
         """
         CREATE TABLE IF NOT EXISTS uploads (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
+            kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome','snpedia')),
             date       TEXT NOT NULL,
             filename   TEXT NOT NULL,
             mime       TEXT NOT NULL,
@@ -1120,20 +1128,21 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_uploads_kind_date ON uploads(kind, date)")
-    # Migrate databases that predate the genome kind: SQLite can't ALTER a
-    # CHECK, so rebuild the table whenever the kind whitelist is outdated.
+    # SQLite can't ALTER a CHECK, so rebuild the table whenever the kind
+    # whitelist is outdated. Trigger on the newest kind so each new addition
+    # forces a migration on legacy DBs.
     row = conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='uploads'").fetchone()
-    if row and "'genome'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
+    if row and "'snpedia'" not in (row[0] or "") and "CHECK" in (row[0] or ""):
         _ec = {r[1] for r in conn.execute("PRAGMA table_info(uploads)")}
         _base = "id, kind, date, filename, mime, bytes, created_at"
-        _extra = [c for c in ("meal_id", "body_composition_estimate_id", "bloodwork_panel_id") if c in _ec]
+        _extra = [c for c in ("meal_id", "body_composition_estimate_id", "bloodwork_panel_id", "genome_upload_id") if c in _ec]
         _col_list = _base + (", " + ", ".join(_extra) if _extra else "")
         conn.executescript(
             f"""
             PRAGMA foreign_keys = OFF;
             CREATE TABLE uploads_new (
                 id         INTEGER PRIMARY KEY AUTOINCREMENT,
-                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome')),
+                kind       TEXT NOT NULL CHECK (kind IN ('meal','form','bloodwork','genome','snpedia')),
                 date       TEXT NOT NULL,
                 filename   TEXT NOT NULL,
                 mime       TEXT NOT NULL,
@@ -1290,6 +1299,39 @@ def ensure_daily_landing_tables() -> None:
         """
     )
     _seed_variant_registry(conn)
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_wiki_index (
+            path          TEXT PRIMARY KEY,
+            type          TEXT NOT NULL,
+            title         TEXT NOT NULL,
+            summary       TEXT,
+            rs_id         TEXT,
+            gene          TEXT,
+            last_reviewed TEXT,
+            sha256        TEXT NOT NULL,
+            updated_at    TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_gw_index_type ON genome_wiki_index(type)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_gw_index_rs ON genome_wiki_index(rs_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_gw_index_gene ON genome_wiki_index(gene)")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_wiki_contradictions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            page_path     TEXT NOT NULL,
+            claim         TEXT NOT NULL,
+            sources_json  TEXT NOT NULL,
+            detected_at   TEXT NOT NULL,
+            resolved_at   TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_gw_contradictions_page ON genome_wiki_contradictions(page_path)"
+    )
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS ai_config (
@@ -4128,11 +4170,12 @@ def delete_planned_session(session_id: int):
 MAX_UPLOAD_BYTES_IMAGE = 5 * 1024 * 1024
 MAX_UPLOAD_BYTES_BLOODWORK = 10 * 1024 * 1024
 MAX_UPLOAD_BYTES_GENOME = 50 * 1024 * 1024
+MAX_UPLOAD_BYTES_SNPEDIA = 50 * 1024 * 1024
 
 
 @app.post("/api/uploads")
 async def upload_file(
-    kind: Literal["meal", "form", "bloodwork", "genome"] = Form(...),
+    kind: Literal["meal", "form", "bloodwork", "genome", "snpedia"] = Form(...),
     date: str = Form(...),
     file: UploadFile = File(...),
 ):
@@ -4147,6 +4190,12 @@ async def upload_file(
         )):
             raise HTTPException(status_code=400, detail="VCF or VCF.gz file required")
         size_limit = MAX_UPLOAD_BYTES_GENOME
+    elif kind == "snpedia":
+        if ct not in (
+            "application/zip", "application/x-zip-compressed", "application/octet-stream",
+        ):
+            raise HTTPException(status_code=400, detail="ZIP archive of SNPedia .md pages required")
+        size_limit = MAX_UPLOAD_BYTES_SNPEDIA
     else:
         if not ct.startswith("image/"):
             raise HTTPException(status_code=400, detail="image/* required")
@@ -4179,7 +4228,7 @@ async def upload_file(
 
 
 @app.get("/api/uploads")
-def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork", "genome"]] = None, date: Optional[str] = None):
+def list_uploads(kind: Optional[Literal["meal", "form", "bloodwork", "genome", "snpedia"]] = None, date: Optional[str] = None):
     conn = get_db()
     clauses, params = [], []
     if kind:
@@ -4556,6 +4605,16 @@ class DemoProvider(AIProvider):
             return _demo_morning_briefing_payload()
         if tool_name == "record_night_briefing":
             return _demo_night_briefing_payload()
+        if tool_name == "record_variant_page":
+            return _demo_variant_page_payload(user_text)
+        if tool_name == "record_gene_page":
+            return _demo_gene_page_payload(user_text)
+        if tool_name == "record_system_page":
+            return _demo_system_page_payload(user_text)
+        if tool_name == "answer_genome_question":
+            return _demo_genome_qa_payload(user_text)
+        if tool_name == "record_genome_report":
+            return _demo_genome_report_payload(user_text)
         return {}
 
 
@@ -4796,6 +4855,122 @@ def _demo_night_briefing_payload() -> dict:
             "Prep tomorrow's breakfast tonight — a high-protein meal ready to go reduces morning stress.",
             "Training kit is already noted in your plan; confirm it is laid out before bed.",
         ],
+    }
+
+
+# Demo payloads for the genome wiki tools. Reach into the user_text to find
+# the RS ID / gene / topic so the rendered page is at least minimally
+# personalised. None of these short-circuit on missing matches — they always
+# return a payload that satisfies the tool's required fields.
+
+def _demo_pick_rs(user_text: str) -> str:
+    import re as _r
+    m = _r.search(r"rs\d+", user_text or "", _r.IGNORECASE)
+    return m.group(0).lower() if m else "rs1801133"
+
+
+def _demo_pick_gene(user_text: str) -> str:
+    import re as _r
+    m = _r.search(r"\b(MTHFR|APOE|CYP[12][A-Z][0-9]+|VDR|FADS[12]?|ACTN3|COMT|MTRR|MTR)\b", user_text or "")
+    return m.group(0).upper() if m else "MTHFR"
+
+
+def _demo_variant_page_payload(user_text: str) -> dict:
+    rs = _demo_pick_rs(user_text)
+    gene = _demo_pick_gene(user_text)
+    body = (
+        f"## What it is\n\n"
+        f"`{rs}` is a single-nucleotide variant in the {gene} gene. "
+        f"Demo content; not derived from a real AI call. [[sources/snpedia/{rs}]]\n\n"
+        f"## Your data\n\n"
+        f"Your demo genotype at this position is reported as the heterozygous "
+        f"call. [[sources/snpedia/{rs}]]\n\n"
+        f"## What it means\n\n"
+        f"This variant is associated with an altered enzymatic activity in the "
+        f"corresponding pathway. [[sources/snpedia/{rs}]]\n\n"
+        f"## What we don't know\n\n"
+        f"Whether ancestry-stratified frequencies apply to your population is "
+        f"not encoded in this demo payload."
+    )
+    return {
+        "title": f"{rs} ({gene}) — demo",
+        "summary": f"Demo variant page for {rs} in {gene}.",
+        "evidence_strength": "moderate",
+        "hgvs": "",
+        "related": [f"genes/{gene}"],
+        "body_md": body,
+    }
+
+
+def _demo_gene_page_payload(user_text: str) -> dict:
+    gene = _demo_pick_gene(user_text)
+    body = (
+        f"## Overview\n\n"
+        f"{gene} is a gene tracked in your wiki because at least one of your "
+        f"variants in it is informative. Demo content. [[sources/snpedia/rs1801133]]\n\n"
+        f"## Your variants in {gene}\n\n"
+        f"See the linked variant pages for per-RS-ID detail. [[sources/snpedia/rs1801133]]\n\n"
+        f"## What we don't know\n\n"
+        f"This demo payload does not synthesise across your real variant set."
+    )
+    return {
+        "title": f"{gene} — demo",
+        "summary": f"Demo gene page for {gene}.",
+        "system_tags": [_GENE_TO_SYSTEM.get(gene, "general")],
+        "body_md": body,
+    }
+
+
+def _demo_system_page_payload(user_text: str) -> dict:
+    body = (
+        "## System overview\n\n"
+        "This is a demo system page. Real content would synthesise across "
+        "the genes in this system. [[genes/MTHFR]]\n\n"
+        "## Open questions\n\n"
+        "Demo placeholder."
+    )
+    return {
+        "title": "System — demo",
+        "summary": "Demo system page.",
+        "body_md": body,
+    }
+
+
+def _demo_genome_qa_payload(user_text: str) -> dict:
+    body = (
+        "## What it is\n\n"
+        "Demo answer — no real AI was called. [[sources/snpedia/rs1801133]]\n\n"
+        "## Your data\n\n"
+        "Demo placeholder for your genotype context.\n\n"
+        "## What it means\n\n"
+        "Demo placeholder for the interpretation. [[sources/snpedia/rs1801133]]\n\n"
+        "## What we don't know\n\n"
+        "Everything that requires the real AI provider."
+    )
+    return {
+        "title": "Demo answer",
+        "summary": "Mocked genome Q&A response.",
+        "body_md": body,
+        "related": [],
+    }
+
+
+def _demo_genome_report_payload(user_text: str) -> dict:
+    body = (
+        "## Executive bullets\n\n"
+        "- Demo report — no real AI was called.\n"
+        "- Wikilinks point to demo-seeded pages.\n\n"
+        "## Evidence-ranked findings\n\n"
+        "| Finding | Evidence | Source |\n"
+        "|---|---|---|\n"
+        "| Demo finding | moderate | [[sources/snpedia/rs1801133]] |\n\n"
+        "## Open questions\n\n"
+        "Demo placeholder."
+    )
+    return {
+        "title": "Demo report",
+        "summary": "Mocked topical genome report.",
+        "body_md": body,
     }
 
 
@@ -5561,6 +5736,11 @@ def _gather_orient_metrics(
         if filtered:
             result["journal_cognition"] = filtered
 
+    if ctx.get("genotype"):
+        gw = _genome_wiki_context_for_ai(conn)
+        if gw:
+            result["genome_wiki"] = gw
+
     return result
 
 
@@ -5811,6 +5991,11 @@ def _gather_explain_context(
             "WHERE m.date BETWEEN ? AND ? GROUP BY m.id ORDER BY m.date, m.time",
             (start, end),
         ).fetchall())
+
+    if ctx.get("genotype"):
+        gw = _genome_wiki_context_for_ai(conn)
+        if gw:
+            out["genome_wiki"] = gw
 
     return out
 
@@ -6115,6 +6300,11 @@ def _gather_morning_metrics(conn: sqlite3.Connection, ctx: dict[str, bool]) -> d
             ]
             if open_bloodwork_alerts:
                 metrics["open_bloodwork_alerts"] = open_bloodwork_alerts
+
+    if ctx.get("genotype"):
+        gw = _genome_wiki_context_for_ai(conn)
+        if gw:
+            metrics["genome_wiki"] = gw
 
     return metrics
 
@@ -6424,6 +6614,11 @@ def _gather_night_briefing_data(
             (target_date,),
         ).fetchone()
         out["journal_entry_today"] = dict(journal_row) if journal_row else {}
+
+    if ctx.get("genotype"):
+        gw = _genome_wiki_context_for_ai(conn)
+        if gw:
+            out["genome_wiki"] = gw
 
     return out
 
@@ -7897,6 +8092,1228 @@ def delete_variant_registry_entry(rs_id: str):
     conn.commit()
     conn.close()
     return {"deleted": rs_id}
+
+
+# --- Genome Wiki ---
+#
+# A Karpathy-style LLM-maintained wiki for personal genome interpretation.
+# raw/ holds immutable SNPedia bundle pages; wiki/ holds AI-compiled per-variant
+# / per-gene / per-system / synthesis pages. SQLite holds only a derived index
+# (rebuildable from the filesystem) plus contradictions detected by the lint
+# pass. See the plan file for the full design rationale.
+
+import re as _re
+import zipfile as _zipfile
+
+import yaml as _yaml
+
+_RS_RE = _re.compile(r"rs\d+", _re.IGNORECASE)
+_WIKILINK_RE = _re.compile(r"\[\[([^\]]+?)\]\]")
+_CLAIM_TERMS_RE = _re.compile(
+    r"\b(associated with|increases? risk|decreases? risk|elevated risk|metaboli[sz]er|"
+    r"pathogenic|likely pathogenic|likely benign|drug[-\s]response|risk[-\s]factor|"
+    r"protective|deleterious|loss[-\s]of[-\s]function|gain[-\s]of[-\s]function|"
+    r"reduces? activity|enhances? activity)\b",
+    _re.IGNORECASE,
+)
+_BANNED_COLLOQUIAL_RE = _re.compile(r"\b(dangerous gene|bad gene|good gene|killer variant)\b", _re.IGNORECASE)
+_MAGNITUDE_RE = _re.compile(r"(?:^|\n)\s*(?:magnitude|Magnitude)\s*[:=]\s*([\d.]+)", _re.IGNORECASE)
+_CLINVAR_SIG_RE = _re.compile(
+    r"\b(pathogenic|likely[\s_-]pathogenic|drug[\s_-]response|risk[\s_-]factor)\b",
+    _re.IGNORECASE,
+)
+
+_PAGE_TYPES = {
+    "index", "me", "log", "variant", "gene", "system", "trait", "drug",
+    "risk", "ancestry", "source", "qa", "report", "lint",
+}
+
+
+def _genome_wiki_path(rel: str) -> Path:
+    """Resolve a relative wiki path safely under GENOME_WIKI_ROOT.
+
+    Rejects path traversal (any resolved path that escapes the root).
+    """
+    rel = (rel or "").lstrip("/").strip()
+    if not rel:
+        raise HTTPException(status_code=400, detail="empty wiki path")
+    if ".." in Path(rel).parts:
+        raise HTTPException(status_code=400, detail="path traversal not allowed")
+    candidate = (GENOME_WIKI_ROOT / rel).resolve()
+    root = GENOME_WIKI_ROOT.resolve()
+    try:
+        candidate.relative_to(root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="path escapes wiki root")
+    return candidate
+
+
+def _parse_frontmatter(text: str) -> tuple[dict, str]:
+    """Split a `---\\n...\\n---\\n` YAML front-matter block from the body."""
+    if not text.startswith("---\n") and not text.startswith("---\r\n"):
+        return {}, text
+    rest = text[4:] if text.startswith("---\n") else text[5:]
+    end = rest.find("\n---\n")
+    if end < 0:
+        end = rest.find("\n---\r\n")
+        if end < 0:
+            return {}, text
+        body = rest[end + 6:]
+    else:
+        body = rest[end + 5:]
+    fm_text = rest[:end]
+    try:
+        data = _yaml.safe_load(fm_text) or {}
+    except Exception:
+        data = {}
+    return data, body.lstrip("\n")
+
+
+def _serialize_page(frontmatter: dict, body: str) -> str:
+    fm = _yaml.safe_dump(frontmatter, sort_keys=False, allow_unicode=True).strip()
+    body = body.rstrip() + "\n"
+    return f"---\n{fm}\n---\n\n{body}"
+
+
+def _read_wiki_page(rel: str) -> dict:
+    p = _genome_wiki_path(rel)
+    if not p.is_file():
+        raise HTTPException(status_code=404, detail=f"wiki page not found: {rel}")
+    text = p.read_text(encoding="utf-8")
+    fm, body = _parse_frontmatter(text)
+    return {"path": rel, "frontmatter": fm, "body": body, "raw": text}
+
+
+def _wiki_link_targets(body: str) -> list[str]:
+    return [m.group(1).strip() for m in _WIKILINK_RE.finditer(body or "")]
+
+
+def _link_resolves(target: str) -> bool:
+    """A wikilink may omit the .md extension and may target raw/ or wiki/."""
+    target = target.strip()
+    if not target:
+        return False
+    candidates = [target, f"{target}.md"]
+    if not target.startswith(("raw/", "wiki/")):
+        candidates.extend([f"wiki/{target}", f"wiki/{target}.md"])
+    for cand in candidates:
+        try:
+            p = _genome_wiki_path(cand)
+            if p.is_file():
+                return True
+        except HTTPException:
+            continue
+    return False
+
+
+_DISCLAIMER = (
+    "> Informational only — not a medical device. Confirm with a CLIA-certified "
+    "lab and a board-certified geneticist before any clinical action."
+)
+
+
+def _validate_wiki_page(rel: str, frontmatter: dict, body: str) -> tuple[dict, str, list[str]]:
+    """Run write-time validators. Returns (frontmatter, body, errors).
+
+    May mutate the body to inject the disclaimer when missing. Errors are
+    fatal: callers MUST refuse to write when the list is non-empty.
+    """
+    errors: list[str] = []
+    page_type = (frontmatter or {}).get("type") or _infer_type_from_path(rel)
+    if page_type not in _PAGE_TYPES:
+        errors.append(f"unknown page type {page_type!r}")
+    # 1. Source link resolution.
+    for tgt in _wiki_link_targets(body):
+        if not _link_resolves(tgt):
+            errors.append(f"unresolved wikilink: [[{tgt}]]")
+    # 2. Citation density on medical claims (skip the disclaimer line).
+    if page_type in ("variant", "gene", "drug", "risk", "system", "trait", "qa", "report"):
+        for para in [p.strip() for p in (body or "").split("\n\n") if p.strip()]:
+            if para.startswith(">"):
+                continue
+            if _CLAIM_TERMS_RE.search(para) and not _WIKILINK_RE.search(para):
+                errors.append(f"medical claim without citation: {para[:80]!r}")
+                break  # one error is enough; don't flood the log
+    # 3. Banned colloquial vocabulary.
+    if _BANNED_COLLOQUIAL_RE.search(body or ""):
+        errors.append("colloquial banned phrase detected (use ACMG terminology)")
+    # 4. Disclaimer auto-injection (does not produce an error, just mutates).
+    if page_type in ("variant", "gene", "drug", "risk") and _DISCLAIMER not in (body or ""):
+        body = (body.rstrip() + "\n\n" + _DISCLAIMER + "\n") if body else (_DISCLAIMER + "\n")
+    return frontmatter, body, errors
+
+
+def _infer_type_from_path(rel: str) -> str:
+    rel = rel.lstrip("/")
+    if rel == "wiki/index.md":
+        return "index"
+    if rel == "wiki/me.md":
+        return "me"
+    if rel == "wiki/log.md":
+        return "log"
+    if rel.startswith("wiki/variants/"):
+        return "variant"
+    if rel.startswith("wiki/genes/"):
+        return "gene"
+    if rel.startswith("wiki/systems/"):
+        return "system"
+    if rel.startswith("wiki/traits/"):
+        return "trait"
+    if rel.startswith("wiki/drugs/"):
+        return "drug"
+    if rel.startswith("wiki/risks/"):
+        return "risk"
+    if rel.startswith("wiki/ancestry/"):
+        return "ancestry"
+    if rel.startswith("wiki/sources/"):
+        return "source"
+    if rel.startswith("wiki/synthesis/qa/"):
+        return "qa"
+    if rel.startswith("wiki/synthesis/reports/"):
+        return "report"
+    if rel.startswith("wiki/lint/"):
+        return "lint"
+    return "unknown"
+
+
+def _append_log(line: str) -> None:
+    log_path = _genome_wiki_path("wiki/log.md")
+    ts = datetime.utcnow().isoformat(timespec="seconds")
+    entry = f"- {ts} — {line}\n"
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(entry)
+
+
+def _write_wiki_page(rel: str, frontmatter: dict, body: str) -> dict:
+    """Validate + write a wiki page atomically. Returns {path, sha256, errors}."""
+    fm, body, errors = _validate_wiki_page(rel, dict(frontmatter or {}), body or "")
+    if errors:
+        try:
+            _append_log(f"REJECT {rel}: {'; '.join(errors[:3])}")
+        except Exception:
+            pass
+        raise HTTPException(status_code=400, detail={"errors": errors, "path": rel})
+    fm.setdefault("type", _infer_type_from_path(rel))
+    fm.setdefault("last_reviewed", date.today().isoformat())
+    fm["informational_only"] = True
+    text = _serialize_page(fm, body)
+    p = _genome_wiki_path(rel)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+    sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return {"path": rel, "sha256": sha, "errors": []}
+
+
+def _walk_wiki_files() -> list[Path]:
+    """All .md files under GENOME_WIKI_ROOT (excluding raw/ — those are not wiki pages)."""
+    root = GENOME_WIKI_ROOT.resolve()
+    out: list[Path] = []
+    for p in root.rglob("*.md"):
+        try:
+            rel = p.relative_to(root)
+        except ValueError:
+            continue
+        if rel.parts and rel.parts[0] == "raw":
+            continue
+        out.append(p)
+    return out
+
+
+def _rebuild_wiki_index(conn: sqlite3.Connection) -> int:
+    """Drop + repopulate genome_wiki_index from the filesystem. Returns row count."""
+    conn.execute("DELETE FROM genome_wiki_index")
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    root = GENOME_WIKI_ROOT.resolve()
+    rows = 0
+    for p in _walk_wiki_files():
+        rel = str(p.relative_to(root))
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        fm, body = _parse_frontmatter(text)
+        ptype = fm.get("type") or _infer_type_from_path(rel)
+        title = (
+            fm.get("title")
+            or (body.splitlines()[0].lstrip("# ").strip() if body.strip() else rel)
+        )
+        summary = fm.get("summary") or _first_paragraph(body)[:200]
+        rs_id = fm.get("rsid") or _first_rs_id(rel) or _first_rs_id(body)
+        gene = fm.get("gene")
+        last_reviewed = fm.get("last_reviewed")
+        sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        conn.execute(
+            """INSERT OR REPLACE INTO genome_wiki_index
+               (path, type, title, summary, rs_id, gene, last_reviewed, sha256, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (rel, ptype, str(title)[:200], str(summary or "")[:300], rs_id, gene,
+             last_reviewed, sha, now),
+        )
+        rows += 1
+    conn.commit()
+    return rows
+
+
+def _first_paragraph(body: str) -> str:
+    for para in (body or "").split("\n\n"):
+        para = para.strip()
+        if para and not para.startswith(("---", ">", "#")):
+            return para
+    return ""
+
+
+def _first_rs_id(text: str) -> Optional[str]:
+    m = _RS_RE.search(text or "")
+    return m.group(0).lower() if m else None
+
+
+def _get_genome_wiki_max_pages(conn: sqlite3.Connection) -> int:
+    row = conn.execute(
+        "SELECT value FROM ai_config WHERE key = 'genome_wiki_max_pages'"
+    ).fetchone()
+    if not row:
+        return 100
+    try:
+        n = int(row["value"])
+    except (TypeError, ValueError):
+        return 100
+    return max(0, min(5000, n))
+
+
+def _set_genome_wiki_max_pages(conn: sqlite3.Connection, n: int) -> int:
+    n = max(0, min(5000, int(n)))
+    conn.execute(
+        "INSERT OR REPLACE INTO ai_config (key, value) VALUES ('genome_wiki_max_pages', ?)",
+        (str(n),),
+    )
+    conn.commit()
+    return n
+
+
+# ---- ranking ----
+
+_CLINVAR_RANK = {
+    "pathogenic": 0,
+    "likely_pathogenic": 1,
+    "likely-pathogenic": 1,
+    "drug_response": 2,
+    "drug-response": 2,
+    "risk_factor": 3,
+    "risk-factor": 3,
+}
+
+
+def _scan_snpedia_page(text: str) -> dict:
+    """Extract magnitude + ClinVar significance hint from a raw SNPedia page."""
+    mag = 0.0
+    m = _MAGNITUDE_RE.search(text or "")
+    if m:
+        try:
+            mag = float(m.group(1))
+        except ValueError:
+            mag = 0.0
+    sig = None
+    s = _CLINVAR_SIG_RE.search(text or "")
+    if s:
+        sig = s.group(1).lower().replace(" ", "_").replace("-", "_")
+    return {"magnitude": mag, "significance": sig}
+
+
+def _rank_variants_for_wiki(
+    variants: list[dict],
+    raw_pages: dict[str, str],
+    registry_rs: set[str],
+) -> list[tuple[dict, dict]]:
+    """Return [(variant_row, scan_result), ...] ranked deterministically.
+
+    Order: registry hits first (always-include), then by ClinVar significance
+    rank (smaller = more important), then by SNPedia magnitude descending,
+    then by RS ID lexicographic.
+    """
+    enriched: list[tuple[dict, dict, tuple]] = []
+    for v in variants:
+        rs = (v.get("rs_id") or "").lower()
+        if not rs or rs not in raw_pages:
+            continue
+        scan = _scan_snpedia_page(raw_pages[rs])
+        in_reg = rs in registry_rs
+        sig_rank = _CLINVAR_RANK.get((scan.get("significance") or ""), 99)
+        # Sort key: registry first, then significance, then -magnitude, then RS ID.
+        key = (0 if in_reg else 1, sig_rank, -scan["magnitude"], rs)
+        enriched.append((v, scan, key))
+    enriched.sort(key=lambda t: t[2])
+    return [(v, s) for (v, s, _) in enriched]
+
+
+# ---- AI tool schemas ----
+
+_VARIANT_PAGE_TOOL = {
+    "name": "record_variant_page",
+    "description": (
+        "Compile a per-variant wiki page for one user-genotyped SNP from a "
+        "SNPedia source. Every clinical claim in body_md MUST end with a "
+        "[[sources/snpedia/<rsid>]] wikilink. Use ACMG terminology only "
+        "(Pathogenic / Likely Pathogenic / VUS / Likely Benign / Benign / "
+        "drug-response / risk-factor) — never colloquial words like "
+        "\"dangerous\" or \"bad\". Sections: ## What it is, ## Your data, "
+        "## What it means, ## What we don't know."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string", "description": "One-sentence pithy summary."},
+            "hgvs": {"type": "string"},
+            "evidence_strength": {
+                "type": "string",
+                "enum": ["strong", "moderate", "limited", "anecdotal"],
+            },
+            "related": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Wikilink targets like genes/MTHFR or systems/methylation.",
+            },
+            "body_md": {"type": "string", "description": "The page body, markdown."},
+        },
+        "required": ["title", "summary", "evidence_strength", "body_md"],
+    },
+}
+
+_GENE_PAGE_TOOL = {
+    "name": "record_gene_page",
+    "description": (
+        "Synthesise a per-gene wiki page that summarises ALL of the user's "
+        "variants in this gene. Cite each variant via [[variants/<rsid>_<gene>]] "
+        "and the underlying SNPedia source. Same ACMG / no-colloquialism rules."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "system_tags": {"type": "array", "items": {"type": "string"}},
+            "body_md": {"type": "string"},
+        },
+        "required": ["title", "summary", "body_md"],
+    },
+}
+
+_SYSTEM_PAGE_TOOL = {
+    "name": "record_system_page",
+    "description": (
+        "Synthesise a per-system wiki page (e.g. methylation, lipid_metabolism) "
+        "tying together the genes that affect this system in the user. Cite "
+        "via [[genes/<gene>]] and [[variants/<rsid>_<gene>]]."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "body_md": {"type": "string"},
+        },
+        "required": ["title", "summary", "body_md"],
+    },
+}
+
+_GENOME_QA_TOOL = {
+    "name": "answer_genome_question",
+    "description": (
+        "Answer a user question about their genome from the wiki context. "
+        "Output four sections: ## What it is / ## Your data / ## What it "
+        "means / ## What we don't know. Every clinical claim ends with a "
+        "[[wiki/...]] or [[sources/...]] wikilink. Use ACMG terminology only."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "body_md": {"type": "string"},
+            "related": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": ["title", "summary", "body_md"],
+    },
+}
+
+_GENOME_REPORT_TOOL = {
+    "name": "record_genome_report",
+    "description": (
+        "Generate a topical report (pharmacogenomics / longevity / performance "
+        "/ nutrition / methylation) by synthesising relevant gene/system/drug "
+        "wiki pages. Sections: executive bullets, table by evidence strength, "
+        "system synthesis, open questions, uncertainty appendix."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "summary": {"type": "string"},
+            "body_md": {"type": "string"},
+        },
+        "required": ["title", "summary", "body_md"],
+    },
+}
+
+
+# ---- helpers shared by ingest / query / report ----
+
+
+def _slugify(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = _re.sub(r"[^a-z0-9]+", "-", s)
+    return s.strip("-")[:64] or "untitled"
+
+
+def _wiki_pages_by_type(conn: sqlite3.Connection, types: list[str]) -> list[dict]:
+    placeholders = ",".join("?" for _ in types)
+    rows = conn.execute(
+        f"SELECT path, type, title, summary, rs_id, gene FROM genome_wiki_index "
+        f"WHERE type IN ({placeholders}) ORDER BY type, path",
+        list(types),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _render_index_md(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        "SELECT path, type, title, summary, rs_id, gene "
+        "FROM genome_wiki_index ORDER BY type, path"
+    ).fetchall()
+    by_type: dict[str, list[sqlite3.Row]] = {}
+    for r in rows:
+        if r["type"] in ("index", "log"):
+            continue
+        by_type.setdefault(r["type"], []).append(r)
+    lines = ["# Genome wiki index", ""]
+    for ptype in sorted(by_type.keys()):
+        lines.append(f"## {ptype}")
+        lines.append("")
+        for r in by_type[ptype]:
+            link = f"[[{r['path'].removeprefix('wiki/').removesuffix('.md')}]]"
+            summary = (r["summary"] or "").strip().replace("\n", " ")
+            lines.append(f"- {link} — {summary}" if summary else f"- {link}")
+        lines.append("")
+    body = "\n".join(lines).rstrip() + "\n"
+    fm = {
+        "type": "index",
+        "title": "Genome wiki index",
+        "last_reviewed": date.today().isoformat(),
+    }
+    text = _serialize_page(fm, body)
+    _genome_wiki_path("wiki/index.md").write_text(text, encoding="utf-8")
+
+
+def _genome_wiki_status(conn: sqlite3.Connection) -> dict:
+    counts = {}
+    for r in conn.execute(
+        "SELECT type, COUNT(*) AS c FROM genome_wiki_index GROUP BY type"
+    ).fetchall():
+        counts[r["type"]] = r["c"]
+    raw_count = sum(1 for _ in (GENOME_WIKI_ROOT / "raw" / "snpedia").glob("*.md"))
+    return {
+        "root": str(GENOME_WIKI_ROOT),
+        "raw_snpedia_count": raw_count,
+        "wiki_page_counts": counts,
+        "max_pages": _get_genome_wiki_max_pages(conn),
+    }
+
+
+def _genome_wiki_context_for_ai(conn: sqlite3.Connection, gene_cap: int = 8) -> dict:
+    """Compact genome-wiki summary for AI briefing/orient prompt injection.
+
+    Returns gene + system page summaries plus any open contradictions so the
+    AI knows which claims are disputed. Returns {} when no wiki content
+    exists yet (so prompts stay clean).
+    """
+    gene_rows = conn.execute(
+        "SELECT path, title, summary, gene FROM genome_wiki_index "
+        "WHERE type = 'gene' ORDER BY path LIMIT ?",
+        (gene_cap,),
+    ).fetchall()
+    system_rows = conn.execute(
+        "SELECT path, title, summary FROM genome_wiki_index "
+        "WHERE type = 'system' ORDER BY path"
+    ).fetchall()
+    contradictions = conn.execute(
+        "SELECT page_path, claim FROM genome_wiki_contradictions "
+        "WHERE resolved_at IS NULL ORDER BY detected_at DESC LIMIT 20"
+    ).fetchall()
+    if not gene_rows and not system_rows:
+        return {}
+    return {
+        "genes": [
+            {"path": r["path"], "gene": r["gene"], "title": r["title"], "summary": r["summary"]}
+            for r in gene_rows
+        ],
+        "systems": [
+            {"path": r["path"], "title": r["title"], "summary": r["summary"]}
+            for r in system_rows
+        ],
+        "open_contradictions": [
+            {"page": r["page_path"], "claim": r["claim"]} for r in contradictions
+        ],
+        "note": (
+            "AI-compiled wiki summaries. Cite specific genes/systems via "
+            "wikilinks like [[genes/MTHFR]]. Do not quote claims listed in "
+            "open_contradictions."
+        ),
+    }
+
+
+# ---- /api/settings/genome-wiki ----
+
+
+class GenomeWikiSettingsIn(BaseModel):
+    max_pages: int
+
+
+@app.get("/api/settings/genome-wiki")
+def get_genome_wiki_settings():
+    conn = get_db()
+    out = _genome_wiki_status(conn)
+    conn.close()
+    return out
+
+
+@app.put("/api/settings/genome-wiki")
+def put_genome_wiki_settings(body: GenomeWikiSettingsIn):
+    conn = get_db()
+    n = _set_genome_wiki_max_pages(conn, body.max_pages)
+    conn.close()
+    return {"max_pages": n}
+
+
+# ---- /api/genome-wiki/pages ----
+
+
+@app.get("/api/genome-wiki/pages")
+def list_genome_wiki_pages(type: Optional[str] = None, gene: Optional[str] = None):
+    conn = get_db()
+    sql = "SELECT path, type, title, summary, rs_id, gene, last_reviewed, updated_at FROM genome_wiki_index"
+    where, params = [], []
+    if type:
+        where.append("type = ?")
+        params.append(type)
+    if gene:
+        where.append("gene = ?")
+        params.append(gene)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY type, path"
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/genome-wiki/pages/{path:path}")
+def get_genome_wiki_page(path: str):
+    rel = path if path.endswith(".md") else f"{path}.md"
+    if not rel.startswith(("wiki/", "raw/")):
+        rel = f"wiki/{rel}"
+    return _read_wiki_page(rel)
+
+
+# ---- POST /api/genome-wiki/ingest ----
+
+
+class GenomeWikiIngestIn(BaseModel):
+    snpedia_upload_id: int
+    genome_upload_id: Optional[int] = None
+    limit: Optional[int] = None
+
+
+def _extract_snpedia_bundle(zip_path: Path) -> dict[str, str]:
+    """Unpack a SNPedia bundle into raw/snpedia/<rsid>.md and return {rsid: text}.
+
+    Skips files whose names don't contain an RS ID. If the same RS ID appears
+    twice in the bundle, the last one wins.
+    """
+    raw_dir = GENOME_WIKI_ROOT / "raw" / "snpedia"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    pages: dict[str, str] = {}
+    with _zipfile.ZipFile(zip_path) as zf:
+        for zi in zf.infolist():
+            if zi.is_dir():
+                continue
+            name = zi.filename.rsplit("/", 1)[-1]
+            if not name.lower().endswith((".md", ".txt", ".wiki")):
+                continue
+            m = _RS_RE.search(name)
+            if not m:
+                continue
+            rs = m.group(0).lower()
+            try:
+                text = zf.read(zi).decode("utf-8", errors="replace")
+            except Exception:
+                continue
+            pages[rs] = text
+            (raw_dir / f"{rs}.md").write_text(text, encoding="utf-8")
+    return pages
+
+
+def _registry_entry(conn: sqlite3.Connection, rs: str) -> Optional[dict]:
+    row = conn.execute(
+        "SELECT * FROM variant_registry WHERE rs_id = ?", (rs,)
+    ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    try:
+        out["genotypes"] = json.loads(out.get("genotypes") or "{}")
+    except Exception:
+        out["genotypes"] = {}
+    return out
+
+
+_GENE_TO_SYSTEM = {
+    "MTHFR": "methylation",
+    "MTRR": "methylation",
+    "MTR": "methylation",
+    "COMT": "methylation",
+    "APOE": "lipid_metabolism",
+    "FADS1": "lipid_metabolism",
+    "FADS2": "lipid_metabolism",
+    "CYP1A2": "detoxification",
+    "CYP2D6": "detoxification",
+    "CYP2C19": "detoxification",
+    "CYP2C9": "detoxification",
+    "VDR": "bone_and_immune",
+    "ACTN3": "performance",
+}
+
+
+async def _compile_variant_page(
+    *, variant: dict, scan: dict, source_rel: str, registry: Optional[dict]
+) -> dict:
+    """Run the AI variant pass for one (variant, snpedia source) pair."""
+    rs = variant.get("rs_id", "").lower()
+    gene = variant.get("gene") or (registry or {}).get("gene") or ""
+    genotype = variant.get("genotype") or ""
+    raw_text = _read_wiki_page("raw/snpedia/" + rs + ".md")["raw"]
+    seed = ""
+    if registry:
+        seed = (
+            "\n\nProject's curated registry entry for this variant (use as a "
+            "sanity-check anchor — NOT canonical):\n"
+            + json.dumps(
+                {
+                    "gene": registry.get("gene"),
+                    "variant_name": registry.get("variant_name"),
+                    "domain": registry.get("domain"),
+                    "genotypes": registry.get("genotypes"),
+                },
+                indent=2,
+            )
+        )
+    user_text = (
+        f"User RS ID: {rs}\n"
+        f"User gene: {gene}\n"
+        f"User genotype (VCF call): {genotype}\n"
+        f"SNPedia magnitude: {scan.get('magnitude')}\n"
+        f"SNPedia significance hint: {scan.get('significance') or 'unknown'}\n"
+        f"Source page wikilink: [[sources/snpedia/{rs}]]\n"
+        f"\nRaw SNPedia page text follows. Use it as the only source of "
+        f"clinical claims; cite it via [[sources/snpedia/{rs}]] after every "
+        f"medical claim. If a claim is not in this text, say \"What we don't "
+        f"know\" — do NOT invent.\n\n---\n{raw_text[:8000]}\n---{seed}"
+    )
+    system = (
+        "You are compiling a personal-genome wiki page in VitalScope. "
+        "Output via the record_variant_page tool. ACMG terminology only "
+        "(Pathogenic, Likely Pathogenic, VUS, Likely Benign, Benign, "
+        "drug-response, risk-factor). Never colloquial. Every paragraph "
+        "with a medical claim ends with a [[sources/snpedia/<rsid>]] link. "
+        "Body sections: ## What it is, ## Your data, ## What it means, "
+        "## What we don't know. Body must NOT include the disclaimer "
+        "footer — VitalScope appends that automatically."
+    )
+    payload = await _call_ai_text_tool(
+        system=system, user_text=user_text, tool=_VARIANT_PAGE_TOOL,
+        timeout_sec=GENOME_WIKI_AI_TIMEOUT_SEC,
+    )
+    fm = {
+        "type": "variant",
+        "rsid": rs,
+        "gene": gene,
+        "my_genotype": genotype,
+        "my_zygosity": variant.get("zygosity") or "",
+        "snpedia_magnitude": scan.get("magnitude") or 0,
+        "evidence_strength": payload.get("evidence_strength", "limited"),
+        "hgvs": payload.get("hgvs") or "",
+        "title": payload.get("title") or f"{rs} ({gene})",
+        "summary": payload.get("summary") or "",
+        "source_paths": [source_rel],
+        "related": payload.get("related") or [],
+    }
+    body = (payload.get("body_md") or "").strip()
+    rel = f"wiki/variants/{rs}_{gene or 'UNK'}.md"
+    return _write_wiki_page(rel, fm, body)
+
+
+async def _compile_gene_page(*, gene: str, variant_rels: list[str]) -> dict:
+    body_parts = []
+    for vr in variant_rels:
+        try:
+            page = _read_wiki_page(vr)
+        except HTTPException:
+            continue
+        title = page["frontmatter"].get("title") or vr
+        summary = page["frontmatter"].get("summary") or ""
+        link = vr.removeprefix("wiki/").removesuffix(".md")
+        body_parts.append(f"- [[{link}]] — {summary}" if summary else f"- [[{link}]]")
+    user_text = (
+        f"Gene: {gene}\n"
+        f"Variants the user has in this gene (cite each via [[variants/<rsid>_{gene}]]):\n"
+        + "\n".join(body_parts)
+        + "\n\nWrite a synthesis page tying together the user's variants in "
+        f"this gene, the gene's biology, and which body systems it touches."
+    )
+    system = (
+        "Compile a per-gene wiki page. Output via record_gene_page. "
+        "ACMG terminology only. Cite every medical claim via "
+        "[[variants/<rsid>_<gene>]] or [[sources/snpedia/<rsid>]]. "
+        "VitalScope appends the disclaimer footer automatically."
+    )
+    payload = await _call_ai_text_tool(
+        system=system, user_text=user_text, tool=_GENE_PAGE_TOOL,
+        timeout_sec=GENOME_WIKI_AI_TIMEOUT_SEC,
+    )
+    fm = {
+        "type": "gene",
+        "gene": gene,
+        "title": payload.get("title") or gene,
+        "summary": payload.get("summary") or "",
+        "system_tags": payload.get("system_tags") or [],
+    }
+    body = (payload.get("body_md") or "").strip()
+    return _write_wiki_page(f"wiki/genes/{gene}.md", fm, body)
+
+
+async def _compile_system_page(*, system: str, gene_rels: list[str]) -> dict:
+    body_parts = []
+    for gr in gene_rels:
+        try:
+            page = _read_wiki_page(gr)
+        except HTTPException:
+            continue
+        link = gr.removeprefix("wiki/").removesuffix(".md")
+        summary = page["frontmatter"].get("summary") or ""
+        body_parts.append(f"- [[{link}]] — {summary}" if summary else f"- [[{link}]]")
+    user_text = (
+        f"System: {system}\n"
+        f"User genes affecting this system:\n"
+        + "\n".join(body_parts)
+        + "\n\nWrite a system-level synthesis: how these genes interact in "
+        f"the user, what to watch for, what's uncertain."
+    )
+    sys_prompt = (
+        "Compile a per-system wiki page. Output via record_system_page. "
+        "ACMG terminology only. Cite via [[genes/<gene>]] or "
+        "[[variants/<rsid>_<gene>]]."
+    )
+    payload = await _call_ai_text_tool(
+        system=sys_prompt, user_text=user_text, tool=_SYSTEM_PAGE_TOOL,
+        timeout_sec=GENOME_WIKI_AI_TIMEOUT_SEC,
+    )
+    fm = {
+        "type": "system",
+        "title": payload.get("title") or system,
+        "summary": payload.get("summary") or "",
+        "system": system,
+    }
+    body = (payload.get("body_md") or "").strip()
+    return _write_wiki_page(f"wiki/systems/{system}.md", fm, body)
+
+
+def _write_source_page(rs: str, raw_text: str) -> dict:
+    sha = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+    fm = {
+        "type": "source",
+        "rsid": rs,
+        "title": f"SNPedia source: {rs}",
+        "summary": f"Raw SNPedia bundle entry for {rs}",
+        "source_file": f"raw/snpedia/{rs}.md",
+        "sha256": sha,
+        "fetched_at": datetime.utcnow().isoformat(timespec="seconds"),
+    }
+    body = (
+        f"Provenance for [[raw/snpedia/{rs}]].\n\n"
+        f"This is a derived summary; the raw text is the source of truth and "
+        f"is never mutated by the wiki. SHA-256: `{sha[:16]}…`."
+    )
+    return _write_wiki_page(f"wiki/sources/snpedia/{rs}.md", fm, body)
+
+
+@app.post("/api/genome-wiki/ingest")
+async def ingest_genome_wiki(body: GenomeWikiIngestIn):
+    conn = get_db()
+    upload_row = conn.execute(
+        "SELECT id, kind, filename FROM uploads WHERE id = ?",
+        (body.snpedia_upload_id,),
+    ).fetchone()
+    if not upload_row or upload_row["kind"] != "snpedia":
+        conn.close()
+        raise HTTPException(status_code=404, detail="snpedia upload not found")
+    zip_path = (UPLOADS_DIR / upload_row["filename"]).resolve()
+    if not str(zip_path).startswith(str(UPLOADS_DIR.resolve())) or not zip_path.is_file():
+        conn.close()
+        raise HTTPException(status_code=404, detail="snpedia file missing on disk")
+
+    if body.genome_upload_id:
+        gu_id = body.genome_upload_id
+    else:
+        latest = conn.execute(
+            "SELECT id FROM genome_uploads ORDER BY date DESC, id DESC LIMIT 1"
+        ).fetchone()
+        if not latest:
+            conn.close()
+            raise HTTPException(status_code=400, detail="no genome upload to match against")
+        gu_id = latest["id"]
+
+    variants = [
+        dict(r) for r in conn.execute(
+            "SELECT rs_id, gene, genotype, zygosity, variant_name, domain "
+            "FROM genome_variants WHERE genome_upload_id = ? AND rs_id IS NOT NULL",
+            (gu_id,),
+        ).fetchall()
+    ]
+    registry_rs = {
+        r["rs_id"].lower()
+        for r in conn.execute("SELECT rs_id FROM variant_registry").fetchall()
+    }
+
+    try:
+        raw_pages = _extract_snpedia_bundle(zip_path)
+    except _zipfile.BadZipFile:
+        conn.close()
+        raise HTTPException(status_code=400, detail="snpedia upload is not a valid zip file")
+
+    ranked = _rank_variants_for_wiki(variants, raw_pages, registry_rs)
+
+    cap = body.limit if body.limit is not None else _get_genome_wiki_max_pages(conn)
+    floor = [pair for pair in ranked if (pair[0]["rs_id"] or "").lower() in registry_rs]
+    rest = [pair for pair in ranked if (pair[0]["rs_id"] or "").lower() not in registry_rs]
+    if cap == 0:
+        chosen = floor
+    else:
+        room = max(0, cap - len(floor))
+        chosen = floor + rest[:room]
+
+    written: list[str] = []
+    skipped: list[str] = []
+    errors: list[dict] = []
+
+    touched_genes: dict[str, list[str]] = {}
+
+    for v, scan in chosen:
+        rs = (v.get("rs_id") or "").lower()
+        try:
+            _write_source_page(rs, raw_pages[rs])
+            registry = _registry_entry(conn, rs)
+            if (not v.get("gene")) and registry:
+                v["gene"] = registry.get("gene") or v.get("gene")
+            res = await _compile_variant_page(
+                variant=v, scan=scan,
+                source_rel=f"sources/snpedia/{rs}",
+                registry=registry,
+            )
+            written.append(res["path"])
+            gene = v.get("gene") or "UNK"
+            touched_genes.setdefault(gene, []).append(res["path"])
+        except HTTPException as e:
+            errors.append({"rs_id": rs, "error": getattr(e, "detail", str(e))})
+            _append_log(f"variant pass failed for {rs}: {e.detail}")
+        except Exception as e:
+            errors.append({"rs_id": rs, "error": str(e)})
+            _append_log(f"variant pass failed for {rs}: {e}")
+
+    for v, _ in ranked[len(chosen):]:
+        skipped.append((v.get("rs_id") or "").lower())
+
+    touched_systems: dict[str, list[str]] = {}
+    for gene, variant_rels in touched_genes.items():
+        try:
+            res = await _compile_gene_page(gene=gene, variant_rels=variant_rels)
+            written.append(res["path"])
+            sys_key = _GENE_TO_SYSTEM.get(gene)
+            if sys_key:
+                touched_systems.setdefault(sys_key, []).append(res["path"])
+        except HTTPException as e:
+            errors.append({"gene": gene, "error": e.detail})
+        except Exception as e:
+            errors.append({"gene": gene, "error": str(e)})
+
+    for system, gene_rels in touched_systems.items():
+        if len(gene_rels) < 2:
+            continue
+        try:
+            res = await _compile_system_page(system=system, gene_rels=gene_rels)
+            written.append(res["path"])
+        except HTTPException as e:
+            errors.append({"system": system, "error": e.detail})
+        except Exception as e:
+            errors.append({"system": system, "error": str(e)})
+
+    _rebuild_wiki_index(conn)
+    _render_index_md(conn)
+    _rebuild_wiki_index(conn)
+    _append_log(
+        f"INGEST snpedia upload={body.snpedia_upload_id} considered={len(ranked)} "
+        f"written={len(written)} skipped_for_cap={len(skipped)} errors={len(errors)}"
+    )
+    conn.close()
+    return {
+        "considered": len(ranked),
+        "written": len(written),
+        "skipped_for_cap": len(skipped),
+        "skipped_rs_ids": skipped,
+        "errors": errors,
+        "written_paths": written,
+    }
+
+
+# ---- POST /api/genome-wiki/query ----
+
+
+class GenomeWikiQueryIn(BaseModel):
+    question: str
+
+
+def _search_wiki_pages(conn: sqlite3.Connection, question: str, limit: int = 12) -> list[dict]:
+    q = (question or "").lower()
+    rs_ids = {m.group(0).lower() for m in _RS_RE.finditer(q)}
+    rows = [dict(r) for r in conn.execute(
+        "SELECT path, type, title, summary, rs_id, gene FROM genome_wiki_index "
+        "WHERE type NOT IN ('index','log','source')"
+    ).fetchall()]
+    scored: list[tuple[int, dict]] = []
+    terms = [t for t in _re.split(r"[^a-z0-9]+", q) if len(t) >= 3]
+    for r in rows:
+        score = 0
+        if r["rs_id"] and r["rs_id"].lower() in rs_ids:
+            score += 100
+        hay = " ".join(filter(None, [r.get("title"), r.get("summary"), r.get("gene"), r.get("rs_id")])).lower()
+        for t in terms:
+            if t in hay:
+                score += 5
+        if score > 0:
+            scored.append((score, r))
+    scored.sort(key=lambda t: -t[0])
+    return [r for _, r in scored[:limit]]
+
+
+@app.post("/api/genome-wiki/query")
+async def query_genome_wiki(body: GenomeWikiQueryIn):
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    conn = get_db()
+    hits = _search_wiki_pages(conn, question, limit=12)
+    if not hits:
+        conn.close()
+        raise HTTPException(
+            status_code=404,
+            detail="no relevant wiki pages — ingest a SNPedia bundle first",
+        )
+    context_blocks = []
+    for h in hits:
+        try:
+            page = _read_wiki_page(h["path"])
+        except HTTPException:
+            continue
+        link = h["path"].removeprefix("wiki/").removesuffix(".md")
+        snippet = (page["body"] or "")[:1200]
+        context_blocks.append(f"### [[{link}]]\n{snippet}")
+    user_text = (
+        f"User question: {question}\n\n"
+        "Wiki context (cite each claim via [[wiki/...]] or [[sources/...]] "
+        "wikilinks resolving to one of the page paths below):\n\n"
+        + "\n\n".join(context_blocks)
+    )
+    system = (
+        "You are answering from a personal-genome wiki. Output via the "
+        "answer_genome_question tool. Sections in body_md: ## What it is, "
+        "## Your data, ## What it means, ## What we don't know. ACMG "
+        "terminology only. Every clinical claim ends with a [[wiki/...]] "
+        "or [[sources/...]] link to a page you were given above."
+    )
+    payload = await _call_ai_text_tool(
+        system=system, user_text=user_text, tool=_GENOME_QA_TOOL,
+        timeout_sec=GENOME_WIKI_AI_TIMEOUT_SEC,
+    )
+    slug = _slugify(payload.get("title") or question) + "-" + datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    rel = f"wiki/synthesis/qa/{slug}.md"
+    fm = {
+        "type": "qa",
+        "title": payload.get("title") or question[:80],
+        "summary": payload.get("summary") or "",
+        "question": question,
+        "asked_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "sources_consulted": [h["path"] for h in hits],
+        "related": payload.get("related") or [],
+    }
+    body_md = (payload.get("body_md") or "").strip()
+    res = _write_wiki_page(rel, fm, body_md)
+    _rebuild_wiki_index(conn)
+    _render_index_md(conn)
+    _append_log(f"QA {rel}")
+    conn.close()
+    page = _read_wiki_page(res["path"])
+    return {"path": res["path"], "frontmatter": page["frontmatter"], "body": page["body"]}
+
+
+# ---- POST /api/genome-wiki/report ----
+
+
+class GenomeWikiReportIn(BaseModel):
+    topic: Literal["pharmacogenomics", "longevity", "performance", "nutrition", "methylation"]
+
+
+_REPORT_TOPIC_TO_TYPES = {
+    "pharmacogenomics": ["drug", "gene"],
+    "longevity": ["gene", "system", "risk"],
+    "performance": ["gene", "system", "trait"],
+    "nutrition": ["gene", "system", "trait"],
+    "methylation": ["system", "gene"],
+}
+
+
+@app.post("/api/genome-wiki/report")
+async def generate_genome_wiki_report(body: GenomeWikiReportIn):
+    conn = get_db()
+    types = _REPORT_TOPIC_TO_TYPES[body.topic]
+    pages = _wiki_pages_by_type(conn, types)
+    if not pages:
+        conn.close()
+        raise HTTPException(
+            status_code=404,
+            detail=f"no wiki pages of types {types} — ingest a SNPedia bundle first",
+        )
+    blocks = []
+    for p in pages[:24]:
+        try:
+            page = _read_wiki_page(p["path"])
+        except HTTPException:
+            continue
+        link = p["path"].removeprefix("wiki/").removesuffix(".md")
+        blocks.append(f"### [[{link}]] ({p['type']})\n{page['body'][:1200]}")
+    user_text = (
+        f"Topic: {body.topic}\n\n"
+        "Generate a topical report from the following wiki pages. Cite each "
+        "claim via a wikilink. Sections: executive bullets, table by evidence "
+        "strength, system synthesis, open questions, uncertainty appendix.\n\n"
+        + "\n\n".join(blocks)
+    )
+    system = (
+        "Compile a personal-genome topical report. Output via "
+        "record_genome_report. ACMG terminology only."
+    )
+    payload = await _call_ai_text_tool(
+        system=system, user_text=user_text, tool=_GENOME_REPORT_TOOL,
+        timeout_sec=GENOME_WIKI_AI_TIMEOUT_SEC,
+    )
+    today = date.today().isoformat()
+    rel = f"wiki/synthesis/reports/{body.topic}_{today}.md"
+    fm = {
+        "type": "report",
+        "title": payload.get("title") or f"{body.topic} report",
+        "summary": payload.get("summary") or "",
+        "topic": body.topic,
+        "generated_at": datetime.utcnow().isoformat(timespec="seconds"),
+        "pages_consulted": [p["path"] for p in pages[:24]],
+    }
+    body_md = (payload.get("body_md") or "").strip()
+    _write_wiki_page(rel, fm, body_md)
+    _rebuild_wiki_index(conn)
+    _render_index_md(conn)
+    _append_log(f"REPORT {rel}")
+    conn.close()
+    page = _read_wiki_page(rel)
+    return {"path": rel, "frontmatter": page["frontmatter"], "body": page["body"]}
+
+
+# ---- POST /api/genome-wiki/lint ----
+
+
+def _lint_orphans_and_missing(conn: sqlite3.Connection) -> tuple[list[str], list[tuple[str, str]]]:
+    inbound: dict[str, set[str]] = {}
+    missing: list[tuple[str, str]] = []
+    paths = {r["path"] for r in conn.execute("SELECT path FROM genome_wiki_index").fetchall()}
+    for r in conn.execute("SELECT path FROM genome_wiki_index").fetchall():
+        try:
+            page = _read_wiki_page(r["path"])
+        except HTTPException:
+            continue
+        for tgt in _wiki_link_targets(page["body"]):
+            if not _link_resolves(tgt):
+                missing.append((r["path"], tgt))
+                continue
+            for cand in (tgt, f"{tgt}.md", f"wiki/{tgt}", f"wiki/{tgt}.md"):
+                if cand in paths:
+                    inbound.setdefault(cand, set()).add(r["path"])
+                    break
+    orphans = [p for p in paths if p not in inbound and not p.endswith(("/index.md", "/log.md"))]
+    return sorted(orphans), missing
+
+
+def _render_lint_pages(conn: sqlite3.Connection) -> None:
+    orphans, missing = _lint_orphans_and_missing(conn)
+    contradictions = conn.execute(
+        "SELECT page_path, claim, sources_json, detected_at FROM genome_wiki_contradictions "
+        "WHERE resolved_at IS NULL ORDER BY detected_at DESC"
+    ).fetchall()
+
+    o_lines = ["# Orphans & missing concepts", "", "## Orphan pages (no inbound wikilinks)", ""]
+    for o in orphans:
+        link = o.removeprefix("wiki/").removesuffix(".md")
+        o_lines.append(f"- [[{link}]]")
+    o_lines.extend(["", "## Missing concept pages (wikilinks pointing nowhere)", ""])
+    for src, tgt in missing:
+        src_link = src.removeprefix("wiki/").removesuffix(".md")
+        o_lines.append(f"- [[{src_link}]] → `{tgt}`")
+    fm = {"type": "lint", "title": "Orphans & missing concepts",
+          "last_reviewed": date.today().isoformat()}
+    _genome_wiki_path("wiki/lint/orphans.md").write_text(
+        _serialize_page(fm, "\n".join(o_lines).rstrip() + "\n"), encoding="utf-8"
+    )
+
+    c_lines = ["# Contradictions", ""]
+    if not contradictions:
+        c_lines.append("_No open contradictions._")
+    for c in contradictions:
+        link = c["page_path"].removeprefix("wiki/").removesuffix(".md")
+        c_lines.append(f"- [[{link}]] — {c['claim']} _(detected {c['detected_at']})_")
+    fm2 = {"type": "lint", "title": "Contradictions",
+           "last_reviewed": date.today().isoformat()}
+    _genome_wiki_path("wiki/lint/contradictions.md").write_text(
+        _serialize_page(fm2, "\n".join(c_lines).rstrip() + "\n"), encoding="utf-8"
+    )
+
+
+@app.post("/api/genome-wiki/lint")
+def lint_genome_wiki():
+    conn = get_db()
+    _rebuild_wiki_index(conn)
+    orphans, missing = _lint_orphans_and_missing(conn)
+    stale = [
+        dict(r) for r in conn.execute(
+            "SELECT path, last_reviewed FROM genome_wiki_index "
+            "WHERE last_reviewed IS NOT NULL AND last_reviewed < ?",
+            ((date.today() - timedelta(days=90)).isoformat(),),
+        ).fetchall()
+    ]
+    _render_lint_pages(conn)
+    _rebuild_wiki_index(conn)
+    _append_log(
+        f"LINT orphans={len(orphans)} missing={len(missing)} stale={len(stale)}"
+    )
+    conn.close()
+    return {
+        "orphans": orphans,
+        "missing": [{"page": s, "target": t} for s, t in missing],
+        "stale": stale,
+    }
 
 
 # --- Body composition estimates (CRUD) ---
