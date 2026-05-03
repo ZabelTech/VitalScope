@@ -630,13 +630,21 @@ async def _compile_systems_pass(
         return {"written": [], "errors": [], "skipped_below_threshold": {}, "raw_counts": raw_counts}
 
     sem = asyncio.Semaphore(concurrency)
+    # Same circuit breaker as `_ingest_batch` — without it, the systems
+    # pass would burn through every queued task firing credit_exhausted /
+    # auth_failed errors at a dead provider before exiting (observed: 22
+    # systems × 1 attempt against an empty-credit account = 22 doomed
+    # calls instead of 3).
+    breaker = _CreditCircuitBreaker(threshold=3)
 
     async def system(s: str, rels: list[str]) -> tuple[str, object]:
         async with sem:
+            if breaker.tripped.is_set():
+                return s, _Aborted("circuit breaker tripped")
             try:
                 async def _do() -> dict:
                     return await app._compile_system_page(system=s, gene_rels=rels)
-                return s, await _retry(_do, label=s, max_attempts=max_attempts)
+                return s, await _retry(_do, label=s, max_attempts=max_attempts, breaker=breaker)
             except Exception as e:
                 return s, e
 
