@@ -1,11 +1,19 @@
 #!/usr/bin/env python3
-"""Ingest the top-N magnitude rsids from your genome upload into the wiki.
+"""Ingest the top-N matched rsids from your genome upload into the wiki.
 
-Cross-references your VCF against SNPedia genotype pages, ranks matches by
-SNPedia magnitude descending, then runs the same compile pipeline as
-POST /api/genome-wiki/ingest — but with bounded concurrency to stay under
-Anthropic's 8K-output-tokens-per-minute rate limit, and skipping rsids
-whose wiki page is already on disk.
+Cross-references your VCF against SNPedia genotype pages, then orders the
+matches in two phases:
+  1. Pages whose SNPedia genotype has an explicit `magnitude=...` field —
+     ranked by magnitude descending.
+  2. Pages with no `magnitude` field on the genotype — appended after the
+     magnitude-ranked block, ordered lexicographically by rsid.
+
+`--top-n` / `--start` slice the unified list, so the magnitude block is
+consumed first and the no-magnitude block is reached only once that runs
+out. Then runs the same compile pipeline as POST /api/genome-wiki/ingest
+— but with bounded concurrency to stay under Anthropic's
+8K-output-tokens-per-minute rate limit, and skipping rsids whose wiki page
+is already on disk.
 
 Usage:
   python3 ingest_top_genome_rsids.py --top-n 30
@@ -53,6 +61,13 @@ _GENO_SUMMARY_RE = re.compile(r"\|\s*summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
 
 
 def _build_genotype_lookup(conn: sqlite3.Connection) -> dict:
+    """Index SNPedia genotype pages by (rsid, allele1, allele2).
+
+    `magnitude` is None when the genotype page exists but has no
+    `|magnitude=` field — those still represent valid user-genotype
+    matches and are ingested in the second pass (after magnitude-ranked
+    entries). A bad/non-numeric magnitude is also treated as missing.
+    """
     print("[rank] indexing SNPedia genotype pages…", flush=True)
     lookup: dict[tuple[str, str, str], dict] = {}
     for row in conn.execute(
@@ -66,12 +81,12 @@ def _build_genotype_lookup(conn: sqlite3.Connection) -> dict:
         a, b = m.group(2).upper(), m.group(3).upper()
         text = json.loads(row["raw_json"])["revisions"][0]["*"]
         mm = _GENO_MAG_RE.search(text)
-        if not mm:
-            continue
-        try:
-            mag = float(mm.group(1))
-        except ValueError:
-            continue
+        mag: Optional[float] = None
+        if mm:
+            try:
+                mag = float(mm.group(1))
+            except ValueError:
+                mag = None
         rep = _GENO_REPUTE_RE.search(text)
         smy = _GENO_SUMMARY_RE.search(text)
         lookup[(rs, a, b)] = {
@@ -153,7 +168,14 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
             "repute": rec["repute"],
             "summary": rec["summary"],
         })
-    ranked.sort(key=lambda r: r["magnitude"], reverse=True)
+    # Two-phase ordering: magnitude entries first (descending), then the
+    # no-magnitude entries (lexicographic by rsid). `magnitude is None`
+    # sorts True > False, so the None block lands after every numeric one.
+    ranked.sort(key=lambda r: (
+        r["magnitude"] is None,
+        -(r["magnitude"] or 0.0),
+        r["rsid"],
+    ))
     return ranked
 
 
@@ -163,9 +185,10 @@ def _write_rank_cache(ranked: list[dict], path: Path) -> None:
         fh.write("rsid\tuser_genotype\tvcf_gt\tmagnitude\trepute\tsummary\n")
         for r in ranked:
             s = r["summary"].replace("\t", " ").replace("\n", " ")[:200]
+            mag = "" if r["magnitude"] is None else r["magnitude"]
             fh.write(
                 f"{r['rsid']}\t{r['user_genotype']}\t{r['vcf_gt']}\t"
-                f"{r['magnitude']}\t{r['repute']}\t{s}\n"
+                f"{mag}\t{r['repute']}\t{s}\n"
             )
 
 
@@ -177,11 +200,16 @@ def _read_rank_cache(path: Path) -> list[dict]:
             parts = line.rstrip("\n").split("\t")
             if len(parts) < 5:
                 continue
+            mag_raw = parts[3].strip()
+            try:
+                magnitude: Optional[float] = float(mag_raw) if mag_raw else None
+            except ValueError:
+                magnitude = None
             rows.append({
                 "rsid": parts[0],
                 "user_genotype": parts[1],
                 "vcf_gt": parts[2],
-                "magnitude": float(parts[3]),
+                "magnitude": magnitude,
                 "repute": parts[4],
                 "summary": parts[5] if len(parts) > 5 else "",
             })
@@ -327,7 +355,7 @@ async def _ingest_batch(
                 app._write_source_page(rs, raw_pages[rs])
                 v = {"rs_id": rs, "gene": r["gene"], "genotype": r["vcf_gt"]}
                 scan = app._scan_snpedia_page(raw_pages[rs])
-                if scan["magnitude"] == 0:
+                if scan["magnitude"] == 0 and r["magnitude"] is not None:
                     scan["magnitude"] = r["magnitude"]
                 registry = app._registry_entry(conn, rs)
                 async def _do() -> dict:
@@ -442,7 +470,9 @@ def main(argv=None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--top-n", type=int, default=30,
-                        help="how many top-magnitude rsids to ingest (default 30)")
+                        help="how many ranked rsids to ingest from the unified "
+                             "list (magnitude-ranked first, no-magnitude "
+                             "lexicographic after; default 30)")
     parser.add_argument("--start", type=int, default=0,
                         help="skip the first K ranked rsids (default 0)")
     parser.add_argument("--vcf", type=Path, default=None,
@@ -481,10 +511,15 @@ def main(argv=None) -> int:
         print("no rsids in selected range")
         return 0
 
+    n_with_mag = sum(1 for r in candidates if r["magnitude"] is not None)
+    n_no_mag = len(candidates) - n_with_mag
     skip = set() if args.force else _existing_variant_rsids()
     fresh = [r for r in candidates if r["rsid"] not in skip]
-    print(f"\n[batch] selected {len(candidates)} (start={args.start}); "
-          f"{len(candidates) - len(fresh)} already on disk, {len(fresh)} to compile")
+    print(
+        f"\n[batch] selected {len(candidates)} (start={args.start}); "
+        f"{n_with_mag} with magnitude / {n_no_mag} without; "
+        f"{len(candidates) - len(fresh)} already on disk, {len(fresh)} to compile"
+    )
     if not fresh:
         print("nothing to do")
         return 0
@@ -535,7 +570,8 @@ def main(argv=None) -> int:
 
     print("\ngene assignments:")
     for r in fresh:
-        print(f"  {r['rsid']:<12} mag={r['magnitude']:>4} {r['user_genotype']:<6} → {r['gene']}")
+        mag_str = "—" if r["magnitude"] is None else f"{r['magnitude']:>4}"
+        print(f"  {r['rsid']:<12} mag={mag_str} {r['user_genotype']:<6} → {r['gene']}")
 
     t_start = time.time()
     v_failures, g_failures = asyncio.run(_ingest_batch(
