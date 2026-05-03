@@ -36,6 +36,18 @@ Environment:
   VITALSCOPE_DB            SQLite DB path
   VITALSCOPE_GENOME_WIKI   wiki root
   VITALSCOPE_UPLOADS       uploads dir
+
+Empirical concurrency ceilings (from running this on a real WGS):
+  Anthropic Sonnet, direct          variants=3   genes=2     (8K-tokens/min cap)
+  OpenRouter Sonnet                 variants=15  genes=8     (~2× direct)
+  OpenRouter DeepSeek V4 Flash      variants=20  genes=10    (per-account cap ≈ 25)
+  OpenRouter DeepSeek V4 Pro        variant=15   genes=8     (Parasail upstream is flaky;
+                                                              raise GENOME_WIKI_AI_TIMEOUT_SEC
+                                                              to ~240s — model is slow)
+
+  Pushing past the ceiling produces a storm of `rate_limit` retries; the
+  retry path absorbs them but throughput drops because every slot holds
+  its semaphore through a 60-90s backoff. Stay just below.
 """
 
 import argparse
@@ -60,6 +72,31 @@ _GENO_TITLE_RE = re.compile(r"^Rs(\d+)\(([ACGT]);([ACGT])\)$", re.IGNORECASE)
 _GENO_MAG_RE = re.compile(r"\|\s*magnitude\s*=\s*([\d.]+)", re.IGNORECASE)
 _GENO_REPUTE_RE = re.compile(r"\|\s*repute\s*=\s*(\w+)", re.IGNORECASE)
 _GENO_SUMMARY_RE = re.compile(r"\|\s*summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
+
+# A real HGNC-ish gene symbol: starts uppercase, then uppercase letters /
+# digits, optionally hyphenated parts. SNPedia's `|Gene=` field also gets
+# populated with category tags like "renal", "cardiovascular", "DNA-damage-
+# response" which slip past the loose extraction regex above; this filter
+# rejects them so the variant-page filename and the gene-synthesis pass
+# don't get poisoned by a non-gene that the AI then can't anchor to.
+_GENE_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]*(-[A-Z0-9]+)*$")
+_PHANTOM_GENE_BLACKLIST = frozenset({
+    "CNS", "PNS", "DNA",   # category tags that pass _GENE_SYMBOL_RE but aren't gene symbols
+})
+
+
+def _normalise_gene(raw: Optional[str]) -> str:
+    """Return raw if it looks like a real gene symbol, else 'UNK'."""
+    if not raw:
+        return "UNK"
+    g = raw.strip()
+    if not g or len(g) < 2 or len(g) > 20:
+        return "UNK"
+    if g in _PHANTOM_GENE_BLACKLIST:
+        return "UNK"
+    if not _GENE_SYMBOL_RE.match(g):
+        return "UNK"
+    return g
 
 
 def _build_genotype_lookup(conn: sqlite3.Connection) -> dict:
@@ -656,7 +693,17 @@ def main(argv=None) -> int:
                         help="with --systems-only, also recompile systems "
                              "whose wiki/systems/<x>.md already exists "
                              "(default skips them)")
+    parser.add_argument("--model", default=None,
+                        help="override the AI model for this run (defaults to "
+                             "$VITALSCOPE_AI_MODEL or the provider default). "
+                             "e.g. claude-opus-4-7, claude-haiku-4-5-20251001, "
+                             "anthropic/claude-sonnet-4.6 for openrouter")
     args = parser.parse_args(argv)
+
+    if args.model:
+        app.AI_MODEL = args.model
+        app._ai_provider = None
+    print(f"[setup] AI provider={app.AI_PROVIDER} model={app.AI_MODEL}", flush=True)
 
     conn = sqlite3.connect(str(app.DB_PATH))
     conn.row_factory = sqlite3.Row
@@ -729,7 +776,7 @@ def main(argv=None) -> int:
         text = json.loads(row["raw_json"])["revisions"][0]["*"]
         raw_pages[rs] = text
         m = _GENE_FIELD_RE.search(text)
-        r["gene"] = m.group(1).strip() if m else "UNK"
+        r["gene"] = _normalise_gene(m.group(1) if m else None)
         (out_dir / f"{rs}.md").write_text(text, encoding="utf-8")
 
     fresh = [r for r in fresh if r["rsid"] in raw_pages]
