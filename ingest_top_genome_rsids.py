@@ -324,11 +324,24 @@ def _annotate_vcf_in_place(
     in_path: Path,
     out_path: Path,
     position_to_rsid: dict[tuple[str, int], str],
-) -> tuple[int, int, int]:
-    """Stream `in_path` to `out_path`, filling in missing rsids from the
-    position lookup. Returns (total_variants, already_had_id, newly_annotated).
+) -> tuple[int, int, int, int]:
+    """Stream `in_path` to `out_path`, fixing the ID column from the SNPedia
+    position lookup. Two corrections happen per row:
+
+    1. Missing rsid (`.` / empty / non-rs ID): if SNPedia has a rsid at this
+       position, fill it in. Counted as `annotated`.
+    2. Wrong/non-canonical rsid: dbSNP merges leave VCFs with newer rsids
+       (e.g. rs1591309094) that have been merged into older canonical ones
+       (rs1799732). The wiki ingest is keyed by rsid, so it can't bridge
+       these. If SNPedia has a different (canonical) rsid at this position,
+       replace the VCF's rsid with SNPedia's. Counted as `canonicalised`.
+
+    `had_id` counts rows whose existing rsid already matched SNPedia (or
+    SNPedia didn't know the position).
+
+    Returns (total_variants, had_id, annotated, canonicalised).
     """
-    total = had_id = annotated = 0
+    total = had_id = annotated = canonicalised = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with in_path.open("r", encoding="utf-8", errors="replace") as fin, \
          out_path.open("w", encoding="utf-8") as fout:
@@ -347,24 +360,31 @@ def _annotate_vcf_in_place(
                 continue
             total += 1
             current_id = parts[2]
-            if current_id and current_id != "." and current_id.lower().startswith("rs"):
-                had_id += 1
-                fout.write(line)
-                continue
             chrom = parts[0].removeprefix("chr").upper()
             try:
                 pos = int(parts[1])
             except ValueError:
                 fout.write(line)
                 continue
-            new_rsid = position_to_rsid.get((chrom, pos))
-            if new_rsid:
-                parts[2] = new_rsid
+            snpedia_rsid = position_to_rsid.get((chrom, pos))
+            if current_id and current_id != "." and current_id.lower().startswith("rs"):
+                # Existing rsid — canonicalise if SNPedia knows a different
+                # (older / merged-into) rsid at this position.
+                if snpedia_rsid and snpedia_rsid.lower() != current_id.lower():
+                    parts[2] = snpedia_rsid
+                    canonicalised += 1
+                    fout.write("\t".join(parts) + "\n")
+                else:
+                    had_id += 1
+                    fout.write(line)
+                continue
+            if snpedia_rsid:
+                parts[2] = snpedia_rsid
                 annotated += 1
                 fout.write("\t".join(parts) + "\n")
             else:
                 fout.write(line)
-    return total, had_id, annotated
+    return total, had_id, annotated, canonicalised
 
 
 def _stream_user_vcf(vcf_path: Path, known_rsids: set[str]) -> list[tuple[str, str, str, str]]:
@@ -1033,14 +1053,15 @@ def main(argv=None) -> int:
             print("[positions] empty position lookup; aborting", flush=True)
             conn.close()
             return 1
-        total, had, annotated = _annotate_vcf_in_place(in_vcf, out_vcf, lookup)
+        total, had, annotated, canonicalised = _annotate_vcf_in_place(in_vcf, out_vcf, lookup)
         conn.close()
         print(
             f"\n=== done in {time.time() - t0:.1f}s ===\n"
-            f"  variants:       {total:,}\n"
-            f"  already had id: {had:,}\n"
-            f"  newly annotated: {annotated:,}\n"
-            f"  output:         {out_vcf}",
+            f"  variants:        {total:,}\n"
+            f"  already canonical: {had:,}\n"
+            f"  newly annotated:   {annotated:,} (was '.' / non-rs ID, now rsid)\n"
+            f"  canonicalised:     {canonicalised:,} (existing rsid replaced with SNPedia's older / merged-into one)\n"
+            f"  output:          {out_vcf}",
             flush=True,
         )
         return 0
