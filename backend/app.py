@@ -8160,7 +8160,29 @@ _HEDGE_RE = _re.compile(
     r"(?:primarily|mostly|most|exclusively|largely|nearly all|all available) [^\n]{0,40}? (?:studied|conducted|investigated|performed|drawn|developed|published|reported|derived|based) (?:in|on|from|with(?: respect)?)|"
     r"(?:limited|sparse|insufficient|unavailable) data (?:on|for|in|regarding|about)|"
     r"(?:long[-\s]?term|lifetime|durable|chronic) [^\n]{0,80}? (?:unknown|unclear|under investigation|to be determined|remain to be|not (?:yet|fully) (?:known|understood|established))|"
-    r"(?:generali[sz]ability|applicability|extrapolation) (?:to|in|across) [^\n]{0,40}? (?:limited|uncertain|unclear|unknown|cautioned)"
+    r"(?:generali[sz]ability|applicability|extrapolation) (?:to|in|across) [^\n]{0,40}? (?:limited|uncertain|unclear|unknown|cautioned)|"
+    # Definitional / molecular-function descriptions (X encodes Y, X is an
+    # enzyme that, X-encoded protein participates in …) — describe the
+    # gene product's biology, not a claim about the user.
+    r"(?:encodes?|provides?|catalys[ei]s|catalyzes?|comprises?|functions? as|"
+    r"participates? in|is involved in|plays a role in|forms (?:a|the) [^\n]{0,40}?(?:complex|protein|enzyme))|"
+    r"(?:gene|protein|enzyme|receptor|kinase|transporter|channel) (?:encodes|encoded|provides|catalys[ei]s|comprises|forms)|"
+    r"-encoded [^\n]{0,40}? (?:protein|enzyme|product|factor)|"
+    # Disease-causation general-fact statements (mutations cause / biallelic
+    # X cause Y) — describe the disease association in the literature, not
+    # the user's specific risk.
+    r"(?:mutations?|variants?) [^\n]{0,40}? caus[ei]\b|"
+    r"(?:biallelic|monoallelic|homozygous|compound heterozygous) [^\n]{0,80}? (?:caus[ei]|result in|lead to)|"
+    # Literature-meta: counts of reported variants in the published record.
+    r"more than \d+ [^\n]{0,80}? (?:reported|described|published|identified|known|catalogued|cataloged)|"
+    # Negation extensions observed in real output.
+    r"does not (?:alter|modify|increase|decrease|raise|lower|change)|"
+    r"neither [^\n]{0,80}? (?:has|have) been (?:linked|associated|reported|established)|"
+    # Classification descriptions (X is classified as Y) — describe the
+    # ACMG classification itself, not a fresh claim about the user.
+    r"classified as (?:a |an )?(?:risk[-\s]factor|drug[-\s]response|VUS|variant of uncertain significance|likely benign|likely pathogenic|pathogenic|benign)|"
+    # Conflicting / inconclusive evidence callouts.
+    r"(?:conflicting|inconclusive|equivocal) (?:ACMG|classifications?|evidence|results)"
     r")\b",
     _re.IGNORECASE,
 )
@@ -8315,17 +8337,22 @@ def _validate_wiki_page(rel: str, frontmatter: dict, body: str) -> tuple[dict, s
                 or _re.match(r"\s*\d+\.\s", ln)
             )
             is_block = len(lines) >= 2 and structural >= len(lines) / 2
-            if is_block and i + 1 < len(paras) and _has_citation(paras[i + 1]):
+            # For structural blocks and colon-ending intros, look up to TWO
+            # paragraphs forward for a citation. The AI sometimes inserts a
+            # disclaimer/note paragraph between the block and its citing
+            # prose, which previously broke the i+1-only rule.
+            def _cited_in_next_two() -> bool:
+                return any(
+                    j < len(paras) and _has_citation(paras[j])
+                    for j in (i + 1, i + 2)
+                )
+            if is_block and _cited_in_next_two():
                 continue
             # Prose intro sentence ending with a colon ("The classifications
             # are most relevant in two contexts:") is introducing the next
-            # paragraph; if the next paragraph carries a citation, the
-            # whole intro+block is cited as a unit.
-            if (
-                para.rstrip().endswith(":")
-                and i + 1 < len(paras)
-                and _has_citation(paras[i + 1])
-            ):
+            # paragraph; if the next paragraph (or one after) carries a
+            # citation, the whole intro+block is cited as a unit.
+            if para.rstrip().endswith(":") and _cited_in_next_two():
                 continue
             errors.append(f"medical claim without citation: {para[:80]!r}")
             break  # one error is enough; don't flood the log
