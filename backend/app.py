@@ -8259,10 +8259,15 @@ def _wiki_link_targets(body: str) -> list[str]:
 
 
 def _link_resolves(target: str) -> bool:
-    """A wikilink may omit the .md extension and may target raw/ or wiki/."""
+    """A wikilink may omit the .md extension and may target raw/ or wiki/.
+    Also accepts a bracketed URL — `[[https://pubmed…]]` is the AI getting
+    the citation right but using the wrong syntax (should be a markdown
+    link), so we count it as resolved instead of flagging it as missing."""
     target = target.strip()
     if not target:
         return False
+    if target.startswith(("http://", "https://")):
+        return True
     candidates = [target, f"{target}.md"]
     if not target.startswith(("raw/", "wiki/")):
         candidates.extend([f"wiki/{target}", f"wiki/{target}.md"])
@@ -8708,12 +8713,20 @@ def _render_index_md(conn: sqlite3.Connection) -> None:
             continue
         by_type.setdefault(r["type"], []).append(r)
     lines = ["# Genome wiki index", ""]
+    # Frontmatter summaries occasionally arrive truncated mid-wikilink
+    # (e.g. ending with `[[vari` because the AI's summary blew past a
+    # character cap). When emitted verbatim into index.md, the unclosed
+    # `[[` runs into the next line's complete wikilink and the lint
+    # regex (non-greedy across newlines) eats both. Strip embedded
+    # wikilinks from the summary so the index only carries plain prose.
+    _summary_link_re = _re.compile(r"\[\[[^\]\n]*(?:\]\])?")
     for ptype in sorted(by_type.keys()):
         lines.append(f"## {ptype}")
         lines.append("")
         for r in by_type[ptype]:
             link = f"[[{r['path'].removeprefix('wiki/').removesuffix('.md')}]]"
             summary = (r["summary"] or "").strip().replace("\n", " ")
+            summary = _summary_link_re.sub("", summary).strip()
             lines.append(f"- {link} — {summary}" if summary else f"- {link}")
         lines.append("")
     body = "\n".join(lines).rstrip() + "\n"
@@ -9417,7 +9430,7 @@ async def query_genome_wiki(body: GenomeWikiQueryIn):
         except HTTPException:
             continue
         link = h["path"].removeprefix("wiki/").removesuffix(".md")
-        snippet = (page["body"] or "")[:1200]
+        snippet = (page["body"] or "")[:4000]
         context_blocks.append(f"### [[{link}]]\n{snippet}")
     user_text = (
         f"User question: {question}\n\n"
@@ -9558,6 +9571,15 @@ def _render_lint_pages(conn: sqlite3.Connection) -> None:
         "WHERE resolved_at IS NULL ORDER BY detected_at DESC"
     ).fetchall()
 
+    # The unresolved target text often contains literal `[[...]]` (e.g. an
+    # AI-invented link the validator rejected). If we emit it verbatim, the
+    # _next_ run of the lint will re-parse those brackets as wikilinks
+    # _from this lint page_, creating phantom missing-link records that
+    # trace back to orphans.md. Encode the brackets so they survive
+    # rendering as plain text but don't match _WIKILINK_RE.
+    def _safe_tgt(t: str) -> str:
+        return t.replace("[", "&#91;").replace("]", "&#93;").replace("\n", " ")
+
     o_lines = ["# Orphans & missing concepts", "", "## Orphan pages (no inbound wikilinks)", ""]
     for o in orphans:
         link = o.removeprefix("wiki/").removesuffix(".md")
@@ -9565,7 +9587,7 @@ def _render_lint_pages(conn: sqlite3.Connection) -> None:
     o_lines.extend(["", "## Missing concept pages (wikilinks pointing nowhere)", ""])
     for src, tgt in missing:
         src_link = src.removeprefix("wiki/").removesuffix(".md")
-        o_lines.append(f"- [[{src_link}]] → `{tgt}`")
+        o_lines.append(f"- [[{src_link}]] → `{_safe_tgt(tgt)}`")
     fm = {"type": "lint", "title": "Orphans & missing concepts",
           "last_reviewed": date.today().isoformat()}
     _genome_wiki_path("wiki/lint/orphans.md").write_text(
