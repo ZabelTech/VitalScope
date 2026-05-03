@@ -89,6 +89,32 @@ test("Ask a genome question and see the answer filed back", async ({ page }) => 
   await expect(body.getByRole("heading", { name: "What we don't know" })).toBeVisible();
 });
 
+test("Recompile systems endpoint mines system_tags from compiled gene pages", async ({ page }) => {
+  await login(page);
+  // After login the auth cookie is set on this page's context, so
+  // page.request inherits it and the protected endpoint accepts the call.
+  const res = await page.request.post("/api/genome-wiki/recompile-systems");
+  expect(res.ok()).toBeTruthy();
+  const body = await res.json();
+  // Shape contract — these keys are what the implementation returns and
+  // what callers (curl, future UI panels) depend on.
+  expect(body).toHaveProperty("written");
+  expect(body).toHaveProperty("errors");
+  expect(body).toHaveProperty("skipped_below_threshold");
+  expect(body).toHaveProperty("raw_system_counts");
+  expect(Array.isArray(body.written)).toBeTruthy();
+  expect(Array.isArray(body.errors)).toBeTruthy();
+  // raw_system_counts is a map of raw-tag-value → count; on a fresh demo
+  // backend with no compiled gene pages it can be empty, so we only assert
+  // the type shape.
+  expect(typeof body.raw_system_counts).toBe("object");
+  // Any failures returned by the endpoint mean compile_system_page rejected
+  // a generated body — surface the first one so the failure is actionable.
+  if (body.errors.length > 0) {
+    throw new Error(`recompile-systems returned errors: ${JSON.stringify(body.errors[0])}`);
+  }
+});
+
 test("Genome wiki settings card shows raw + compiled counts and saves the cap", async ({ page }) => {
   await login(page);
   await page.getByLabel("Settings").click();

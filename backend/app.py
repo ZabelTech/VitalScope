@@ -4913,19 +4913,38 @@ def _demo_gene_page_payload(user_text: str) -> dict:
         f"## What we don't know\n\n"
         f"This demo payload does not synthesise across your real variant set."
     )
+    demo_systems = {
+        "MTHFR": "methylation", "MTRR": "methylation", "MTR": "methylation", "COMT": "methylation",
+        "APOE": "lipid_metabolism", "FADS1": "lipid_metabolism", "FADS2": "lipid_metabolism",
+        "CYP1A2": "detoxification", "CYP2D6": "detoxification",
+        "CYP2C19": "detoxification", "CYP2C9": "detoxification",
+        "VDR": "bone_and_immune", "ACTN3": "performance",
+    }
     return {
         "title": f"{gene} — demo",
         "summary": f"Demo gene page for {gene}.",
-        "system_tags": [_GENE_TO_SYSTEM.get(gene, "general")],
+        "system_tags": [f"system:{demo_systems.get(gene, 'general')}"],
         "body_md": body,
     }
 
 
 def _demo_system_page_payload(user_text: str) -> dict:
+    gene_links = _re.findall(r"\[\[genes/([A-Za-z0-9_.-]+)\]\]", user_text or "")
+    seen: list[str] = []
+    for g in gene_links:
+        if g not in seen:
+            seen.append(g)
+        if len(seen) >= 3:
+            break
+    if seen:
+        cite_line = "Demo synthesis cites the user's genes affecting this system: " + ", ".join(
+            f"[[genes/{g}]]" for g in seen
+        ) + "."
+    else:
+        cite_line = "Demo system page (no gene wikilinks were passed in)."
     body = (
         "## System overview\n\n"
-        "This is a demo system page. Real content would synthesise across "
-        "the genes in this system. [[genes/MTHFR]]\n\n"
+        f"{cite_line}\n\n"
         "## Open questions\n\n"
         "Demo placeholder."
     )
@@ -8802,21 +8821,82 @@ def _registry_entry(conn: sqlite3.Connection, rs: str) -> Optional[dict]:
     return out
 
 
-_GENE_TO_SYSTEM = {
-    "MTHFR": "methylation",
-    "MTRR": "methylation",
-    "MTR": "methylation",
-    "COMT": "methylation",
-    "APOE": "lipid_metabolism",
-    "FADS1": "lipid_metabolism",
-    "FADS2": "lipid_metabolism",
-    "CYP1A2": "detoxification",
-    "CYP2D6": "detoxification",
-    "CYP2C19": "detoxification",
-    "CYP2C9": "detoxification",
-    "VDR": "bone_and_immune",
-    "ACTN3": "performance",
+# Tag prefixes the AI uses interchangeably for biological systems on
+# wiki/genes/*.md frontmatter. Anything under one of these is treated as a
+# system tag and routed through _SYSTEM_SYNONYMS for canonicalisation.
+_SYSTEM_TAG_PREFIXES = ("system:", "body-system:", "body_system:")
+
+# Maps raw AI-emitted system labels to a canonical key. Seeded from the
+# first scan of wiki/genes/*.md system_tags. Add new entries here when a
+# /api/genome-wiki/recompile-systems response shows raw values that should
+# collapse into an existing system.
+_SYSTEM_SYNONYMS: dict[str, str] = {
+    "central-nervous-system": "CNS",
+    "nervous-system": "nervous",
+    "neurological": "nervous",
+    "peripheral-nervous": "PNS",
+    "autonomic-nervous-system": "autonomic",
+    "skeletal-muscle": "musculoskeletal",
+    "skeletal": "musculoskeletal",
+    "pulmonary": "respiratory",
+    "oncologic": "oncology",
+    "oncological": "oncology",
+    "haematological": "hematological",
+    "haematopoietic": "hematological",
+    "hematopoietic": "hematological",
+    "hematologic": "hematological",
+    "ophthalmologic": "ocular",
+    "ophthalmological": "ocular",
+    "urinary": "genitourinary",
+    "urinary-tract": "genitourinary",
+    "breast-epithelium": "breast",
+    "mammary": "breast",
+    "dermatological": "integumentary",
+    "GI": "gastrointestinal",
+    "hepatobiliary": "hepatic",
 }
+
+
+def _normalise_system_key(raw: str) -> str:
+    s = (raw or "").strip()
+    s = _re.sub(r"\s+", "-", s)
+    s = s.replace("_", "-")
+    return _SYSTEM_SYNONYMS.get(s, s)
+
+
+def _mine_systems_from_genes(conn: sqlite3.Connection) -> tuple[dict[str, list[str]], dict[str, int]]:
+    """Walk genome_wiki_index gene rows and group their wiki paths by the
+    canonical biological system, derived from each page's `system_tags`
+    frontmatter. Returns (canonical_system → [wiki/genes/X.md, …],
+    raw_value → count) so callers can both compile system pages and
+    surface the raw vocabulary for synonym-map curation.
+    """
+    rows = conn.execute(
+        "SELECT path, gene FROM genome_wiki_index WHERE type = 'gene' ORDER BY path"
+    ).fetchall()
+    grouped: dict[str, list[str]] = {}
+    raw_counts: dict[str, int] = {}
+    for r in rows:
+        try:
+            page = _read_wiki_page(r["path"])
+        except HTTPException:
+            continue
+        tags = page["frontmatter"].get("system_tags") or []
+        for tag in tags:
+            if not isinstance(tag, str):
+                continue
+            for prefix in _SYSTEM_TAG_PREFIXES:
+                if tag.startswith(prefix):
+                    raw = tag.removeprefix(prefix)
+                    raw_counts[raw] = raw_counts.get(raw, 0) + 1
+                    canonical = _normalise_system_key(raw)
+                    if not canonical:
+                        break
+                    bucket = grouped.setdefault(canonical, [])
+                    if r["path"] not in bucket:
+                        bucket.append(r["path"])
+                    break
+    return grouped, raw_counts
 
 
 async def _compile_variant_page(
@@ -9075,20 +9155,19 @@ async def ingest_genome_wiki(body: GenomeWikiIngestIn):
     for v, _ in ranked[len(chosen):]:
         skipped.append((v.get("rs_id") or "").lower())
 
-    touched_systems: dict[str, list[str]] = {}
     for gene, variant_rels in touched_genes.items():
         try:
             res = await _compile_gene_page(gene=gene, variant_rels=variant_rels)
             written.append(res["path"])
-            sys_key = _GENE_TO_SYSTEM.get(gene)
-            if sys_key:
-                touched_systems.setdefault(sys_key, []).append(res["path"])
         except HTTPException as e:
             errors.append({"gene": gene, "error": e.detail})
         except Exception as e:
             errors.append({"gene": gene, "error": str(e)})
 
-    for system, gene_rels in touched_systems.items():
+    _rebuild_wiki_index(conn)
+
+    grouped, raw_system_counts = _mine_systems_from_genes(conn)
+    for system, gene_rels in grouped.items():
         if len(gene_rels) < 2:
             continue
         try:
@@ -9114,6 +9193,43 @@ async def ingest_genome_wiki(body: GenomeWikiIngestIn):
         "skipped_rs_ids": skipped,
         "errors": errors,
         "written_paths": written,
+        "raw_system_counts": raw_system_counts,
+    }
+
+
+# ---- POST /api/genome-wiki/recompile-systems ----
+
+
+@app.post("/api/genome-wiki/recompile-systems")
+async def recompile_genome_wiki_systems():
+    conn = get_db()
+    grouped, raw_system_counts = _mine_systems_from_genes(conn)
+    written: list[str] = []
+    errors: list[dict] = []
+    skipped: dict[str, int] = {}
+    for system, gene_rels in grouped.items():
+        if len(gene_rels) < 2:
+            skipped[system] = len(gene_rels)
+            continue
+        try:
+            res = await _compile_system_page(system=system, gene_rels=gene_rels)
+            written.append(res["path"])
+        except HTTPException as e:
+            errors.append({"system": system, "error": e.detail})
+        except Exception as e:
+            errors.append({"system": system, "error": str(e)})
+    _rebuild_wiki_index(conn)
+    _render_index_md(conn)
+    _rebuild_wiki_index(conn)
+    _append_log(
+        f"RECOMPILE_SYSTEMS written={len(written)} skipped_below_threshold={len(skipped)} errors={len(errors)}"
+    )
+    conn.close()
+    return {
+        "written": written,
+        "errors": errors,
+        "skipped_below_threshold": skipped,
+        "raw_system_counts": raw_system_counts,
     }
 
 
