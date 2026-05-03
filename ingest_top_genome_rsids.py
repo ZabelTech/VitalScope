@@ -280,6 +280,18 @@ def _classify_retry_reason(exc: BaseException) -> Optional[str]:
     # so message text is the only reliable signal.
     if "credit balance" in text or "insufficient credits" in text:
         return "credit_exhausted"
+    # Auth failure — also wrapped as 502 by the adapter, but the inner
+    # 401/403 message text is reliably present. Deterministic: a bad key
+    # will never become a good one, so retries waste budget. Trip the
+    # breaker on the first hit.
+    if (
+        "invalid x-api-key" in text
+        or "authentication_error" in text
+        or "permission_error" in text
+        or "permission denied" in text
+        or "invalid api key" in text
+    ):
+        return "auth_failed"
     if "rate_limit" in text or "rate limit" in text or " 429" in text or text.startswith("429"):
         return "rate_limit"
     if status == 408 or "timed out" in text or "timeout" in text:
@@ -312,25 +324,40 @@ def _backoff_seconds(reason: str, attempt: int) -> float:
 
 
 class _CreditCircuitBreaker:
-    """Trip an asyncio.Event after N consecutive credit-exhausted errors,
-    so the run aborts instead of burning every queued task's full retry
-    budget once the wallet is proven empty. Any non-credit outcome —
-    success or any other failure — resets the streak.
+    """Trip an asyncio.Event when the run is doomed by a fatal,
+    non-call-specific failure: credit exhaustion (after N consecutive
+    hits, since the wallet might just have crossed zero) or auth failure
+    (immediately on the first hit, since a bad key is deterministic).
+    Once tripped, every queued task short-circuits with `_Aborted`
+    instead of burning its retry budget on doomed calls.
     """
 
     def __init__(self, threshold: int = 3) -> None:
         self.threshold = threshold
         self._streak = 0
         self.tripped = asyncio.Event()
+        self.trip_reason: Optional[str] = None
 
     def hit_credit(self) -> None:
         self._streak += 1
         if self._streak >= self.threshold and not self.tripped.is_set():
             self.tripped.set()
+            self.trip_reason = "credit_exhausted"
             print(
                 f"  ⛔ circuit breaker tripped — {self._streak} consecutive "
                 f"credit-exhausted errors. Aborting remaining work; top up "
                 f"credits and re-run, skip-existing will resume.",
+                flush=True,
+            )
+
+    def hit_auth(self) -> None:
+        if not self.tripped.is_set():
+            self.tripped.set()
+            self.trip_reason = "auth_failed"
+            print(
+                f"  ⛔ circuit breaker tripped — auth_failed (invalid API "
+                f"key or permission). Aborting; fix the key and re-run, "
+                f"skip-existing will resume.",
                 flush=True,
             )
 
@@ -374,6 +401,13 @@ async def _retry(
                 # never retry — wallet is the bottleneck, not the call
                 if attempt == 1:
                     print(f"  ✗ {label} credit_exhausted (no retry)", flush=True)
+                raise
+            if reason == "auth_failed":
+                if breaker is not None:
+                    breaker.hit_auth()
+                # never retry — a bad key won't become a good one
+                if attempt == 1:
+                    print(f"  ✗ {label} auth_failed (no retry)", flush=True)
                 raise
             if breaker is not None:
                 breaker.hit_other()
