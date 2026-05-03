@@ -21,6 +21,8 @@ Usage:
   python3 ingest_top_genome_rsids.py --top-n 10 --rebuild-rank
   python3 ingest_top_genome_rsids.py --top-n 10 --concurrency-variants 4
   python3 ingest_top_genome_rsids.py --top-n 10 --force      # ignore skip set
+  python3 ingest_top_genome_rsids.py --systems-only          # only compile systems from current gene wiki
+  python3 ingest_top_genome_rsids.py --systems-only --rebuild-systems  # ditto, overwriting existing
 
 VCF source: by default the latest entry in `genome_uploads` (its symlinked
 file under VITALSCOPE_UPLOADS). Override with --vcf.
@@ -435,33 +437,93 @@ async def _ingest_batch(
             g_ok += 1
     print(f"  genes: {g_elapsed:.1f}s — {g_ok}/{len(to_compile)} ok, {len(g_failures)} errors")
 
-    sys_to_gene_rels: dict[str, list[str]] = defaultdict(list)
-    for gp in (app.GENOME_WIKI_ROOT / "wiki" / "genes").glob("*.md"):
-        sys_key = app._GENE_TO_SYSTEM.get(gp.stem)
-        if sys_key:
-            sys_to_gene_rels[sys_key].append(f"wiki/genes/{gp.name}")
-    existing_systems = {p.stem for p in (app.GENOME_WIKI_ROOT / "wiki" / "systems").glob("*.md")}
-    sys_to_compile = {s: rels for s, rels in sys_to_gene_rels.items()
-                      if len(rels) >= 2 and s not in existing_systems}
-
-    if sys_to_compile:
-        print(f"[systems] {len(sys_to_compile)} systems, concurrency={concurrency_genes}…", flush=True)
-        t2 = time.time()
-        s_results = await asyncio.gather(*(system(s, r) for s, r in sys_to_compile.items()))
-        s_elapsed = time.time() - t2
-        s_ok = 0
-        for s, res in s_results:
-            if isinstance(res, Exception) or (isinstance(res, dict) and res.get("errors")):
-                msg = res.get("errors") if isinstance(res, dict) else str(res)
-                print(f"    ✗ {s}: {msg}")
-            else:
-                s_ok += 1
-                print(f"    ✓ {s} → {res['path']}")
-        print(f"  systems: {s_elapsed:.1f}s — {s_ok}/{len(sys_to_compile)} ok")
-    else:
-        print("[systems] no new systems with ≥2 genes; skipped")
+    await _compile_systems_pass(
+        conn=conn,
+        concurrency=concurrency_genes,
+        max_attempts=max_attempts,
+        skip_existing=True,
+    )
 
     return v_failures, g_failures
+
+
+async def _compile_systems_pass(
+    *,
+    conn: sqlite3.Connection,
+    concurrency: int,
+    max_attempts: int,
+    skip_existing: bool,
+) -> dict:
+    """Compile wiki/systems/<system>.md from system_tags mined off
+    wiki/genes/*.md. Mirrors POST /api/genome-wiki/recompile-systems but
+    inherits the script's bounded concurrency + retry policy.
+
+    Returns a summary dict for callers (currently only the CLI uses it).
+    """
+    grouped, raw_counts = app._mine_systems_from_genes(conn)
+    qualifying = {s: rels for s, rels in grouped.items() if len(rels) >= 2}
+    existing = {p.stem for p in (app.GENOME_WIKI_ROOT / "wiki" / "systems").glob("*.md")} if skip_existing else set()
+    to_compile = {s: rels for s, rels in qualifying.items() if s not in existing}
+
+    print(
+        f"[systems] {len(grouped)} mined / {len(qualifying)} ≥2-genes / "
+        f"{len(existing)} on disk / {len(to_compile)} to compile "
+        f"(concurrency={concurrency})",
+        flush=True,
+    )
+    if raw_counts:
+        unmapped = sorted(
+            (raw, n) for raw, n in raw_counts.items()
+            if app._normalise_system_key(raw) not in qualifying
+        )
+        if unmapped:
+            print(
+                f"  note: {len(unmapped)} raw tag values map to systems "
+                "with <2 genes (won't be compiled): "
+                + ", ".join(f"{raw}×{n}" for raw, n in unmapped[:8])
+                + ("…" if len(unmapped) > 8 else ""),
+                flush=True,
+            )
+
+    if not to_compile:
+        return {"written": [], "errors": [], "skipped_below_threshold": {}, "raw_counts": raw_counts}
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def system(s: str, rels: list[str]) -> tuple[str, object]:
+        async with sem:
+            try:
+                async def _do() -> dict:
+                    return await app._compile_system_page(system=s, gene_rels=rels)
+                return s, await _retry(_do, label=s, max_attempts=max_attempts)
+            except Exception as e:
+                return s, e
+
+    t0 = time.time()
+    results = await asyncio.gather(*(system(s, r) for s, r in to_compile.items()))
+    elapsed = time.time() - t0
+
+    ok = 0
+    written: list[str] = []
+    errors: list[dict] = []
+    for s, res in results:
+        if isinstance(res, Exception):
+            errors.append({"system": s, "error": str(res)[:200]})
+            print(f"    ✗ {s}: {str(res)[:160]}")
+        elif isinstance(res, dict) and res.get("errors"):
+            errors.append({"system": s, "error": res["errors"]})
+            print(f"    ✗ {s}: {res['errors']}")
+        else:
+            ok += 1
+            written.append(res["path"])
+            print(f"    ✓ {s} → {res['path']}")
+    print(f"  systems: {elapsed:.1f}s — {ok}/{len(to_compile)} ok")
+    return {
+        "written": written,
+        "errors": errors,
+        "skipped_below_threshold": {s: len(r) for s, r in grouped.items() if len(r) < 2},
+        "raw_counts": raw_counts,
+    }
 
 
 def main(argv=None) -> int:
@@ -490,10 +552,41 @@ def main(argv=None) -> int:
     parser.add_argument("--max-attempts", type=int, default=3,
                         help="total attempts per page including retries "
                              "(default 3; set 1 to disable retries)")
+    parser.add_argument("--systems-only", action="store_true",
+                        help="skip the variant/gene compile and only run the "
+                             "system pass over already-compiled wiki/genes/*.md "
+                             "(equivalent to POST /api/genome-wiki/recompile-systems "
+                             "but inherits this script's retry + concurrency)")
+    parser.add_argument("--rebuild-systems", action="store_true",
+                        help="with --systems-only, also recompile systems "
+                             "whose wiki/systems/<x>.md already exists "
+                             "(default skips them)")
     args = parser.parse_args(argv)
 
     conn = sqlite3.connect(str(app.DB_PATH))
     conn.row_factory = sqlite3.Row
+
+    if args.systems_only:
+        print("[mode] systems-only — skipping VCF, rank, variant, and gene passes", flush=True)
+        t0 = time.time()
+        summary = asyncio.run(_compile_systems_pass(
+            conn=conn,
+            concurrency=args.concurrency_genes,
+            max_attempts=args.max_attempts,
+            skip_existing=not args.rebuild_systems,
+        ))
+        try:
+            app._rebuild_wiki_index(conn)
+            app._render_index_md(conn)
+        except Exception as e:
+            print(f"  WARN: index rebuild failed: {e}")
+        app._append_log(
+            f"INGEST systems-only written={len(summary['written'])} "
+            f"errors={len(summary['errors'])} skipped_lt_threshold={len(summary['skipped_below_threshold'])}"
+        )
+        conn.close()
+        print(f"\n=== done in {time.time() - t0:.1f}s ===")
+        return 0 if not summary["errors"] else 1
 
     vcf_path = _resolve_vcf(conn, args.vcf)
     print(f"[setup] VCF: {vcf_path}", flush=True)
