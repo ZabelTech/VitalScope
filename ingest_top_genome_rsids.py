@@ -73,15 +73,17 @@ _GENO_MAG_RE = re.compile(r"\|\s*magnitude\s*=\s*([\d.]+)", re.IGNORECASE)
 _GENO_REPUTE_RE = re.compile(r"\|\s*repute\s*=\s*(\w+)", re.IGNORECASE)
 _GENO_SUMMARY_RE = re.compile(r"\|\s*summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
 
-# A real HGNC-ish gene symbol: starts uppercase, then uppercase letters /
-# digits, optionally hyphenated parts. SNPedia's `|Gene=` field also gets
-# populated with category tags like "renal", "cardiovascular", "DNA-damage-
-# response" which slip past the loose extraction regex above; this filter
-# rejects them so the variant-page filename and the gene-synthesis pass
-# don't get poisoned by a non-gene that the AI then can't anchor to.
-_GENE_SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]*(-[A-Z0-9]+)*$")
+# Real HGNC symbols start with an uppercase letter and use ASCII letters,
+# digits, and hyphens. They almost always either contain a digit (BRCA1,
+# IL6, C1orf127, LOC101928462) or are all-uppercase ≥4 chars (MTHFR, OXTR,
+# COMT, HLA-B). SNPedia's `|Gene=` field also carries category tags
+# ("renal", "cardiovascular", "Intergenic", "DNA-damage-response") and
+# acronyms ("CNS", "PNS", "DNA") that slip past the loose extraction —
+# the previous loose filter dragged those into variant filenames where
+# the gene-synthesis pass then couldn't anchor and burned retries.
+_GENE_SHAPE_RE = re.compile(r"^[A-Z][A-Za-z0-9]*(-[A-Za-z0-9]+)*$")
 _PHANTOM_GENE_BLACKLIST = frozenset({
-    "CNS", "PNS", "DNA",   # category tags that pass _GENE_SYMBOL_RE but aren't gene symbols
+    "CNS", "PNS", "DNA",  # acronyms shaped like genes but aren't HGNC symbols
 })
 
 
@@ -94,7 +96,14 @@ def _normalise_gene(raw: Optional[str]) -> str:
         return "UNK"
     if g in _PHANTOM_GENE_BLACKLIST:
         return "UNK"
-    if not _GENE_SYMBOL_RE.match(g):
+    if not _GENE_SHAPE_RE.match(g):
+        return "UNK"
+    has_digit = any(c.isdigit() for c in g)
+    no_hyphen = g.replace("-", "")
+    # Real 3-char gene symbols are common (TYR, LEP, FTO, ACE, ABO, INS, …),
+    # so accept all-uppercase ≥2 chars; the blacklist catches CNS/PNS/DNA.
+    all_upper = no_hyphen.isupper() and len(no_hyphen) >= 2
+    if not (has_digit or all_upper):
         return "UNK"
     return g
 
