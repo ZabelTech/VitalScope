@@ -56,6 +56,10 @@ test("Browse the compiled wiki from Orient and follow a wikilink", async ({ page
   // The disclaimer is auto-injected on every variant page write.
   await expect(reader.getByText(/Informational only/)).toBeVisible();
 
+  // Validator now accepts external URL citations alongside wikilinks; the
+  // demo payload includes a dbSNP URL to exercise that path end-to-end.
+  await expect(reader.getByText(/ncbi\.nlm\.nih\.gov\/snp\/rs1801133/)).toBeVisible();
+
   // Wikilinks render as clickable buttons; clicking one navigates.
   const sourceLink = reader.locator("button.genome-wiki-link", {
     hasText: "sources/snpedia/rs1801133",
