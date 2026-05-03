@@ -23,6 +23,8 @@ Usage:
   python3 ingest_top_genome_rsids.py --top-n 10 --force      # ignore skip set
   python3 ingest_top_genome_rsids.py --systems-only          # only compile systems from current gene wiki
   python3 ingest_top_genome_rsids.py --systems-only --rebuild-systems  # ditto, overwriting existing
+  python3 ingest_top_genome_rsids.py --ask "What does my MTHFR C677T mean for folate?"
+  python3 ingest_top_genome_rsids.py --report longevity      # one of: pharmacogenomics longevity performance nutrition methylation
 
 VCF source: by default the latest entry in `genome_uploads` (its symlinked
 file under VITALSCOPE_UPLOADS). Override with --vcf.
@@ -715,7 +717,23 @@ def main(argv=None) -> int:
                              "$VITALSCOPE_AI_MODEL or the provider default). "
                              "e.g. claude-opus-4-7, claude-haiku-4-5-20251001, "
                              "anthropic/claude-sonnet-4.6 for openrouter")
+    parser.add_argument("--ask", metavar="QUESTION", default=None,
+                        help="ask a question against the compiled wiki and print "
+                             "the answer (equivalent to POST /api/genome-wiki/query). "
+                             "Files the QA back to wiki/synthesis/qa/<slug>.md. "
+                             "Mutually exclusive with --report and --systems-only.")
+    parser.add_argument("--report", metavar="TOPIC", default=None,
+                        choices=["pharmacogenomics", "longevity", "performance",
+                                 "nutrition", "methylation"],
+                        help="generate a topical report from the wiki "
+                             "(equivalent to POST /api/genome-wiki/report). "
+                             "Writes to wiki/synthesis/reports/<topic>_<date>.md. "
+                             "Mutually exclusive with --ask and --systems-only.")
     args = parser.parse_args(argv)
+
+    selected_modes = sum(1 for x in (args.ask, args.report, args.systems_only) if x)
+    if selected_modes > 1:
+        parser.error("--ask / --report / --systems-only are mutually exclusive")
 
     if args.model:
         app.AI_MODEL = args.model
@@ -724,6 +742,47 @@ def main(argv=None) -> int:
 
     conn = sqlite3.connect(str(app.DB_PATH))
     conn.row_factory = sqlite3.Row
+
+    if args.ask:
+        question = args.ask.strip()
+        print(f"[mode] ask — {question[:120]}{'…' if len(question) > 120 else ''}", flush=True)
+        t0 = time.time()
+        try:
+            res = asyncio.run(app.query_genome_wiki(app.GenomeWikiQueryIn(question=question)))
+        except Exception as e:
+            print(f"  ✗ {e}", flush=True)
+            conn.close()
+            return 1
+        conn.close()
+        print(f"\n=== wrote {res['path']} in {time.time() - t0:.1f}s ===\n")
+        fm = res["frontmatter"] or {}
+        if fm.get("title"):
+            print(f"# {fm['title']}\n")
+        if fm.get("summary"):
+            print(f"{fm['summary']}\n")
+        print(res["body"] or "")
+        return 0
+
+    if args.report:
+        print(f"[mode] report — topic={args.report}", flush=True)
+        t0 = time.time()
+        try:
+            res = asyncio.run(app.generate_genome_wiki_report(
+                app.GenomeWikiReportIn(topic=args.report)
+            ))
+        except Exception as e:
+            print(f"  ✗ {e}", flush=True)
+            conn.close()
+            return 1
+        conn.close()
+        print(f"\n=== wrote {res['path']} in {time.time() - t0:.1f}s ===\n")
+        fm = res["frontmatter"] or {}
+        if fm.get("title"):
+            print(f"# {fm['title']}\n")
+        if fm.get("summary"):
+            print(f"{fm['summary']}\n")
+        print(res["body"] or "")
+        return 0
 
     if args.systems_only:
         print("[mode] systems-only — skipping VCF, rank, variant, and gene passes", flush=True)
