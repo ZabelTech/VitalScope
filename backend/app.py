@@ -9552,6 +9552,14 @@ def _lint_orphans_and_missing(conn: sqlite3.Connection) -> tuple[list[str], list
             page = _read_wiki_page(r["path"])
         except HTTPException:
             continue
+        # log.md is an append-only audit trail of compile attempts; its
+        # entries name historical paths ([[variants/rs10033464_]]),
+        # PubMed IDs ([[PMID 22713085]]), and disease names ([[Atopic
+        # Dermatitis]]) that were never meant to resolve as wiki pages.
+        # Walking it for missing-link analysis just produces noise that
+        # drowns out real broken navigation in the curated content.
+        if r["path"] == "wiki/log.md":
+            continue
         for tgt in _wiki_link_targets(page["body"]):
             if not _link_resolves(tgt):
                 missing.append((r["path"], tgt))
