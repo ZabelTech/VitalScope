@@ -434,11 +434,68 @@ def _stream_user_vcf(vcf_path: Path, known_rsids: set[str]) -> list[tuple[str, s
     return user_rows
 
 
+_RSNUM_SUMMARY_RE = re.compile(r"\|\s*Summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
+
+
+_RSNUM_GENE_RE = re.compile(r"\|\s*Gene\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECASE)
+_VARIANT_PAGE_BODY_MIN = 2000  # filter stub pages (Rsnum-only); 2000 is the
+# observed cliff between "infobox-only stubs" (≤1000 chars) and pages with
+# real synthesised content (≥2000 chars). Trades ~12k thin pages for ~1.5k
+# substantial ones. SLC6A4/MAOA/COMT cleared; DRD5's rs6283 (body=463) is
+# a genuine stub and stays filtered.
+
+
+def _build_variant_page_summary_lookup(conn: sqlite3.Connection) -> dict[str, str]:
+    """Map rsid → display summary from canonical Rs<N> variant pages.
+
+    Used as a fallback when SNPedia has a variant page for a rsid but no
+    per-genotype subpage that matches the user's allele combo (common for
+    SLC6A4, DRD5, MAOA, and ~half of HLA / immune variants — the
+    pharmacology lives on the parent page, not split per allele).
+
+    Eligibility rules — a rsid enters the lookup if:
+      a) the Rsnum infobox has a non-empty `|Summary=` field, OR
+      b) it has a `|Gene=` tag AND the wikitext body is at least
+         _VARIANT_PAGE_BODY_MIN chars (filters position-only stubs while
+         keeping real curated pages without an explicit Summary).
+    Pages that match (b) get a synthesized placeholder summary so the
+    rank cache stays human-readable.
+    """
+    print("[rank] indexing SNPedia variant pages for fallback summaries…", flush=True)
+    out: dict[str, str] = {}
+    for row in conn.execute(
+        "SELECT title, raw_json FROM snpedia_pages "
+        "WHERE title GLOB 'Rs[0-9]*' AND title NOT GLOB '*(*'"
+    ):
+        try:
+            text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        except Exception:
+            continue
+        block_m = _RSNUM_BLOCK_RE.search(text)
+        if not block_m:
+            continue
+        block = block_m.group(0)
+        rsid_m = _RSNUM_RSID_RE.search(block)
+        if not rsid_m:
+            continue
+        rsid = "rs" + rsid_m.group(1)
+        sum_m = _RSNUM_SUMMARY_RE.search(block)
+        if sum_m and sum_m.group(1).strip():
+            out[rsid] = sum_m.group(1).strip()
+            continue
+        gene_m = _RSNUM_GENE_RE.search(block)
+        if gene_m and len(text) >= _VARIANT_PAGE_BODY_MIN:
+            out[rsid] = f"(SNPedia variant page for {gene_m.group(1).strip()} — no summary)"
+    return out
+
+
 def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
     geno_lookup = _build_genotype_lookup(conn)
+    variant_page_summaries = _build_variant_page_summary_lookup(conn)
     known_rsids = {r["rsid"].lower() for r in conn.execute("SELECT rsid FROM snpedia_variants")}
     print(
         f"[rank] {len(geno_lookup):,} genotype-magnitude pairs; "
+        f"{len(variant_page_summaries):,} variant-page summaries; "
         f"{len(known_rsids):,} rsids in snpedia_variants",
         flush=True,
     )
@@ -446,10 +503,21 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
     user_rows = _stream_user_vcf(vcf_path, known_rsids)
     print(f"[rank] {len(user_rows):,} VCF rows match SNPedia", flush=True)
     ranked: list[dict] = []
+    fallback_count = 0
     for rsid, a1, a2, gt_raw in user_rows:
         rec = geno_lookup.get((rsid, a1, a2)) or geno_lookup.get((rsid, a2, a1))
-        if not rec:
-            continue
+        if rec is None:
+            # No genotype subpage matches the user's allele combo. Fall back
+            # to the variant page if SNPedia has one with a non-empty
+            # `|Summary=` field — these enter the no-magnitude tier of the
+            # rank. Variant-page entries with no summary are stubs (just
+            # position metadata, no medical info to synthesise) and are
+            # skipped to avoid burning AI calls on empty pages.
+            summary = variant_page_summaries.get(rsid, "")
+            if not summary:
+                continue
+            rec = {"magnitude": None, "repute": "", "summary": summary}
+            fallback_count += 1
         ranked.append({
             "rsid": rsid,
             "user_genotype": f"({a1};{a2})",
@@ -458,6 +526,12 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
             "repute": rec["repute"],
             "summary": rec["summary"],
         })
+    print(
+        f"[rank] {len(ranked):,} ranked entries "
+        f"({len(ranked) - fallback_count:,} from genotype subpages, "
+        f"{fallback_count:,} from variant-page fallback)",
+        flush=True,
+    )
     # Two-phase ordering: magnitude entries first (descending), then the
     # no-magnitude entries (lexicographic by rsid). `magnitude is None`
     # sorts True > False, so the None block lands after every numeric one.
