@@ -274,6 +274,12 @@ def _classify_retry_reason(exc: BaseException) -> Optional[str]:
     except Exception:
         pass
     text = (detail + " " + str(exc)).lower()
+    # Credit / payment exhaustion — never retryable. Both Anthropic
+    # ("credit balance is too low") and OpenRouter ("insufficient credits"
+    # / 402) come through wrapped as a 502 from the provider adapter,
+    # so message text is the only reliable signal.
+    if "credit balance" in text or "insufficient credits" in text:
+        return "credit_exhausted"
     if "rate_limit" in text or "rate limit" in text or " 429" in text or text.startswith("429"):
         return "rate_limit"
     if status == 408 or "timed out" in text or "timeout" in text:
@@ -305,24 +311,72 @@ def _backoff_seconds(reason: str, attempt: int) -> float:
     return base + random.uniform(0, min(10.0, base * 0.2))
 
 
+class _CreditCircuitBreaker:
+    """Trip an asyncio.Event after N consecutive credit-exhausted errors,
+    so the run aborts instead of burning every queued task's full retry
+    budget once the wallet is proven empty. Any non-credit outcome —
+    success or any other failure — resets the streak.
+    """
+
+    def __init__(self, threshold: int = 3) -> None:
+        self.threshold = threshold
+        self._streak = 0
+        self.tripped = asyncio.Event()
+
+    def hit_credit(self) -> None:
+        self._streak += 1
+        if self._streak >= self.threshold and not self.tripped.is_set():
+            self.tripped.set()
+            print(
+                f"  ⛔ circuit breaker tripped — {self._streak} consecutive "
+                f"credit-exhausted errors. Aborting remaining work; top up "
+                f"credits and re-run, skip-existing will resume.",
+                flush=True,
+            )
+
+    def hit_other(self) -> None:
+        self._streak = 0
+
+
+class _Aborted(Exception):
+    """Raised inside a task when the circuit breaker has tripped."""
+
+
 async def _retry(
     fn: Callable[[], Awaitable[dict]],
     *,
     label: str,
     max_attempts: int,
+    breaker: Optional[_CreditCircuitBreaker] = None,
 ) -> dict:
     """Call fn() with auto-retry. Logs each retry and its reason in real
-    time. Reraises the final exception if all attempts fail."""
+    time. Reraises the final exception if all attempts fail. If a
+    `breaker` is passed, credit-exhausted errors are non-retryable and
+    trip the breaker; once tripped, every new task short-circuits with
+    `_Aborted`."""
     last_exc: Optional[BaseException] = None
     for attempt in range(1, max_attempts + 1):
+        if breaker is not None and breaker.tripped.is_set():
+            raise _Aborted(f"{label} aborted: credit circuit breaker tripped")
         try:
             result = await fn()
+            if breaker is not None:
+                breaker.hit_other()
             if attempt > 1:
                 print(f"  ✓ {label} ok on attempt {attempt}/{max_attempts}", flush=True)
             return result
         except BaseException as exc:
             last_exc = exc
             reason = _classify_retry_reason(exc)
+            if reason == "credit_exhausted":
+                if breaker is not None:
+                    breaker.hit_credit()
+                # never retry — wallet is the bottleneck, not the call
+                if attempt == 1:
+                    print(f"  ✗ {label} credit_exhausted (no retry)", flush=True)
+                raise
+            if breaker is not None:
+                breaker.hit_other()
             if reason is None or attempt == max_attempts:
                 if attempt > 1:
                     why = reason or "non-retryable"
@@ -349,9 +403,12 @@ async def _ingest_batch(
 ) -> tuple[list[dict], list[dict]]:
     sem_v = asyncio.Semaphore(concurrency_variants)
     sem_g = asyncio.Semaphore(concurrency_genes)
+    breaker = _CreditCircuitBreaker(threshold=3)
 
     async def variant(r: dict) -> tuple[str, object]:
         async with sem_v:
+            if breaker.tripped.is_set():
+                return r["rsid"], _Aborted("circuit breaker tripped")
             rs = r["rsid"]
             try:
                 app._write_source_page(rs, raw_pages[rs])
@@ -365,25 +422,29 @@ async def _ingest_batch(
                         variant=v, scan=scan,
                         source_rel=f"sources/snpedia/{rs}", registry=registry,
                     )
-                return rs, await _retry(_do, label=rs, max_attempts=max_attempts)
+                return rs, await _retry(_do, label=rs, max_attempts=max_attempts, breaker=breaker)
             except Exception as e:
                 return rs, e
 
     async def gene(g: str, rels: list[str]) -> tuple[str, object]:
         async with sem_g:
+            if breaker.tripped.is_set():
+                return g, _Aborted("circuit breaker tripped")
             try:
                 async def _do() -> dict:
                     return await app._compile_gene_page(gene=g, variant_rels=rels)
-                return g, await _retry(_do, label=g, max_attempts=max_attempts)
+                return g, await _retry(_do, label=g, max_attempts=max_attempts, breaker=breaker)
             except Exception as e:
                 return g, e
 
     async def system(s: str, rels: list[str]) -> tuple[str, object]:
         async with sem_g:
+            if breaker.tripped.is_set():
+                return s, _Aborted("circuit breaker tripped")
             try:
                 async def _do() -> dict:
                     return await app._compile_system_page(system=s, gene_rels=rels)
-                return s, await _retry(_do, label=s, max_attempts=max_attempts)
+                return s, await _retry(_do, label=s, max_attempts=max_attempts, breaker=breaker)
             except Exception as e:
                 return s, e
 
