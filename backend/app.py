@@ -4888,6 +4888,9 @@ def _demo_variant_page_payload(user_text: str) -> dict:
         f"## What it means\n\n"
         f"This variant is associated with an altered enzymatic activity in the "
         f"corresponding pathway. [[sources/snpedia/{rs}]]\n\n"
+        f"Functional characterisation has been described as a risk-factor in "
+        f"published case-control studies — see "
+        f"https://www.ncbi.nlm.nih.gov/snp/{rs} for the dbSNP record.\n\n"
         f"## What we don't know\n\n"
         f"Whether ancestry-stratified frequencies apply to your population is "
         f"not encoded in this demo payload."
@@ -8128,6 +8131,7 @@ import yaml as _yaml
 
 _RS_RE = _re.compile(r"rs\d+", _re.IGNORECASE)
 _WIKILINK_RE = _re.compile(r"\[\[([^\]]+?)\]\]")
+_URL_CITATION_RE = _re.compile(r"\bhttps?://[^\s)>\]]+", _re.IGNORECASE)
 _CLAIM_TERMS_RE = _re.compile(
     r"\b(associated with|increases? risk|decreases? risk|elevated risk|metaboli[sz]er|"
     r"pathogenic|likely pathogenic|likely benign|drug[-\s]response|risk[-\s]factor|"
@@ -8246,13 +8250,35 @@ def _validate_wiki_page(rel: str, frontmatter: dict, body: str) -> tuple[dict, s
         if not _link_resolves(tgt):
             errors.append(f"unresolved wikilink: [[{tgt}]]")
     # 2. Citation density on medical claims (skip the disclaimer line).
+    # A citation is either a [[wikilink]] (resolves on disk) or an external
+    # http(s) URL — both anchor the claim to a verifiable source. Structural
+    # blocks (tables, bullet lists, numbered lists) count as a unit — a
+    # citation in the block itself OR in the next paragraph satisfies the
+    # requirement.
+    def _has_citation(s: str) -> bool:
+        return bool(_WIKILINK_RE.search(s) or _URL_CITATION_RE.search(s))
     if page_type in ("variant", "gene", "drug", "risk", "system", "trait", "qa", "report"):
-        for para in [p.strip() for p in (body or "").split("\n\n") if p.strip()]:
+        paras = [p.strip() for p in (body or "").split("\n\n") if p.strip()]
+        for i, para in enumerate(paras):
             if para.startswith(">"):
                 continue
-            if _CLAIM_TERMS_RE.search(para) and not _WIKILINK_RE.search(para):
-                errors.append(f"medical claim without citation: {para[:80]!r}")
-                break  # one error is enough; don't flood the log
+            if para.lstrip().startswith("#"):
+                continue
+            if not _CLAIM_TERMS_RE.search(para):
+                continue
+            if _has_citation(para):
+                continue
+            lines = [ln for ln in para.splitlines() if ln.strip()]
+            structural = sum(
+                1 for ln in lines
+                if ln.lstrip().startswith(("|", "- ", "* ", "+ "))
+                or _re.match(r"\s*\d+\.\s", ln)
+            )
+            is_block = len(lines) >= 2 and structural >= len(lines) / 2
+            if is_block and i + 1 < len(paras) and _has_citation(paras[i + 1]):
+                continue
+            errors.append(f"medical claim without citation: {para[:80]!r}")
+            break  # one error is enough; don't flood the log
     # 3. Banned colloquial vocabulary.
     if _BANNED_COLLOQUIAL_RE.search(body or ""):
         errors.append("colloquial banned phrase detected (use ACMG terminology)")
@@ -8939,10 +8965,19 @@ async def _compile_variant_page(
         "Output via the record_variant_page tool. ACMG terminology only "
         "(Pathogenic, Likely Pathogenic, VUS, Likely Benign, Benign, "
         "drug-response, risk-factor). Never colloquial. Every paragraph "
-        "with a medical claim ends with a [[sources/snpedia/<rsid>]] link. "
-        "Body sections: ## What it is, ## Your data, ## What it means, "
-        "## What we don't know. Body must NOT include the disclaimer "
-        "footer — VitalScope appends that automatically."
+        "with a medical claim must end with a citation — either "
+        f"[[sources/snpedia/{rs}]] (preferred) or a direct URL (PubMed, "
+        "ClinVar, dbSNP, OMIM, GeneCards, ACMG guidelines, peer-reviewed "
+        "papers). Inline URLs like https://pubmed.ncbi.nlm.nih.gov/12345/ "
+        "are valid citations. Body sections: ## What it is, ## Your data, "
+        "## What it means, ## What we don't know. Body must NOT include "
+        "the disclaimer footer — VitalScope appends that automatically. "
+        f"The ONLY wikilink targets you may use are [[sources/snpedia/{rs}]] "
+        f"and [[variants/{rs}_{gene}]]. Do NOT invent wikilinks to genes, "
+        "systems, traits, or compounds — write those as plain text or as "
+        "external URL citations. Summary or fact tables are welcome; "
+        "ensure each table is followed by a prose sentence that ends with "
+        "a citation."
     )
     payload = await _call_ai_text_tool(
         system=system, user_text=user_text, tool=_VARIANT_PAGE_TOOL,
@@ -8987,9 +9022,17 @@ async def _compile_gene_page(*, gene: str, variant_rels: list[str]) -> dict:
     )
     system = (
         "Compile a per-gene wiki page. Output via record_gene_page. "
-        "ACMG terminology only. Cite every medical claim via "
-        "[[variants/<rsid>_<gene>]] or [[sources/snpedia/<rsid>]]. "
-        "VitalScope appends the disclaimer footer automatically."
+        "ACMG terminology only. Every paragraph with a medical claim must "
+        "end with a citation — either a wikilink "
+        "([[variants/<rsid>_<gene>]] or [[sources/snpedia/<rsid>]]) or a "
+        "direct URL to a primary source (PubMed, ClinVar, dbSNP, OMIM, "
+        "GeneCards, ACMG guidelines, peer-reviewed papers). Inline URLs "
+        "like https://pubmed.ncbi.nlm.nih.gov/12345/ are valid citations. "
+        "Do NOT invent wikilinks to systems, pathways, or compounds — "
+        "write those as plain text or as external URL citations. Summary "
+        "or fact tables are welcome; ensure each table is followed by a "
+        "prose sentence that ends with a citation. VitalScope appends the "
+        "disclaimer footer automatically."
     )
     payload = await _call_ai_text_tool(
         system=system, user_text=user_text, tool=_GENE_PAGE_TOOL,
