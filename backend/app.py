@@ -9387,12 +9387,16 @@ class GenomeWikiQueryIn(BaseModel):
     question: str
 
 
-def _search_wiki_pages(conn: sqlite3.Connection, question: str, limit: int = 12) -> list[dict]:
+def _search_wiki_pages(conn: sqlite3.Connection, question: str, limit: int = 24) -> list[dict]:
     q = (question or "").lower()
     rs_ids = {m.group(0).lower() for m in _RS_RE.finditer(q)}
+    # Exclude `qa` — those are synthesis outputs from prior calls; surfacing
+    # them as "sources" creates a recursive loop where new answers cite old
+    # answers and crowd out the actual gene/variant pages they were
+    # originally synthesised from. `report` excluded for the same reason.
     rows = [dict(r) for r in conn.execute(
         "SELECT path, type, title, summary, rs_id, gene FROM genome_wiki_index "
-        "WHERE type NOT IN ('index','log','source')"
+        "WHERE type NOT IN ('index','log','source','qa','report')"
     ).fetchall()]
     scored: list[tuple[int, dict]] = []
     terms = [t for t in _re.split(r"[^a-z0-9]+", q) if len(t) >= 3]
@@ -9416,7 +9420,7 @@ async def query_genome_wiki(body: GenomeWikiQueryIn):
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
     conn = get_db()
-    hits = _search_wiki_pages(conn, question, limit=12)
+    hits = _search_wiki_pages(conn, question, limit=24)
     if not hits:
         conn.close()
         raise HTTPException(
