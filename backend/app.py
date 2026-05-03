@@ -8139,6 +8139,26 @@ _CLAIM_TERMS_RE = _re.compile(
     r"reduces? activity|enhances? activity)\b",
     _re.IGNORECASE,
 )
+# Hedge / negation detector — phrases that explicitly disclaim a claim or
+# flag a claim as uncertain. When a paragraph contains one of these, any
+# ACMG terms it mentions are being qualified, not asserted, so the
+# citation rule is relaxed.
+_HEDGE_RE = _re.compile(
+    r"\b(?:"
+    r"no (?:specific|published|known|established|reported|confirmed|in vitro|in vivo|direct|pharmacogenomic|clinical)\b|"
+    r"(?:are|is|have been|has been|was|were) not (?:described|reported|established|confirmed|known|present|associated|observed|detected|linked)|"
+    r"(?:does|do) not (?:describe|report|show|establish|confirm|appear|indicate)|"
+    r"(?:source text|snpedia source|raw source|source) does not|"
+    r"insufficient (?:data|evidence|reproducibility)|"
+    r"none (?:are|is|have been) (?:described|reported|established|observed)|"
+    r"no (?:data|evidence|studies?|effect|reports?) (?:on|for|of|describing|reporting|establishing)|"
+    r"(?:not yet|not been|never been) (?:described|reported|established|confirmed|known)|"
+    r"no [^\n]{1,120}? (?:are|is|were|was|have been|has been) (?:present|listed|catalogued|available|provided|included|reported|noted|described|established|confirmed|mentioned)|"
+    r"(?:remains?|is|are|appears?|seems?) (?:uncertain|unclear|unknown|debated|disputed|inconclusive|conflicting|controversial|limited|tentative)|"
+    r"(?:magnitude|clinical (?:relevance|significance)|effect size|reproducibility|evidence base) [^\n]{0,80}? (?:uncertain|unclear|unknown|debated|disputed|inconclusive|conflicting|controversial|varies|limited|not (?:established|confirmed|reproduced))"
+    r")\b",
+    _re.IGNORECASE,
+)
 _BANNED_COLLOQUIAL_RE = _re.compile(r"\b(dangerous gene|bad gene|good gene|killer variant)\b", _re.IGNORECASE)
 _MAGNITUDE_RE = _re.compile(r"(?:^|\n)\s*(?:magnitude|Magnitude)\s*[:=]\s*([\d.]+)", _re.IGNORECASE)
 _CLINVAR_SIG_RE = _re.compile(
@@ -8264,7 +8284,22 @@ def _validate_wiki_page(rel: str, frontmatter: dict, body: str) -> tuple[dict, s
                 continue
             if para.lstrip().startswith("#"):
                 continue
+            # Bold-only single-line paragraphs are synthetic section headers
+            # (the AI sometimes uses `**Heading**` instead of `### Heading`),
+            # not claims. The next prose paragraph must still cite.
+            stripped = para.strip()
+            if (
+                "\n" not in stripped
+                and stripped.startswith("**")
+                and stripped.endswith("**")
+                and len(stripped) <= 120
+            ):
+                continue
             if not _CLAIM_TERMS_RE.search(para):
+                continue
+            # If the paragraph hedges (denies the claim explicitly), skip —
+            # an "X is not associated with Y" sentence isn't asserting Y.
+            if _HEDGE_RE.search(para):
                 continue
             if _has_citation(para):
                 continue
@@ -8964,20 +8999,27 @@ async def _compile_variant_page(
         "You are compiling a personal-genome wiki page in VitalScope. "
         "Output via the record_variant_page tool. ACMG terminology only "
         "(Pathogenic, Likely Pathogenic, VUS, Likely Benign, Benign, "
-        "drug-response, risk-factor). Never colloquial. Every paragraph "
-        "with a medical claim must end with a citation — either "
-        f"[[sources/snpedia/{rs}]] (preferred) or a direct URL (PubMed, "
-        "ClinVar, dbSNP, OMIM, GeneCards, ACMG guidelines, peer-reviewed "
-        "papers). Inline URLs like https://pubmed.ncbi.nlm.nih.gov/12345/ "
-        "are valid citations. Body sections: ## What it is, ## Your data, "
-        "## What it means, ## What we don't know. Body must NOT include "
-        "the disclaimer footer — VitalScope appends that automatically. "
-        f"The ONLY wikilink targets you may use are [[sources/snpedia/{rs}]] "
-        f"and [[variants/{rs}_{gene}]]. Do NOT invent wikilinks to genes, "
-        "systems, traits, or compounds — write those as plain text or as "
-        "external URL citations. Summary or fact tables are welcome; "
-        "ensure each table is followed by a prose sentence that ends with "
-        "a citation."
+        "drug-response, risk-factor). Never colloquial. CITATION RULE: "
+        "every prose paragraph that mentions an ACMG classification "
+        "(risk-factor, drug-response, pathogenic, likely-pathogenic, "
+        "likely-benign, VUS) or a clinical effect (associated with, "
+        "increases risk, reduces activity, gain-of-function, "
+        "loss-of-function, protective, deleterious) MUST end with a "
+        f"citation — either [[sources/snpedia/{rs}]] (preferred) or a "
+        "direct URL (PubMed, ClinVar, dbSNP, OMIM, GeneCards, ACMG "
+        "guidelines, peer-reviewed papers). Inline URLs like "
+        "https://pubmed.ncbi.nlm.nih.gov/12345/ are valid citations. "
+        "Use `### Subheading` for section headers — do NOT write "
+        "bold-only paragraphs (`**Heading**`) as substitutes for headers. "
+        "Body sections (always these four, in this order): ## What it is, "
+        "## Your data, ## What it means, ## What we don't know. Body must "
+        "NOT include the disclaimer footer — VitalScope appends that "
+        f"automatically. The ONLY wikilink targets you may use are "
+        f"[[sources/snpedia/{rs}]] and [[variants/{rs}_{gene}]]. Do NOT "
+        "invent wikilinks to genes, systems, traits, or compounds — "
+        "write those as plain text or as external URL citations. Summary "
+        "or fact tables are welcome; ensure each table is followed by a "
+        "prose sentence that ends with a citation."
     )
     payload = await _call_ai_text_tool(
         system=system, user_text=user_text, tool=_VARIANT_PAGE_TOOL,
@@ -9022,12 +9064,18 @@ async def _compile_gene_page(*, gene: str, variant_rels: list[str]) -> dict:
     )
     system = (
         "Compile a per-gene wiki page. Output via record_gene_page. "
-        "ACMG terminology only. Every paragraph with a medical claim must "
-        "end with a citation — either a wikilink "
+        "ACMG terminology only. CITATION RULE: every prose paragraph that "
+        "mentions an ACMG classification (risk-factor, drug-response, "
+        "pathogenic, likely-pathogenic, likely-benign, VUS) or a clinical "
+        "effect (associated with, increases risk, reduces activity, "
+        "gain-of-function, loss-of-function, protective, deleterious) "
+        "MUST end with a citation — either a wikilink "
         "([[variants/<rsid>_<gene>]] or [[sources/snpedia/<rsid>]]) or a "
         "direct URL to a primary source (PubMed, ClinVar, dbSNP, OMIM, "
         "GeneCards, ACMG guidelines, peer-reviewed papers). Inline URLs "
         "like https://pubmed.ncbi.nlm.nih.gov/12345/ are valid citations. "
+        "Use `### Subheading` for section headers — do NOT write "
+        "bold-only paragraphs (`**Heading**`) as substitutes for headers. "
         "Do NOT invent wikilinks to systems, pathways, or compounds — "
         "write those as plain text or as external URL citations. Summary "
         "or fact tables are welcome; ensure each table is followed by a "
