@@ -25,6 +25,7 @@ Usage:
   python3 ingest_top_genome_rsids.py --systems-only --rebuild-systems  # ditto, overwriting existing
   python3 ingest_top_genome_rsids.py --ask "What does my MTHFR C677T mean for folate?"
   python3 ingest_top_genome_rsids.py --report longevity      # one of: pharmacogenomics longevity performance nutrition methylation
+  python3 ingest_top_genome_rsids.py --annotate-vcf out.vcf  # fill in missing rsids in the latest genome upload by SNPedia position lookup
 
 VCF source: by default the latest entry in `genome_uploads` (its symlinked
 file under VITALSCOPE_UPLOADS). Override with --vcf.
@@ -68,12 +69,22 @@ from typing import Awaitable, Callable, Optional
 import backend.app as app
 
 DEFAULT_RANK_CACHE = app.GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
+DEFAULT_HG38_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg38.tsv"
+DEFAULT_HG19_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg19.tsv"
 
 _GENE_FIELD_RE = re.compile(r"\|\s*Gene\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECASE)
 _GENO_TITLE_RE = re.compile(r"^Rs(\d+)\(([ACGT]);([ACGT])\)$", re.IGNORECASE)
 _GENO_MAG_RE = re.compile(r"\|\s*magnitude\s*=\s*([\d.]+)", re.IGNORECASE)
 _GENO_REPUTE_RE = re.compile(r"\|\s*repute\s*=\s*(\w+)", re.IGNORECASE)
 _GENO_SUMMARY_RE = re.compile(r"\|\s*summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
+
+# {{Rsnum ...}} fields on canonical Rs<NNN> pages. Position is GRCh38; we
+# liftOver to GRCh37/hg19 once at startup so we can annotate either build.
+_RSNUM_BLOCK_RE = re.compile(r"\{\{[Rr]snum.*?\}\}", re.DOTALL)
+_RSNUM_RSID_RE = re.compile(r"\|\s*rsid\s*=\s*(\d+)", re.IGNORECASE)
+_RSNUM_CHR_RE = re.compile(r"\|\s*Chromosome\s*=\s*([0-9XYMTxymt]+)", re.IGNORECASE)
+_RSNUM_POS_RE = re.compile(r"\|\s*position\s*=\s*(\d+)", re.IGNORECASE)
+_RSNUM_ASM_RE = re.compile(r"\|\s*Assembly\s*=\s*GRCh(\d+)", re.IGNORECASE)
 
 # Real HGNC symbols start with an uppercase letter and use ASCII letters,
 # digits, and hyphens. They almost always either contain a digit (BRCA1,
@@ -145,6 +156,215 @@ def _build_genotype_lookup(conn: sqlite3.Connection) -> dict:
             "summary": (smy.group(1) if smy else "").strip(),
         }
     return lookup
+
+
+def _build_hg38_position_lookup(
+    conn: sqlite3.Connection, cache_path: Path,
+) -> dict[tuple[str, int], str]:
+    """Map (chromosome, hg38 position) → rsid from SNPedia Rsnum templates.
+
+    Cached to a TSV under the wiki root because scanning all 273k SNPedia
+    pages takes ~30s. Delete the cache file to rebuild.
+    """
+    if cache_path.is_file():
+        out: dict[tuple[str, int], str] = {}
+        with cache_path.open() as fh:
+            next(fh)
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 3:
+                    continue
+                try:
+                    out[(parts[0], int(parts[1]))] = parts[2]
+                except ValueError:
+                    continue
+        print(f"[positions] loaded {len(out):,} hg38 positions from {cache_path}", flush=True)
+        return out
+    print("[positions] scanning SNPedia pages for hg38 positions…", flush=True)
+    # Keyed by (chrom, hg38_pos). On collision (dbSNP merges leave multiple
+    # SNPedia pages claiming the same locus, e.g. Rs4680 + Rs165688), keep
+    # the lowest numeric rsid — older ID = canonical survivor of the merge.
+    out: dict[tuple[str, int], str] = {}
+    out_num: dict[tuple[str, int], int] = {}
+    for row in conn.execute(
+        "SELECT title, raw_json FROM snpedia_pages "
+        "WHERE title GLOB 'Rs[0-9]*' AND title NOT GLOB '*(*'"
+    ):
+        try:
+            text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        except Exception:
+            continue
+        block_m = _RSNUM_BLOCK_RE.search(text)
+        if not block_m:
+            continue
+        block = block_m.group(0)
+        rsid_m = _RSNUM_RSID_RE.search(block)
+        chr_m = _RSNUM_CHR_RE.search(block)
+        pos_m = _RSNUM_POS_RE.search(block)
+        if not (rsid_m and chr_m and pos_m):
+            continue
+        asm_m = _RSNUM_ASM_RE.search(block)
+        if asm_m and asm_m.group(1) != "38":
+            continue
+        try:
+            pos = int(pos_m.group(1))
+            rsid_num = int(rsid_m.group(1))
+        except ValueError:
+            continue
+        chrom = chr_m.group(1).upper()
+        key = (chrom, pos)
+        if key in out_num and out_num[key] <= rsid_num:
+            continue
+        out[key] = f"rs{rsid_num}"
+        out_num[key] = rsid_num
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w") as fh:
+        fh.write("chrom\thg38_pos\trsid\n")
+        for (chrom, pos), rsid in out.items():
+            fh.write(f"{chrom}\t{pos}\t{rsid}\n")
+    print(f"[positions] cached {len(out):,} (chrom, hg38_pos) → rsid pairs", flush=True)
+    return out
+
+
+def _build_hg19_position_lookup(
+    hg38_lookup: dict[tuple[str, int], str], cache_path: Path,
+) -> dict[tuple[str, int], str]:
+    """Lift every SNPedia hg38 position to hg19 via UCSC chain file.
+
+    Cached because the first liftOver call downloads a ~1MB chain file and
+    converting 100k positions takes ~10s.
+    """
+    if cache_path.is_file():
+        out: dict[tuple[str, int], str] = {}
+        with cache_path.open() as fh:
+            next(fh)
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 3:
+                    continue
+                try:
+                    out[(parts[0], int(parts[1]))] = parts[2]
+                except ValueError:
+                    continue
+        print(f"[positions] loaded {len(out):,} hg19 positions from {cache_path}", flush=True)
+        return out
+    try:
+        from pyliftover import LiftOver
+    except ImportError:
+        print(
+            "[positions] pyliftover not installed — hg19 annotation disabled. "
+            "pip install pyliftover==0.4.1",
+            flush=True,
+        )
+        return {}
+    print("[positions] lifting SNPedia hg38 → hg19 (one-time, ~10s)…", flush=True)
+    lo = LiftOver("hg38", "hg19")
+    out = {}
+    for (chrom, hg38_pos), rsid in hg38_lookup.items():
+        hits = lo.convert_coordinate(f"chr{chrom}", hg38_pos - 1)
+        if not hits:
+            continue
+        lifted_chr = hits[0][0].removeprefix("chr").upper()
+        out[(lifted_chr, hits[0][1] + 1)] = rsid
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w") as fh:
+        fh.write("chrom\thg19_pos\trsid\n")
+        for (chrom, pos), rsid in out.items():
+            fh.write(f"{chrom}\t{pos}\t{rsid}\n")
+    print(f"[positions] cached {len(out):,} (chrom, hg19_pos) → rsid pairs", flush=True)
+    return out
+
+
+def _detect_vcf_build(
+    vcf_path: Path,
+    hg38_lookup: dict[tuple[str, int], str],
+    hg19_lookup: dict[tuple[str, int], str],
+    sample_max: int = 200_000,
+    min_hits: int = 50,
+) -> str:
+    """Stream variant lines until we accumulate at least `min_hits` matches
+    against either build (or we've scanned `sample_max` lines), then return
+    the winning build. Real WGS files start with telomeric chr1 positions
+    that have zero SNPedia coverage, so a small sample window misses
+    everything — read until we have a real signal.
+    """
+    hg38_hits = hg19_hits = sampled = 0
+    with vcf_path.open() as fh:
+        for line in fh:
+            if line.startswith("#"):
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 5:
+                continue
+            chrom = parts[0].removeprefix("chr").upper()
+            try:
+                pos = int(parts[1])
+            except ValueError:
+                continue
+            if (chrom, pos) in hg38_lookup:
+                hg38_hits += 1
+            if (chrom, pos) in hg19_lookup:
+                hg19_hits += 1
+            sampled += 1
+            if max(hg38_hits, hg19_hits) >= min_hits:
+                break
+            if sampled >= sample_max:
+                break
+    print(
+        f"[positions] build detection — sampled {sampled:,} lines, "
+        f"hg38_hits={hg38_hits}, hg19_hits={hg19_hits}",
+        flush=True,
+    )
+    if hg38_hits == 0 and hg19_hits == 0:
+        return "unknown"
+    return "hg38" if hg38_hits >= hg19_hits else "hg19"
+
+
+def _annotate_vcf_in_place(
+    in_path: Path,
+    out_path: Path,
+    position_to_rsid: dict[tuple[str, int], str],
+) -> tuple[int, int, int]:
+    """Stream `in_path` to `out_path`, filling in missing rsids from the
+    position lookup. Returns (total_variants, already_had_id, newly_annotated).
+    """
+    total = had_id = annotated = 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with in_path.open("r", encoding="utf-8", errors="replace") as fin, \
+         out_path.open("w", encoding="utf-8") as fout:
+        for line in fin:
+            if line.startswith("##"):
+                fout.write(line)
+                continue
+            if line.startswith("#"):
+                fout.write("##VitalScopeAnnotation=position-to-rsid via SNPedia (" +
+                           datetime.utcnow().isoformat(timespec="seconds") + "Z)\n")
+                fout.write(line)
+                continue
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 5:
+                fout.write(line)
+                continue
+            total += 1
+            current_id = parts[2]
+            if current_id and current_id != "." and current_id.lower().startswith("rs"):
+                had_id += 1
+                fout.write(line)
+                continue
+            chrom = parts[0].removeprefix("chr").upper()
+            try:
+                pos = int(parts[1])
+            except ValueError:
+                fout.write(line)
+                continue
+            new_rsid = position_to_rsid.get((chrom, pos))
+            if new_rsid:
+                parts[2] = new_rsid
+                annotated += 1
+                fout.write("\t".join(parts) + "\n")
+            else:
+                fout.write(line)
+    return total, had_id, annotated
 
 
 def _stream_user_vcf(vcf_path: Path, known_rsids: set[str]) -> list[tuple[str, str, str, str]]:
@@ -729,11 +949,19 @@ def main(argv=None) -> int:
                              "(equivalent to POST /api/genome-wiki/report). "
                              "Writes to wiki/synthesis/reports/<topic>_<date>.md. "
                              "Mutually exclusive with --ask and --systems-only.")
+    parser.add_argument("--annotate-vcf", metavar="OUT_VCF", type=Path, default=None,
+                        help="read the input VCF (--vcf or the latest genome_upload), "
+                             "fill in missing rsids by matching variant positions "
+                             "against SNPedia's hg38/hg19 catalog, and write the "
+                             "annotated VCF to OUT_VCF. Build is auto-detected. "
+                             "Skips the rank/variant/gene/system passes — run the "
+                             "ingest separately afterwards with --vcf OUT_VCF. "
+                             "Mutually exclusive with --ask / --report / --systems-only.")
     args = parser.parse_args(argv)
 
-    selected_modes = sum(1 for x in (args.ask, args.report, args.systems_only) if x)
+    selected_modes = sum(1 for x in (args.ask, args.report, args.systems_only, args.annotate_vcf) if x)
     if selected_modes > 1:
-        parser.error("--ask / --report / --systems-only are mutually exclusive")
+        parser.error("--ask / --report / --systems-only / --annotate-vcf are mutually exclusive")
 
     if args.model:
         app.AI_MODEL = args.model
@@ -782,6 +1010,39 @@ def main(argv=None) -> int:
         if fm.get("summary"):
             print(f"{fm['summary']}\n")
         print(res["body"] or "")
+        return 0
+
+    if args.annotate_vcf:
+        in_vcf = _resolve_vcf(conn, args.vcf)
+        out_vcf = args.annotate_vcf
+        print(f"[mode] annotate-vcf — input={in_vcf} output={out_vcf}", flush=True)
+        t0 = time.time()
+        hg38 = _build_hg38_position_lookup(conn, DEFAULT_HG38_POSITIONS_CACHE)
+        hg19 = _build_hg19_position_lookup(hg38, DEFAULT_HG19_POSITIONS_CACHE)
+        build = _detect_vcf_build(in_vcf, hg38, hg19)
+        print(f"[positions] detected VCF build: {build}", flush=True)
+        if build == "hg38":
+            lookup = hg38
+        elif build == "hg19":
+            lookup = hg19
+        else:
+            print("[positions] could not detect build (no SNPedia matches in first 500 lines); aborting", flush=True)
+            conn.close()
+            return 1
+        if not lookup:
+            print("[positions] empty position lookup; aborting", flush=True)
+            conn.close()
+            return 1
+        total, had, annotated = _annotate_vcf_in_place(in_vcf, out_vcf, lookup)
+        conn.close()
+        print(
+            f"\n=== done in {time.time() - t0:.1f}s ===\n"
+            f"  variants:       {total:,}\n"
+            f"  already had id: {had:,}\n"
+            f"  newly annotated: {annotated:,}\n"
+            f"  output:         {out_vcf}",
+            flush=True,
+        )
         return 0
 
     if args.systems_only:
