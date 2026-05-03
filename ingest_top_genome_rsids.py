@@ -495,7 +495,10 @@ def main(argv=None) -> int:
     for r in fresh:
         rs = r["rsid"]
         row = conn.execute(
-            "SELECT raw_json FROM snpedia_pages WHERE LOWER(title)=?", (rs,)
+            "SELECT p.raw_json FROM snpedia_pages p "
+            "JOIN snpedia_variants v ON v.page_id = p.page_id "
+            "WHERE v.rsid = ?",
+            (rs,),
         ).fetchone()
         if not row:
             print(f"  WARN: {rs} not in snpedia_pages; skipping")
