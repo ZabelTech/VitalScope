@@ -31,6 +31,7 @@ Environment:
 import argparse
 import asyncio
 import json
+import random
 import re
 import sqlite3
 import sys
@@ -38,7 +39,7 @@ import time
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Awaitable, Callable, Optional
 
 import backend.app as app
 
@@ -226,6 +227,87 @@ def _ensure_genome_upload_id(conn: sqlite3.Connection) -> int:
     return row["id"]
 
 
+def _classify_retry_reason(exc: BaseException) -> Optional[str]:
+    """Return a short label if the exception is worth retrying, else None.
+
+    Looks at HTTPException status + detail string, then a few generic
+    network errors. Validator hedges and link errors are retryable
+    because the AI is non-deterministic — a fresh sample often passes.
+    """
+    detail = ""
+    status = None
+    try:
+        from fastapi import HTTPException as _HE  # local import keeps cold path light
+        if isinstance(exc, _HE):
+            status = exc.status_code
+            detail = str(getattr(exc, "detail", "") or "")
+    except Exception:
+        pass
+    text = (detail + " " + str(exc)).lower()
+    if "rate_limit" in text or "rate limit" in text or " 429" in text or text.startswith("429"):
+        return "rate_limit"
+    if status == 408 or "timed out" in text or "timeout" in text:
+        return "timeout"
+    if status == 400 and "medical claim without citation" in text:
+        return "validator_hedge"
+    if status == 400 and "unresolved wikilink" in text:
+        return "validator_link"
+    if status == 400 and "colloquial banned phrase" in text:
+        return "validator_lint"
+    if status in (502, 503, 504):
+        return "upstream_5xx"
+    if isinstance(exc, asyncio.TimeoutError):
+        return "timeout"
+    return None
+
+
+def _backoff_seconds(reason: str, attempt: int) -> float:
+    """Sleep between attempts. Jitter prevents thundering-herd retries
+    after a multi-task rate-limit storm."""
+    if reason == "rate_limit":
+        base = 45.0 + 20.0 * attempt        # 65, 85, 105 …
+    elif reason == "timeout":
+        base = 8.0 * attempt                # 8, 16, 24
+    elif reason == "upstream_5xx":
+        base = 5.0 * attempt
+    else:                                   # validator_*: just resample
+        base = 2.0 * attempt
+    return base + random.uniform(0, min(10.0, base * 0.2))
+
+
+async def _retry(
+    fn: Callable[[], Awaitable[dict]],
+    *,
+    label: str,
+    max_attempts: int,
+) -> dict:
+    """Call fn() with auto-retry. Logs each retry and its reason in real
+    time. Reraises the final exception if all attempts fail."""
+    last_exc: Optional[BaseException] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await fn()
+            if attempt > 1:
+                print(f"  ✓ {label} ok on attempt {attempt}/{max_attempts}", flush=True)
+            return result
+        except BaseException as exc:
+            last_exc = exc
+            reason = _classify_retry_reason(exc)
+            if reason is None or attempt == max_attempts:
+                if attempt > 1:
+                    why = reason or "non-retryable"
+                    print(f"  ✗ {label} gave up after {attempt} attempts ({why})", flush=True)
+                raise
+            wait = _backoff_seconds(reason, attempt)
+            print(
+                f"  ⟳ {label} retry {attempt}/{max_attempts - 1} "
+                f"({reason}; waiting {wait:.0f}s)",
+                flush=True,
+            )
+            await asyncio.sleep(wait)
+    raise last_exc  # unreachable, but satisfies the type checker
+
+
 async def _ingest_batch(
     *,
     conn: sqlite3.Connection,
@@ -233,6 +315,7 @@ async def _ingest_batch(
     raw_pages: dict[str, str],
     concurrency_variants: int,
     concurrency_genes: int,
+    max_attempts: int,
 ) -> tuple[list[dict], list[dict]]:
     sem_v = asyncio.Semaphore(concurrency_variants)
     sem_g = asyncio.Semaphore(concurrency_genes)
@@ -247,24 +330,30 @@ async def _ingest_batch(
                 if scan["magnitude"] == 0:
                     scan["magnitude"] = r["magnitude"]
                 registry = app._registry_entry(conn, rs)
-                return rs, await app._compile_variant_page(
-                    variant=v, scan=scan,
-                    source_rel=f"sources/snpedia/{rs}", registry=registry,
-                )
+                async def _do() -> dict:
+                    return await app._compile_variant_page(
+                        variant=v, scan=scan,
+                        source_rel=f"sources/snpedia/{rs}", registry=registry,
+                    )
+                return rs, await _retry(_do, label=rs, max_attempts=max_attempts)
             except Exception as e:
                 return rs, e
 
     async def gene(g: str, rels: list[str]) -> tuple[str, object]:
         async with sem_g:
             try:
-                return g, await app._compile_gene_page(gene=g, variant_rels=rels)
+                async def _do() -> dict:
+                    return await app._compile_gene_page(gene=g, variant_rels=rels)
+                return g, await _retry(_do, label=g, max_attempts=max_attempts)
             except Exception as e:
                 return g, e
 
     async def system(s: str, rels: list[str]) -> tuple[str, object]:
         async with sem_g:
             try:
-                return s, await app._compile_system_page(system=s, gene_rels=rels)
+                async def _do() -> dict:
+                    return await app._compile_system_page(system=s, gene_rels=rels)
+                return s, await _retry(_do, label=s, max_attempts=max_attempts)
             except Exception as e:
                 return s, e
 
@@ -368,6 +457,9 @@ def main(argv=None) -> int:
                         help="parallel variant compiles (default 3 — rate-limit safe)")
     parser.add_argument("--concurrency-genes", type=int, default=2,
                         help="parallel gene/system compiles (default 2)")
+    parser.add_argument("--max-attempts", type=int, default=3,
+                        help="total attempts per page including retries "
+                             "(default 3; set 1 to disable retries)")
     args = parser.parse_args(argv)
 
     conn = sqlite3.connect(str(app.DB_PATH))
@@ -449,6 +541,7 @@ def main(argv=None) -> int:
         raw_pages=raw_pages,
         concurrency_variants=args.concurrency_variants,
         concurrency_genes=args.concurrency_genes,
+        max_attempts=args.max_attempts,
     ))
     total = time.time() - t_start
 
