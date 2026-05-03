@@ -8154,8 +8154,13 @@ _HEDGE_RE = _re.compile(
     r"no (?:data|evidence|studies?|effect|reports?) (?:on|for|of|describing|reporting|establishing)|"
     r"(?:not yet|not been|never been) (?:described|reported|established|confirmed|known)|"
     r"no [^\n]{1,120}? (?:are|is|were|was|have been|has been) (?:present|listed|catalogued|available|provided|included|reported|noted|described|established|confirmed|mentioned)|"
+    r"no [^\n]{1,120}? (?:distinguish|differentiate|specify|indicate|clarify|address|stratify)|"
     r"(?:remains?|is|are|appears?|seems?) (?:uncertain|unclear|unknown|debated|disputed|inconclusive|conflicting|controversial|limited|tentative)|"
-    r"(?:magnitude|clinical (?:relevance|significance)|effect size|reproducibility|evidence base) [^\n]{0,80}? (?:uncertain|unclear|unknown|debated|disputed|inconclusive|conflicting|controversial|varies|limited|not (?:established|confirmed|reproduced))"
+    r"(?:magnitude|clinical (?:relevance|significance)|effect size|reproducibility|evidence base) [^\n]{0,80}? (?:uncertain|unclear|unknown|debated|disputed|inconclusive|conflicting|controversial|varies|limited|not (?:established|confirmed|reproduced))|"
+    r"(?:primarily|mostly|most|exclusively|largely|nearly all|all available) [^\n]{0,40}? (?:studied|conducted|investigated|performed|drawn|developed|published|reported|derived|based) (?:in|on|from|with(?: respect)?)|"
+    r"(?:limited|sparse|insufficient|unavailable) data (?:on|for|in|regarding|about)|"
+    r"(?:long[-\s]?term|lifetime|durable|chronic) [^\n]{0,80}? (?:unknown|unclear|under investigation|to be determined|remain to be|not (?:yet|fully) (?:known|understood|established))|"
+    r"(?:generali[sz]ability|applicability|extrapolation) (?:to|in|across) [^\n]{0,40}? (?:limited|uncertain|unclear|unknown|cautioned)"
     r")\b",
     _re.IGNORECASE,
 )
@@ -8311,6 +8316,16 @@ def _validate_wiki_page(rel: str, frontmatter: dict, body: str) -> tuple[dict, s
             )
             is_block = len(lines) >= 2 and structural >= len(lines) / 2
             if is_block and i + 1 < len(paras) and _has_citation(paras[i + 1]):
+                continue
+            # Prose intro sentence ending with a colon ("The classifications
+            # are most relevant in two contexts:") is introducing the next
+            # paragraph; if the next paragraph carries a citation, the
+            # whole intro+block is cited as a unit.
+            if (
+                para.rstrip().endswith(":")
+                and i + 1 < len(paras)
+                and _has_citation(paras[i + 1])
+            ):
                 continue
             errors.append(f"medical claim without citation: {para[:80]!r}")
             break  # one error is enough; don't flood the log
@@ -9014,12 +9029,13 @@ async def _compile_variant_page(
         "Body sections (always these four, in this order): ## What it is, "
         "## Your data, ## What it means, ## What we don't know. Body must "
         "NOT include the disclaimer footer — VitalScope appends that "
-        f"automatically. The ONLY wikilink targets you may use are "
-        f"[[sources/snpedia/{rs}]] and [[variants/{rs}_{gene}]]. Do NOT "
-        "invent wikilinks to genes, systems, traits, or compounds — "
-        "write those as plain text or as external URL citations. Summary "
-        "or fact tables are welcome; ensure each table is followed by a "
-        "prose sentence that ends with a citation."
+        f"automatically. The ONLY wikilink target you may use is "
+        f"[[sources/snpedia/{rs}]]. Do NOT self-reference (no "
+        f"[[variants/{rs}_*]]); do NOT invent wikilinks to genes, "
+        "systems, traits, or compounds — write those as plain text or as "
+        "external URL citations. Summary or fact tables are welcome; "
+        "ensure each table is followed by a prose sentence that ends "
+        "with a citation."
     )
     payload = await _call_ai_text_tool(
         system=system, user_text=user_text, tool=_VARIANT_PAGE_TOOL,
