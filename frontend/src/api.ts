@@ -1275,6 +1275,7 @@ export async function fetchGlucosePostprandial(
 // --- Genome Wiki ---
 
 import type {
+  GenomeIngestJob,
   GenomeWikiAnswer,
   GenomeWikiIndexEntry,
   GenomeWikiIngestResult,
@@ -1329,6 +1330,42 @@ export async function ingestSnpediaBundle(opts: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(opts),
   });
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function startGenomeIngestJob(
+  genome_upload_id?: number,
+): Promise<{ job_id: number; status: string }> {
+  const res = await apiFetch("/api/genome-wiki/ingest-jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(genome_upload_id ? { genome_upload_id } : {}),
+  });
+  if (res.status === 409) {
+    const data = await res.json().catch(() => ({}));
+    const detail = data?.detail ?? data;
+    if (detail && typeof detail === "object" && "job_id" in detail) {
+      return { job_id: Number(detail.job_id), status: "running" };
+    }
+  }
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchActiveGenomeIngestJob(): Promise<GenomeIngestJob | null> {
+  const res = await apiFetch("/api/genome-wiki/ingest-jobs/active");
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  const data = (await res.json()) as { job: GenomeIngestJob | null };
+  return data.job;
+}
+
+export async function fetchGenomeIngestJob(
+  jobId: number,
+  sinceEventIndex = 0,
+): Promise<GenomeIngestJob> {
+  const qs = sinceEventIndex > 0 ? `?since=${sinceEventIndex}` : "";
+  const res = await apiFetch(`/api/genome-wiki/ingest-jobs/${jobId}${qs}`);
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

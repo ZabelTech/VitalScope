@@ -1334,6 +1334,27 @@ def ensure_daily_landing_tables() -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS genome_wiki_ingest_jobs (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            genome_upload_id  INTEGER,
+            status            TEXT NOT NULL CHECK (status IN ('queued','running','succeeded','failed','cancelled')),
+            pid               INTEGER,
+            created_at        TEXT NOT NULL,
+            started_at        TEXT,
+            completed_at      TEXT,
+            current_stage     TEXT,
+            events_json       TEXT NOT NULL DEFAULT '[]',
+            counters_json     TEXT NOT NULL DEFAULT '{}',
+            summary_json      TEXT,
+            error_text        TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_giw_jobs_status ON genome_wiki_ingest_jobs(status)"
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS ai_config (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
@@ -1459,6 +1480,22 @@ def ensure_daily_landing_tables() -> None:
 
 ensure_daily_landing_tables()
 
+
+def _mark_stale_ingest_jobs_failed() -> None:
+    conn = get_db()
+    conn.execute(
+        "UPDATE genome_wiki_ingest_jobs "
+        "SET status = 'failed', "
+        "    completed_at = COALESCE(completed_at, ?), "
+        "    error_text = COALESCE(error_text, 'worker restart') "
+        "WHERE status IN ('queued', 'running')",
+        (datetime.now(timezone.utc).isoformat(),),
+    )
+    conn.commit()
+    conn.close()
+
+
+_mark_stale_ingest_jobs_failed()
 
 
 def _load_ai_config_from_db() -> None:
@@ -8858,6 +8895,404 @@ def put_genome_wiki_settings(body: GenomeWikiSettingsIn):
     n = _set_genome_wiki_max_pages(conn, body.max_pages)
     conn.close()
     return {"max_pages": n}
+
+
+# ---- /api/genome-wiki/ingest-jobs ----
+
+import sys as _sys
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INGEST_SCRIPT_PATH = REPO_ROOT / "ingest_top_genome_rsids.py"
+_INGEST_EVENTS_CAP = 5000
+
+_STAGE_RE = _re.compile(r"^\[(?P<tag>[\w-]+)\]\s*(?P<msg>.*)$")
+_PAGE_OK_RE = _re.compile(r"^\s*✓\s+(?P<label>\S+)")
+_PAGE_FAIL_RE = _re.compile(r"^\s*✗\s+(?P<label>\S+)\s+(?P<reason>.+)$")
+_VARIANTS_TOTAL_RE = _re.compile(r"^\[variants\]\s+(?P<n>\d+)\s+pages")
+_GENES_TOTAL_RE = _re.compile(r"^\[genes\]\s+(?P<n>\d+)\s+new genes")
+_SYSTEMS_TOTAL_RE = _re.compile(r"systems-only.*?(?P<n>\d+)\s+gene")
+_DONE_RE = _re.compile(r"^===\s*(?:wrote.*in|done in)\s+(?P<s>[\d.]+)s")
+
+_PAGE_STAGE_KEY = {
+    "variants": "variants",
+    "genes": "genes",
+    "systems": "systems",
+}
+
+
+def _parse_ingest_line(line: str, current_stage: Optional[str]) -> dict:
+    """Map a stdout line from ingest_top_genome_rsids.py to a structured event.
+
+    Returns one of:
+      {kind:"stage", stage, message}
+      {kind:"page_ok", label, stage}
+      {kind:"page_fail", label, reason, stage}
+      {kind:"counter", key, value}    -- e.g. variants_total=N
+      {kind:"done", duration_s}
+      {kind:"raw", message}           -- fallback
+    """
+    text = line.rstrip("\r\n")
+    if not text.strip():
+        return {"kind": "raw", "message": ""}
+    m_done = _DONE_RE.match(text)
+    if m_done:
+        return {"kind": "done", "duration_s": float(m_done.group("s"))}
+    m_vt = _VARIANTS_TOTAL_RE.match(text)
+    if m_vt:
+        return {"kind": "counter", "key": "variants_total", "value": int(m_vt.group("n"))}
+    m_gt = _GENES_TOTAL_RE.match(text)
+    if m_gt:
+        return {"kind": "counter", "key": "genes_total", "value": int(m_gt.group("n"))}
+    m_stage = _STAGE_RE.match(text)
+    if m_stage:
+        return {
+            "kind": "stage",
+            "stage": m_stage.group("tag"),
+            "message": m_stage.group("msg").strip(),
+        }
+    m_ok = _PAGE_OK_RE.match(text)
+    if m_ok and current_stage in _PAGE_STAGE_KEY:
+        return {
+            "kind": "page_ok",
+            "label": m_ok.group("label"),
+            "stage": current_stage,
+        }
+    m_fail = _PAGE_FAIL_RE.match(text)
+    if m_fail and current_stage in _PAGE_STAGE_KEY:
+        return {
+            "kind": "page_fail",
+            "label": m_fail.group("label"),
+            "reason": m_fail.group("reason").strip(),
+            "stage": current_stage,
+        }
+    return {"kind": "raw", "message": text}
+
+
+def _ingest_job_row(conn: sqlite3.Connection, job_id: int) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM genome_wiki_ingest_jobs WHERE id = ?", (job_id,)
+    ).fetchone()
+
+
+def _append_ingest_events(
+    conn: sqlite3.Connection,
+    job_id: int,
+    events: list[dict],
+) -> None:
+    if not events:
+        return
+    row = _ingest_job_row(conn, job_id)
+    if row is None:
+        return
+    cur_events = json.loads(row["events_json"] or "[]")
+    counters = json.loads(row["counters_json"] or "{}")
+    current_stage = row["current_stage"]
+    now = datetime.now(timezone.utc).isoformat()
+    for ev in events:
+        ev = {"ts": now, **ev}
+        if ev["kind"] == "stage":
+            current_stage = ev["stage"]
+        elif ev["kind"] == "page_ok":
+            stage = ev.get("stage")
+            if stage in _PAGE_STAGE_KEY:
+                key = f"{_PAGE_STAGE_KEY[stage]}_done"
+                counters[key] = int(counters.get(key, 0)) + 1
+        elif ev["kind"] == "page_fail":
+            counters["errors"] = int(counters.get("errors", 0)) + 1
+        elif ev["kind"] == "counter":
+            counters[ev["key"]] = ev["value"]
+        cur_events.append(ev)
+    if len(cur_events) > _INGEST_EVENTS_CAP:
+        dropped = len(cur_events) - _INGEST_EVENTS_CAP + 1
+        cur_events = (
+            [{"ts": now, "kind": "raw", "message": f"…(truncated {dropped} earlier lines)"}]
+            + cur_events[-(_INGEST_EVENTS_CAP - 1):]
+        )
+    conn.execute(
+        "UPDATE genome_wiki_ingest_jobs SET events_json = ?, counters_json = ?, current_stage = ? WHERE id = ?",
+        (json.dumps(cur_events), json.dumps(counters), current_stage, job_id),
+    )
+    conn.commit()
+
+
+def _finalize_ingest_job(
+    job_id: int, status: str, summary: Optional[dict], error_text: Optional[str]
+) -> None:
+    conn = get_db()
+    conn.execute(
+        "UPDATE genome_wiki_ingest_jobs SET status = ?, completed_at = ?, summary_json = ?, error_text = ? WHERE id = ?",
+        (
+            status,
+            datetime.now(timezone.utc).isoformat(),
+            json.dumps(summary) if summary is not None else None,
+            error_text,
+            job_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _has_active_ingest_job(conn: sqlite3.Connection) -> Optional[sqlite3.Row]:
+    return conn.execute(
+        "SELECT * FROM genome_wiki_ingest_jobs "
+        "WHERE status IN ('queued','running') ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
+def _ingest_summary_from_counters(counters: dict) -> dict:
+    return {
+        "variants_total": int(counters.get("variants_total", 0)),
+        "variants_done": int(counters.get("variants_done", 0)),
+        "genes_total": int(counters.get("genes_total", 0)),
+        "genes_done": int(counters.get("genes_done", 0)),
+        "errors": int(counters.get("errors", 0)),
+    }
+
+
+_DEMO_INGEST_SCRIPT: list[tuple[float, str]] = [
+    (0.2, "[setup] AI provider=demo model=demo"),
+    (0.3, "[positions] loaded 12,418 hg38 positions from cache"),
+    (0.3, "[positions] loaded 12,302 hg19 positions from cache"),
+    (0.4, "[gene-resolver] loaded 1,840 gene intervals from cache"),
+    (0.6, "[dbsnp-lookup] streaming dbsnp_gene_lookup.tsv"),
+    (0.5, "[dbsnp-lookup] 1,200,000 rows scanned in 0.6s"),
+    (0.4, "[ensembl] loaded 4,920 cached entries"),
+    (0.5, "[rank] indexing SNPedia genotype pages…"),
+    (0.4, "[rank] streaming demo VCF…"),
+    (0.4, "[rank] 248 VCF rows match SNPedia"),
+    (0.3, "[rank] gene resolution sources: snpedia=180 dbsnp=58 ensembl=10"),
+    (0.5, "[variants] 6 pages, concurrency=3…"),
+    (0.6, "  ✓ rs1801133 ok on attempt 1/3"),
+    (0.6, "  ✓ rs429358 ok on attempt 1/3"),
+    (0.6, "  ✓ rs7412 ok on attempt 1/3"),
+    (0.6, "  ✓ rs4680 ok on attempt 1/3"),
+    (0.6, "  ✓ rs53576 ok on attempt 1/3"),
+    (0.6, "  ✓ rs9939609 ok on attempt 1/3"),
+    (0.4, "  variants: 3.2s — 6/6 ok, 0 errors"),
+    (0.5, "[genes] 4 new genes, concurrency=2…"),
+    (0.6, "  ✓ MTHFR ok on attempt 1/3"),
+    (0.6, "  ✓ APOE ok on attempt 1/3"),
+    (0.6, "  ✓ COMT ok on attempt 1/3"),
+    (0.6, "  ✓ FTO ok on attempt 1/3"),
+    (0.4, "  genes: 2.1s — 4/4 ok, 0 errors"),
+    (0.5, "[systems] compiling derived body-system pages…"),
+    (0.5, "  ✓ neurotransmitter → wiki/systems/neurotransmitter.md"),
+    (0.5, "  ✓ cardiovascular → wiki/systems/cardiovascular.md"),
+    (0.4, "=== done in 8.6s ==="),
+]
+
+
+async def _run_demo_ingest_job(job_id: int) -> None:
+    try:
+        conn = get_db()
+        conn.execute(
+            "UPDATE genome_wiki_ingest_jobs SET status = 'running', started_at = ? WHERE id = ?",
+            (datetime.now(timezone.utc).isoformat(), job_id),
+        )
+        conn.commit()
+        conn.close()
+        for delay, line in _DEMO_INGEST_SCRIPT:
+            await asyncio.sleep(delay)
+            conn = get_db()
+            row = _ingest_job_row(conn, job_id)
+            if row is None or row["status"] not in ("running", "queued"):
+                conn.close()
+                return
+            ev = _parse_ingest_line(line, row["current_stage"])
+            _append_ingest_events(conn, job_id, [ev])
+            conn.close()
+        conn = get_db()
+        row = _ingest_job_row(conn, job_id)
+        counters = json.loads(row["counters_json"] or "{}") if row else {}
+        conn.close()
+        _finalize_ingest_job(
+            job_id,
+            "succeeded",
+            {
+                "considered": int(counters.get("variants_total", 0)) + 12,
+                "written": int(counters.get("variants_done", 0))
+                + int(counters.get("genes_done", 0))
+                + 2,
+                "skipped_for_cap": 0,
+                "skipped_rs_ids": [],
+                "errors": [],
+                "written_paths": [],
+                "raw_system_counts": {"neurotransmitter": 2, "cardiovascular": 2},
+            },
+            None,
+        )
+    except Exception as exc:
+        _finalize_ingest_job(job_id, "failed", None, str(exc))
+
+
+async def _run_genome_ingest_job(job_id: int) -> None:
+    if DEMO_MODE:
+        await _run_demo_ingest_job(job_id)
+        return
+    if not INGEST_SCRIPT_PATH.is_file():
+        _finalize_ingest_job(
+            job_id, "failed", None, f"ingest script not found at {INGEST_SCRIPT_PATH}"
+        )
+        return
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            _sys.executable,
+            "-u",
+            str(INGEST_SCRIPT_PATH),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(REPO_ROOT),
+            env={**os.environ},
+        )
+    except Exception as exc:
+        _finalize_ingest_job(job_id, "failed", None, f"failed to start subprocess: {exc}")
+        return
+    conn = get_db()
+    conn.execute(
+        "UPDATE genome_wiki_ingest_jobs SET status = 'running', started_at = ?, pid = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), proc.pid, job_id),
+    )
+    conn.commit()
+    conn.close()
+    buffer: list[dict] = []
+    last_flush = asyncio.get_event_loop().time()
+
+    async def _flush() -> None:
+        nonlocal buffer, last_flush
+        if not buffer:
+            return
+        c = get_db()
+        try:
+            _append_ingest_events(c, job_id, buffer)
+        finally:
+            c.close()
+        buffer = []
+        last_flush = asyncio.get_event_loop().time()
+
+    try:
+        assert proc.stdout is not None
+        while True:
+            try:
+                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
+            except asyncio.TimeoutError:
+                await _flush()
+                continue
+            if not raw:
+                break
+            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+            stage = None
+            c = get_db()
+            try:
+                row = _ingest_job_row(c, job_id)
+                if row is not None:
+                    stage = row["current_stage"]
+            finally:
+                c.close()
+            ev = _parse_ingest_line(line, stage)
+            buffer.append(ev)
+            now = asyncio.get_event_loop().time()
+            if len(buffer) >= 25 or (now - last_flush) > 0.75:
+                await _flush()
+        await _flush()
+        exit_code = await proc.wait()
+        c = get_db()
+        try:
+            row = _ingest_job_row(c, job_id)
+            counters = json.loads(row["counters_json"] or "{}") if row else {}
+        finally:
+            c.close()
+        if exit_code == 0:
+            _finalize_ingest_job(
+                job_id, "succeeded", _ingest_summary_from_counters(counters), None
+            )
+        else:
+            _finalize_ingest_job(
+                job_id,
+                "failed",
+                _ingest_summary_from_counters(counters),
+                f"ingest script exited with code {exit_code}",
+            )
+    except Exception as exc:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        _finalize_ingest_job(job_id, "failed", None, str(exc))
+
+
+class GenomeIngestStartIn(BaseModel):
+    genome_upload_id: Optional[int] = None
+
+
+def _serialize_ingest_job(row: sqlite3.Row, since: int = 0) -> dict:
+    events = json.loads(row["events_json"] or "[]")
+    counters = json.loads(row["counters_json"] or "{}")
+    summary = json.loads(row["summary_json"]) if row["summary_json"] else None
+    if since > 0:
+        truncated = events[since:]
+    else:
+        truncated = events
+    return {
+        "id": row["id"],
+        "status": row["status"],
+        "current_stage": row["current_stage"],
+        "events": truncated,
+        "events_total": len(events),
+        "counters": counters,
+        "summary": summary,
+        "error_text": row["error_text"],
+        "started_at": row["started_at"],
+        "completed_at": row["completed_at"],
+        "genome_upload_id": row["genome_upload_id"],
+    }
+
+
+@app.post("/api/genome-wiki/ingest-jobs")
+async def start_genome_ingest_job(body: GenomeIngestStartIn):
+    conn = get_db()
+    active = _has_active_ingest_job(conn)
+    if active is not None:
+        conn.close()
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "ingest already running", "job_id": active["id"]},
+        )
+    cur = conn.execute(
+        "INSERT INTO genome_wiki_ingest_jobs "
+        "(genome_upload_id, status, created_at, events_json, counters_json) "
+        "VALUES (?, 'queued', ?, '[]', '{}')",
+        (body.genome_upload_id, datetime.now(timezone.utc).isoformat()),
+    )
+    job_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    asyncio.create_task(_run_genome_ingest_job(job_id))
+    return {"job_id": job_id, "status": "queued"}
+
+
+@app.get("/api/genome-wiki/ingest-jobs/active")
+def get_active_genome_ingest_job():
+    conn = get_db()
+    row = _has_active_ingest_job(conn)
+    if row is None:
+        conn.close()
+        return {"job": None}
+    out = _serialize_ingest_job(row)
+    conn.close()
+    return {"job": out}
+
+
+@app.get("/api/genome-wiki/ingest-jobs/{job_id}")
+def get_genome_ingest_job(job_id: int, since: int = 0):
+    conn = get_db()
+    row = _ingest_job_row(conn, job_id)
+    if row is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="ingest job not found")
+    out = _serialize_ingest_job(row, since=since)
+    conn.close()
+    return out
 
 
 # ---- /api/genome-wiki/pages ----
