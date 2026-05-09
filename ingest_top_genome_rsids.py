@@ -55,6 +55,8 @@ Empirical concurrency ceilings (from running this on a real WGS):
 
 import argparse
 import asyncio
+import gzip
+import io
 import json
 import random
 import re
@@ -293,6 +295,51 @@ def _build_hg19_position_lookup(
     return out
 
 
+# Magic bytes used when the file extension doesn't carry the gzip hint
+# (e.g. someone hands us a `.vcf` that's actually gzipped, or a `.gz` whose
+# extension was stripped). Sniff once and let the open helpers branch.
+_GZIP_MAGIC = b"\x1f\x8b"
+
+
+def _is_gzipped(path: Path) -> bool:
+    """Return True if `path` is gzip-compressed regardless of extension.
+
+    Trusts file content over extension — covers `.vcf.gz`, `.vcf.bgz`
+    (BGZF, gzip-compatible), and the corner case of a `.vcf` that's
+    actually gzipped because someone renamed it.
+    """
+    if path.suffix in {".gz", ".bgz"} or str(path).endswith(".vcf.gz"):
+        return True
+    try:
+        with path.open("rb") as fh:
+            return fh.read(2) == _GZIP_MAGIC
+    except OSError:
+        return False
+
+
+def _open_vcf_read(path: Path) -> io.TextIOBase:
+    """Open a VCF for text-mode reading, transparent gzip support.
+
+    Used by every VCF-streaming code path so the script accepts `.vcf`,
+    `.vcf.gz`, and `.vcf.bgz` interchangeably without per-caller branching.
+    """
+    if _is_gzipped(path):
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open("r", encoding="utf-8", errors="replace")
+
+
+def _open_vcf_write(path: Path) -> io.TextIOBase:
+    """Open a VCF for text-mode writing, transparent gzip output by extension.
+
+    `.vcf.gz` / `.gz` / `.bgz` outputs are written through gzip; everything
+    else is plain text. Mirror of _open_vcf_read so a round-trip
+    (read → annotate → write) preserves the user's compression choice.
+    """
+    if path.suffix in {".gz", ".bgz"} or str(path).endswith(".vcf.gz"):
+        return gzip.open(path, "wt", encoding="utf-8")
+    return path.open("w", encoding="utf-8")
+
+
 def _detect_vcf_build(
     vcf_path: Path,
     hg38_lookup: dict[tuple[str, int], str],
@@ -307,7 +354,7 @@ def _detect_vcf_build(
     everything — read until we have a real signal.
     """
     hg38_hits = hg19_hits = sampled = 0
-    with vcf_path.open() as fh:
+    with _open_vcf_read(vcf_path) as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
@@ -361,8 +408,7 @@ def _annotate_vcf_in_place(
     """
     total = had_id = annotated = canonicalised = 0
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with in_path.open("r", encoding="utf-8", errors="replace") as fin, \
-         out_path.open("w", encoding="utf-8") as fout:
+    with _open_vcf_read(in_path) as fin, _open_vcf_write(out_path) as fout:
         for line in fin:
             if line.startswith("##"):
                 fout.write(line)
@@ -407,7 +453,7 @@ def _annotate_vcf_in_place(
 
 def _stream_user_vcf(vcf_path: Path, known_rsids: set[str]) -> list[tuple[str, str, str, str]]:
     user_rows: list[tuple[str, str, str, str]] = []
-    with open(vcf_path, "r", encoding="utf-8", errors="replace") as fh:
+    with _open_vcf_read(vcf_path) as fh:
         for line in fh:
             if line.startswith("#"):
                 continue
@@ -1318,12 +1364,7 @@ async def _ingest_batch(
             rs = r["rsid"]
             try:
                 app._write_source_page(rs, raw_pages[rs])
-                v = {
-                    "rs_id": rs,
-                    "gene": r["gene"],
-                    "genotype": r["vcf_gt"],
-                    "user_genotype_snpedia": r["user_genotype"],
-                }
+                v = {"rs_id": rs, "gene": r["gene"], "genotype": r["vcf_gt"]}
                 scan = app._scan_snpedia_page(raw_pages[rs])
                 if scan["magnitude"] == 0 and r["magnitude"] is not None:
                     scan["magnitude"] = r["magnitude"]
