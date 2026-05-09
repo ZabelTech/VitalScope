@@ -61,7 +61,7 @@ import re
 import sqlite3
 import sys
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
@@ -71,6 +71,14 @@ import backend.app as app
 DEFAULT_RANK_CACHE = app.GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
 DEFAULT_HG38_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg38.tsv"
 DEFAULT_HG19_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg19.tsv"
+DEFAULT_GENE_INTERVALS_CACHE = app.GENOME_WIKI_ROOT / "snpedia_gene_intervals_hg38.tsv"
+
+# Gene-interval resolver knobs. Padding accounts for regulatory regions just
+# outside the curated CDS extents; nearest-gene radius is the max distance
+# we'll claim a "near this gene" attribution for an intergenic position.
+_GENE_INTERVAL_PAD_BP = 5_000
+_GENE_INTERVAL_PAD_BP_SINGLETON = 10_000  # genes with only one SNPedia variant
+_GENE_NEAREST_RADIUS_BP = 50_000
 
 _GENE_FIELD_RE = re.compile(r"\|\s*Gene\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECASE)
 _GENO_TITLE_RE = re.compile(r"^Rs(\d+)\(([ACGT]);([ACGT])\)$", re.IGNORECASE)
@@ -438,31 +446,57 @@ _RSNUM_SUMMARY_RE = re.compile(r"\|\s*Summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
 
 
 _RSNUM_GENE_RE = re.compile(r"\|\s*Gene\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECASE)
-_VARIANT_PAGE_BODY_MIN = 2000  # filter stub pages (Rsnum-only); 2000 is the
-# observed cliff between "infobox-only stubs" (≤1000 chars) and pages with
-# real synthesised content (≥2000 chars). Trades ~12k thin pages for ~1.5k
-# substantial ones. SLC6A4/MAOA/COMT cleared; DRD5's rs6283 (body=463) is
-# a genuine stub and stays filtered.
+
+# Content-signal regexes for the variant-page fallback gate. The previous
+# 2000-char body cutoff dropped ~17k pages with real PMID/ClinVar/prose
+# content because PMID Auto templates are dense (small wikitext, large
+# rendered footprint). Audit (audit_ingest_gates.py) showed ~94% of those
+# drops were false negatives — e.g. rs616338 ABI3 Alzheimer's OR=1.43
+# P=4.56e-10 in 483 chars of wikitext.
+#
+# PMID detection covers three styles seen in the SNPedia mirror:
+#   {{PMID|12345}}, {{PMID Auto |PMID=12345 ...}}, and bare "PMID: 12345"
+#   in older pages (rs10766071's circadian-disorder citation block).
+_PMID_RE    = re.compile(r"\{\{PMID(\s*Auto)?\b|\bPMID\s*:?\s*\d{4,}", re.IGNORECASE)
+_CLINVAR_RE = re.compile(r"\{\{ClinVar\b", re.IGNORECASE)
+# Narrative line: starts with any wikilink ([[rs...]] or [[Gene]] or
+# [[condition]]), or italicised text, or a sentence-cased letter, or a
+# raw URL (rs984924 cites a biorxiv URL outside any template).
+_PROSE_RE   = re.compile(
+    r"^\s*(\[\[[A-Za-z]|''?[A-Z]|https?://)", re.MULTILINE)
 
 
-def _build_variant_page_summary_lookup(conn: sqlite3.Connection) -> dict[str, str]:
-    """Map rsid → display summary from canonical Rs<N> variant pages.
+def _build_variant_page_summary_lookup(
+    conn: sqlite3.Connection,
+) -> dict[str, dict]:
+    """Map rsid → metadata dict from canonical Rs<N> variant pages.
 
     Used as a fallback when SNPedia has a variant page for a rsid but no
-    per-genotype subpage that matches the user's allele combo (common for
+    per-genotype subpage matches the user's allele combo (common for
     SLC6A4, DRD5, MAOA, and ~half of HLA / immune variants — the
     pharmacology lives on the parent page, not split per allele).
 
-    Eligibility rules — a rsid enters the lookup if:
-      a) the Rsnum infobox has a non-empty `|Summary=` field, OR
-      b) it has a `|Gene=` tag AND the wikitext body is at least
-         _VARIANT_PAGE_BODY_MIN chars (filters position-only stubs while
-         keeping real curated pages without an explicit Summary).
-    Pages that match (b) get a synthesized placeholder summary so the
-    rank cache stays human-readable.
+    Eligibility rules — a rsid enters the lookup if EITHER:
+      a) the Rsnum infobox has a non-empty `|Summary=` field (always
+         passes — the curator wrote a summary), OR
+      b) the page has at least one of:
+           - `{{PMID...}}` / `{{PMID Auto...}}` template OR plain `PMID: NNNN`
+           - `{{ClinVar...}}` block
+           - narrative prose line (wikilink, italics, sentence-cased start, URL)
+         The `|Gene=` field is no longer required; pages without one get
+         `gene=None` here and are resolved by position downstream.
+
+    Returned value is a dict per rsid:
+      summary  — short human-readable display string for the rank cache
+      gene     — gene symbol from |Gene= (None if missing — defer to
+                 position-based resolver)
+      chrom    — chromosome string from |Chromosome= (None if missing)
+      pos      — int hg38 position from |position= (None if missing)
+      signals  — list of which signals matched ("Summary", "PMID", "ClinVar",
+                 "prose"); useful for rank-cache provenance
     """
     print("[rank] indexing SNPedia variant pages for fallback summaries…", flush=True)
-    out: dict[str, str] = {}
+    out: dict[str, dict] = {}
     for row in conn.execute(
         "SELECT title, raw_json FROM snpedia_pages "
         "WHERE title GLOB 'Rs[0-9]*' AND title NOT GLOB '*(*'"
@@ -479,19 +513,199 @@ def _build_variant_page_summary_lookup(conn: sqlite3.Connection) -> dict[str, st
         if not rsid_m:
             continue
         rsid = "rs" + rsid_m.group(1)
+
+        gene_m = _RSNUM_GENE_RE.search(block)
+        chr_m = _RSNUM_CHR_RE.search(block)
+        pos_m = _RSNUM_POS_RE.search(block)
+        gene = _normalise_gene(gene_m.group(1)) if gene_m else None
+        if gene == "UNK":
+            gene = None
+        chrom = chr_m.group(1).upper() if chr_m else None
+        try:
+            pos = int(pos_m.group(1)) if pos_m else None
+        except ValueError:
+            pos = None
+
         sum_m = _RSNUM_SUMMARY_RE.search(block)
         if sum_m and sum_m.group(1).strip():
-            out[rsid] = sum_m.group(1).strip()
+            out[rsid] = {
+                "summary": sum_m.group(1).strip(),
+                "gene": gene, "chrom": chrom, "pos": pos,
+                "signals": ["Summary"],
+            }
             continue
-        gene_m = _RSNUM_GENE_RE.search(block)
-        if gene_m and len(text) >= _VARIANT_PAGE_BODY_MIN:
-            out[rsid] = f"(SNPedia variant page for {gene_m.group(1).strip()} — no summary)"
+
+        signals = []
+        if _PMID_RE.search(text):
+            signals.append("PMID")
+        if _CLINVAR_RE.search(text):
+            signals.append("ClinVar")
+        if _PROSE_RE.search(text):
+            signals.append("prose")
+        if not signals:
+            continue
+        sig_label = "+".join(signals)
+        if gene:
+            summary = f"(SNPedia variant page for {gene} — {sig_label})"
+        else:
+            summary = f"(SNPedia variant page; no |Gene= field — signals: {sig_label})"
+        out[rsid] = {
+            "summary": summary,
+            "gene": gene, "chrom": chrom, "pos": pos,
+            "signals": signals,
+        }
     return out
 
 
+def _build_gene_intervals_hg38(
+    conn: sqlite3.Connection, cache_path: Path,
+) -> dict[str, list[tuple[str, int, int]]]:
+    """Build per-chromosome gene intervals from SNPedia parent pages.
+
+    Aggregates every Rs<N> page that has `|Gene=` + `|Chromosome=` +
+    `|position=` into per-(chrom, gene) extents (min position, max
+    position) padded by _GENE_INTERVAL_PAD_BP. Genes with only a single
+    SNPedia variant get a wider symmetric pad so the position lookup has
+    something to hit. Restricts to hg38 records (matches the rest of the
+    SNPedia data in this DB).
+
+    Used downstream by `_resolve_gene_at_position` to fill in the gene
+    field for variant pages that have no `|Gene=` infobox entry but do
+    have content signal (PMID/ClinVar/prose). Without this, those pages
+    would land as `gene=UNK` and miss gene-level synthesis.
+
+    Returned shape: dict[chrom] -> list of (gene, start, end), unsorted.
+    Cached as a TSV under the wiki root because indexing all 108K parent
+    pages takes ~30s.
+    """
+    if cache_path.is_file():
+        out: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
+        with cache_path.open() as fh:
+            next(fh)
+            for line in fh:
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 4:
+                    continue
+                try:
+                    out[parts[0]].append((parts[1], int(parts[2]), int(parts[3])))
+                except ValueError:
+                    continue
+        n = sum(len(v) for v in out.values())
+        print(f"[gene-resolver] loaded {n:,} gene intervals from {cache_path}",
+              flush=True)
+        return out
+
+    print("[gene-resolver] building gene intervals from SNPedia parent pages…",
+          flush=True)
+    per_gene: dict[tuple[str, str], list[int]] = defaultdict(list)
+    for row in conn.execute(
+        "SELECT title, raw_json FROM snpedia_pages "
+        "WHERE title GLOB 'Rs[0-9]*' AND title NOT GLOB '*(*'"
+    ):
+        try:
+            text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        except Exception:
+            continue
+        block_m = _RSNUM_BLOCK_RE.search(text)
+        if not block_m:
+            continue
+        block = block_m.group(0)
+        gene_m = _RSNUM_GENE_RE.search(block)
+        chr_m = _RSNUM_CHR_RE.search(block)
+        pos_m = _RSNUM_POS_RE.search(block)
+        if not (gene_m and chr_m and pos_m):
+            continue
+        asm_m = _RSNUM_ASM_RE.search(block)
+        if asm_m and asm_m.group(1) != "38":
+            continue
+        gene = _normalise_gene(gene_m.group(1))
+        if gene == "UNK":
+            continue
+        try:
+            pos = int(pos_m.group(1))
+        except ValueError:
+            continue
+        per_gene[(chr_m.group(1).upper(), gene)].append(pos)
+
+    intervals_by_chrom: dict[str, list[tuple[str, int, int]]] = defaultdict(list)
+    for (chrom, gene), positions in per_gene.items():
+        positions.sort()
+        if len(positions) == 1:
+            pad = _GENE_INTERVAL_PAD_BP_SINGLETON
+            start, end = positions[0] - pad, positions[0] + pad
+        else:
+            start = positions[0] - _GENE_INTERVAL_PAD_BP
+            end = positions[-1] + _GENE_INTERVAL_PAD_BP
+        intervals_by_chrom[chrom].append((gene, start, end))
+
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    with cache_path.open("w") as fh:
+        fh.write("chrom\tgene\tstart\tend\n")
+        for chrom in sorted(intervals_by_chrom):
+            for gene, start, end in sorted(intervals_by_chrom[chrom]):
+                fh.write(f"{chrom}\t{gene}\t{start}\t{end}\n")
+    n = sum(len(v) for v in intervals_by_chrom.values())
+    print(f"[gene-resolver] cached {n:,} gene intervals to {cache_path}",
+          flush=True)
+    return intervals_by_chrom
+
+
+def _resolve_gene_at_position(
+    chrom: Optional[str], pos: Optional[int],
+    intervals_by_chrom: dict[str, list[tuple[str, int, int]]],
+) -> Optional[str]:
+    """Return the gene whose SNPedia-derived interval best matches (chrom, pos).
+
+    Picks the smallest-span containing interval if any contain the position;
+    otherwise the nearest gene within _GENE_NEAREST_RADIUS_BP. Returns None
+    when neither succeeds (truly intergenic, no nearby annotated gene).
+    """
+    if not chrom or pos is None:
+        return None
+    candidates = intervals_by_chrom.get(chrom)
+    if not candidates:
+        return None
+    contained = [
+        (gene, end - start)
+        for gene, start, end in candidates
+        if start <= pos <= end
+    ]
+    if contained:
+        contained.sort(key=lambda x: x[1])
+        return contained[0][0]
+    nearby = [
+        (gene, min(abs(pos - start), abs(pos - end)))
+        for gene, start, end in candidates
+        if abs(pos - start) < _GENE_NEAREST_RADIUS_BP
+            or abs(pos - end) < _GENE_NEAREST_RADIUS_BP
+    ]
+    if nearby:
+        nearby.sort(key=lambda x: x[1])
+        return nearby[0][0]
+    return None
+
+
 def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
+    """Build the ranked candidate list for ingestion.
+
+    Each entry carries a `tier` (1/2/3) so downstream filtering with `--tier`
+    can pick how aggressive a run should be:
+
+      tier=1  Genotype subpage hit — gold; fully curated allele-effect page,
+              has magnitude. AI compile produces a high-confidence variant
+              page. Equivalent to the old "with magnitude" block.
+      tier=2  Fallback hit (PMID/ClinVar/prose signal) AND a gene name was
+              resolved (either from the SNPedia |Gene= field or by
+              position-based lookup against the SNPedia-derived gene
+              intervals). AI compile produces a gene-anchored page.
+      tier=3  Fallback hit but no gene name could be resolved (no |Gene= and
+              no nearby SNPedia-annotated gene within 50kb). The page
+              writes as a stub via the T3 path — no AI tokens spent —
+              and gets `gene=UNK` until the user upgrades it.
+    """
     geno_lookup = _build_genotype_lookup(conn)
     variant_page_summaries = _build_variant_page_summary_lookup(conn)
+    gene_intervals = _build_gene_intervals_hg38(conn, DEFAULT_GENE_INTERVALS_CACHE)
     known_rsids = {r["rsid"].lower() for r in conn.execute("SELECT rsid FROM snpedia_variants")}
     print(
         f"[rank] {len(geno_lookup):,} genotype-magnitude pairs; "
@@ -503,39 +717,51 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
     user_rows = _stream_user_vcf(vcf_path, known_rsids)
     print(f"[rank] {len(user_rows):,} VCF rows match SNPedia", flush=True)
     ranked: list[dict] = []
-    fallback_count = 0
+    tier_counts: Counter[int] = Counter()
     for rsid, a1, a2, gt_raw in user_rows:
         rec = geno_lookup.get((rsid, a1, a2)) or geno_lookup.get((rsid, a2, a1))
-        if rec is None:
-            # No genotype subpage matches the user's allele combo. Fall back
-            # to the variant page if SNPedia has one with a non-empty
-            # `|Summary=` field — these enter the no-magnitude tier of the
-            # rank. Variant-page entries with no summary are stubs (just
-            # position metadata, no medical info to synthesise) and are
-            # skipped to avoid burning AI calls on empty pages.
-            summary = variant_page_summaries.get(rsid, "")
-            if not summary:
-                continue
-            rec = {"magnitude": None, "repute": "", "summary": summary}
-            fallback_count += 1
+        if rec is not None:
+            ranked.append({
+                "rsid": rsid,
+                "user_genotype": f"({a1};{a2})",
+                "vcf_gt": gt_raw,
+                "magnitude": rec["magnitude"],
+                "repute": rec["repute"],
+                "summary": rec["summary"],
+                "tier": 1,
+                "gene": None,  # gene comes from the parent page at compile time
+            })
+            tier_counts[1] += 1
+            continue
+        meta = variant_page_summaries.get(rsid)
+        if meta is None:
+            continue
+        gene = meta["gene"] or _resolve_gene_at_position(
+            meta["chrom"], meta["pos"], gene_intervals)
+        tier = 2 if gene else 3
         ranked.append({
             "rsid": rsid,
             "user_genotype": f"({a1};{a2})",
             "vcf_gt": gt_raw,
-            "magnitude": rec["magnitude"],
-            "repute": rec["repute"],
-            "summary": rec["summary"],
+            "magnitude": None,
+            "repute": "",
+            "summary": meta["summary"],
+            "tier": tier,
+            "gene": gene,
         })
+        tier_counts[tier] += 1
     print(
         f"[rank] {len(ranked):,} ranked entries "
-        f"({len(ranked) - fallback_count:,} from genotype subpages, "
-        f"{fallback_count:,} from variant-page fallback)",
+        f"(T1={tier_counts[1]:,} from genotype subpages, "
+        f"T2={tier_counts[2]:,} from fallback with resolvable gene, "
+        f"T3={tier_counts[3]:,} from fallback with no gene)",
         flush=True,
     )
-    # Two-phase ordering: magnitude entries first (descending), then the
-    # no-magnitude entries (lexicographic by rsid). `magnitude is None`
-    # sorts True > False, so the None block lands after every numeric one.
+    # Three-phase ordering: T1 first (descending magnitude), then T2/T3 by
+    # rsid. `tier` is the primary key so a `--tier 1,2` filter slice always
+    # consumes T1+T2 together before any T3 enters the candidate set.
     ranked.sort(key=lambda r: (
+        r.get("tier", 1),
         r["magnitude"] is None,
         -(r["magnitude"] or 0.0),
         r["rsid"],
@@ -543,20 +769,27 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
     return ranked
 
 
+_RANK_CACHE_HEADER = "rsid\tuser_genotype\tvcf_gt\tmagnitude\trepute\tsummary\ttier\tgene\n"
+
+
 def _write_rank_cache(ranked: list[dict], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w") as fh:
-        fh.write("rsid\tuser_genotype\tvcf_gt\tmagnitude\trepute\tsummary\n")
+        fh.write(_RANK_CACHE_HEADER)
         for r in ranked:
             s = r["summary"].replace("\t", " ").replace("\n", " ")[:200]
             mag = "" if r["magnitude"] is None else r["magnitude"]
+            tier = r.get("tier", 1)
+            gene = r.get("gene") or ""
             fh.write(
                 f"{r['rsid']}\t{r['user_genotype']}\t{r['vcf_gt']}\t"
-                f"{mag}\t{r['repute']}\t{s}\n"
+                f"{mag}\t{r['repute']}\t{s}\t{tier}\t{gene}\n"
             )
 
 
 def _read_rank_cache(path: Path) -> list[dict]:
+    """Load the rank cache. Backwards-compatible with pre-tier 6-column files
+    (auto-assigns tier based on magnitude presence: with-mag=>1, no-mag=>2)."""
     rows: list[dict] = []
     with path.open() as fh:
         next(fh)
@@ -569,6 +802,16 @@ def _read_rank_cache(path: Path) -> list[dict]:
                 magnitude: Optional[float] = float(mag_raw) if mag_raw else None
             except ValueError:
                 magnitude = None
+            if len(parts) >= 8:
+                try:
+                    tier = int(parts[6])
+                except ValueError:
+                    tier = 1 if magnitude is not None else 2
+                gene = parts[7] or None
+            else:
+                # Legacy 6-column cache: derive tier from magnitude.
+                tier = 1 if magnitude is not None else 2
+                gene = None
             rows.append({
                 "rsid": parts[0],
                 "user_genotype": parts[1],
@@ -576,8 +819,92 @@ def _read_rank_cache(path: Path) -> list[dict]:
                 "magnitude": magnitude,
                 "repute": parts[4],
                 "summary": parts[5] if len(parts) > 5 else "",
+                "tier": tier,
+                "gene": gene,
             })
     return rows
+
+
+def _write_t3_stub(r: dict) -> Path:
+    """Write a no-AI variant page for a tier-3 candidate.
+
+    T3 entries have a SNPedia content signal (PMID/ClinVar/prose) but no
+    resolvable gene name, so AI-compiling them would produce a `gene=UNK`
+    page with no anchor. Instead we stamp a stub recording the user's
+    genotype + the SNPedia summary + a pointer to dbSNP/ClinVar so the
+    variant is visible in the wiki and can be re-processed once a gene
+    is resolved (e.g. by extending GENE_REGIONS_HG19 in
+    expand_gene_coverage.py or running --rebuild-rank after a SNPedia
+    refresh).
+
+    Returns the written path.
+    """
+    rsid = r["rsid"]
+    out_dir = app.GENOME_WIKI_ROOT / "wiki" / "variants"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    path = out_dir / f"{rsid}_UNK.md"
+    today = datetime.utcnow().date().isoformat()
+    summary = r.get("summary", "").replace("\n", " ").strip()
+    body = f"""---
+type: variant
+rsid: {rsid}
+gene: UNK
+my_genotype: {r['vcf_gt']}
+my_zygosity: ''
+snpedia_magnitude: null
+evidence_strength: low
+title: {rsid} (gene unresolved) — tier-3 stub
+summary: {summary or 'SNPedia content signal present but no gene resolvable.'}
+source_paths:
+- sources/snpedia/{rsid}
+related: []
+last_reviewed: '{today}'
+informational_only: true
+provenance: tier-3-stub
+---
+
+## What it is
+
+`{rsid}` has a SNPedia parent page with a content signal
+({summary or 'PMID/ClinVar/prose detected'}) but no `|Gene=` field in the
+infobox, and the SNPedia-derived gene-interval index found no annotated
+gene within {_GENE_NEAREST_RADIUS_BP // 1000}kb. The variant is therefore
+ingested as a tier-3 stub — visible in the wiki but not AI-compiled until a
+gene anchor is established.
+
+For curated annotation, look it up in
+[dbSNP](https://www.ncbi.nlm.nih.gov/snp/{rsid}),
+[ClinVar](https://www.ncbi.nlm.nih.gov/clinvar/?term={rsid}), or
+[Ensembl](https://www.ensembl.org/Homo_sapiens/Variation/Explore?v={rsid}).
+
+## Your data
+
+| Field | Value |
+| :--- | :--- |
+| User genotype (VCF) | **{r['vcf_gt']}** |
+| User allele pair | {r['user_genotype']} |
+| SNPedia summary | {summary or '—'} |
+
+## What it means
+
+Insufficient curated context in this wiki to interpret `{rsid}` on its own.
+The dbSNP/ClinVar/Ensembl links above carry the live annotation; once a
+gene is associated (manually, or by extending the position-based resolver
+in `ingest_top_genome_rsids.py`), this stub can be upgraded to a full
+variant page by re-running with `--force --tier 1,2,3`.
+
+## What we don't know
+
+The gene-anchor is the missing piece. The variant likely sits in an
+intergenic / regulatory region not covered by SNPedia's per-variant gene
+annotations. No clinical interpretation is rendered here to avoid
+confabulating an effect from the SNPedia summary alone.
+
+---
+*This page is informational only and is not medical advice.*
+"""
+    path.write_text(body, encoding="utf-8")
+    return path
 
 
 def _existing_variant_rsids() -> set[str]:
@@ -1002,6 +1329,14 @@ def main(argv=None) -> int:
                              "lexicographic after; default 30)")
     parser.add_argument("--start", type=int, default=0,
                         help="skip the first K ranked rsids (default 0)")
+    parser.add_argument("--tier", default="1,2",
+                        help="comma-separated tier filter applied BEFORE --start/--top-n. "
+                             "1=Summary or genotype subpage hit (gold), "
+                             "2=fallback signal+resolved gene (good), "
+                             "3=fallback signal but no gene resolvable (writes a "
+                             "stub instead of AI-compiling). "
+                             "Default '1,2' — pass '1,2,3' to also stub-write the "
+                             "no-gene long tail.")
     parser.add_argument("--vcf", type=Path, default=None,
                         help="VCF path; defaults to the latest genome_upload")
     parser.add_argument("--rank-cache", type=Path, default=DEFAULT_RANK_CACHE,
@@ -1173,7 +1508,22 @@ def main(argv=None) -> int:
         ranked = _read_rank_cache(args.rank_cache)
         print(f"[rank] loaded {args.rank_cache} ({len(ranked):,} rows)")
 
-    candidates = ranked[args.start: args.start + args.top_n]
+    try:
+        allowed_tiers = {int(t.strip()) for t in args.tier.split(",") if t.strip()}
+    except ValueError:
+        parser.error(f"--tier must be comma-separated integers, got {args.tier!r}")
+    if not allowed_tiers <= {1, 2, 3}:
+        parser.error(f"--tier values must be in {{1,2,3}}, got {sorted(allowed_tiers)}")
+
+    tier_filtered = [r for r in ranked if r.get("tier", 1) in allowed_tiers]
+    print(
+        f"[tier] filtered {len(ranked):,} → {len(tier_filtered):,} "
+        f"(allowed tiers={sorted(allowed_tiers)}; "
+        f"by-tier: {dict(Counter(r.get('tier', 1) for r in ranked))})",
+        flush=True,
+    )
+
+    candidates = tier_filtered[args.start: args.start + args.top_n]
     if not candidates:
         print("no rsids in selected range")
         return 0
@@ -1182,13 +1532,35 @@ def main(argv=None) -> int:
     n_no_mag = len(candidates) - n_with_mag
     skip = set() if args.force else _existing_variant_rsids()
     fresh = [r for r in candidates if r["rsid"] not in skip]
+    n_t3 = sum(1 for r in fresh if r.get("tier") == 3)
+    n_ai = len(fresh) - n_t3
     print(
         f"\n[batch] selected {len(candidates)} (start={args.start}); "
         f"{n_with_mag} with magnitude / {n_no_mag} without; "
-        f"{len(candidates) - len(fresh)} already on disk, {len(fresh)} to compile"
+        f"{len(candidates) - len(fresh)} already on disk, "
+        f"{n_ai} to AI-compile (T1+T2), {n_t3} to stub-write (T3)"
     )
     if not fresh:
         print("nothing to do")
+        return 0
+
+    # Tier-3 fork: stub-write outside the AI pipeline. T3 entries don't have
+    # a resolvable gene anchor, so AI-compiling them produces gene=UNK pages
+    # that bloat the wiki without adding interpretation. Stub them directly
+    # from VCF + SNPedia summary; users can re-process with --force --tier 3
+    # later if a gene is established.
+    t3_fresh = [r for r in fresh if r.get("tier") == 3]
+    fresh = [r for r in fresh if r.get("tier") != 3]
+    t3_written: list[Path] = []
+    for r in t3_fresh:
+        try:
+            t3_written.append(_write_t3_stub(r))
+        except OSError as e:
+            print(f"  ✗ T3 stub write failed for {r['rsid']}: {e}")
+    if t3_written:
+        print(f"[T3] wrote {len(t3_written)} stub(s) to wiki/variants/*_UNK.md")
+    if not fresh:
+        print("nothing to AI-compile (T3-only batch)")
         return 0
 
     raw_pages: dict[str, str] = {}
