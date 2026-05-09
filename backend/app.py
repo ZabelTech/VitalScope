@@ -8530,6 +8530,47 @@ _CLINVAR_RANK = {
 }
 
 
+_SNPEDIA_GENO_RE = _re.compile(r"^\(([ACGT]);([ACGT])\)$", _re.IGNORECASE)
+
+
+def _diploid_from_snpedia_notation(geno: str) -> str:
+    """Convert a SNPedia genotype-page notation like '(C;C)' or '(G;T)'
+    into a slash-form diploid string ('C/C', 'G/T'). The ingest pipeline
+    has already done the VCF-to-SNPedia join, so this string is the
+    authoritative plus-strand call. Returns '' on anything malformed."""
+    m = _SNPEDIA_GENO_RE.match((geno or "").strip())
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}/{m.group(2).upper()}"
+
+
+def _resolve_diploid_alleles(genotype: str, ref: str, alt: str) -> str:
+    """Translate a VCF GT call (e.g. '1/1') + REF + ALT into a plus-strand
+    diploid allele string ('C/C', 'G/T', etc.). Returns '' when the GT or
+    alleles aren't expressible as single-base SNVs (skip indels and complex
+    calls so the LLM falls back to the raw VCF call rather than seeing a
+    misleading translation)."""
+    gt = (genotype or "").strip()
+    r = (ref or "").upper()
+    a = (alt or "").upper()
+    if not gt or "|" in gt and "/" not in gt:
+        gt = gt.replace("|", "/")
+    parts = gt.replace("|", "/").split("/")
+    if len(parts) != 2:
+        return ""
+    if not (len(r) == 1 and len(a) == 1 and r in "ACGT" and a in "ACGT"):
+        return ""
+    out = []
+    for p in parts:
+        if p == "0":
+            out.append(r)
+        elif p == "1":
+            out.append(a)
+        else:
+            return ""
+    return "/".join(out)
+
+
 def _scan_snpedia_page(text: str) -> dict:
     """Extract magnitude + ClinVar significance hint from a raw SNPedia page."""
     mag = 0.0
@@ -9022,6 +9063,13 @@ async def _compile_variant_page(
     rs = variant.get("rs_id", "").lower()
     gene = variant.get("gene") or (registry or {}).get("gene") or ""
     genotype = variant.get("genotype") or ""
+    ref_allele = (variant.get("ref_allele") or "").upper()
+    alt_allele = (variant.get("alt_allele") or "").upper()
+    snpedia_geno = variant.get("user_genotype_snpedia") or ""
+    diploid = (
+        _diploid_from_snpedia_notation(snpedia_geno)
+        or _resolve_diploid_alleles(genotype, ref_allele, alt_allele)
+    )
     raw_text = _read_wiki_page("raw/snpedia/" + rs + ".md")["raw"]
     seed = ""
     if registry:
@@ -9038,10 +9086,17 @@ async def _compile_variant_page(
                 indent=2,
             )
         )
+    diploid_line = (
+        f"User diploid alleles (plus strand, authoritative): {diploid}\n"
+        if diploid else ""
+    )
     user_text = (
         f"User RS ID: {rs}\n"
         f"User gene: {gene}\n"
         f"User genotype (VCF call): {genotype}\n"
+        f"User VCF reference allele: {ref_allele or '(unknown)'}\n"
+        f"User VCF alternate allele: {alt_allele or '(unknown)'}\n"
+        f"{diploid_line}"
         f"SNPedia magnitude: {scan.get('magnitude')}\n"
         f"SNPedia significance hint: {scan.get('significance') or 'unknown'}\n"
         f"Source page wikilink: [[sources/snpedia/{rs}]]\n"
@@ -9054,14 +9109,32 @@ async def _compile_variant_page(
         "You are compiling a personal-genome wiki page in VitalScope. "
         "Output via the record_variant_page tool. ACMG terminology only "
         "(Pathogenic, Likely Pathogenic, VUS, Likely Benign, Benign, "
-        "drug-response, risk-factor). Never colloquial. CITATION RULE: "
-        "every prose paragraph that mentions an ACMG classification "
-        "(risk-factor, drug-response, pathogenic, likely-pathogenic, "
-        "likely-benign, VUS) or a clinical effect (associated with, "
-        "increases risk, reduces activity, gain-of-function, "
-        "loss-of-function, protective, deleterious) MUST end with a "
-        f"citation — either [[sources/snpedia/{rs}]] (preferred) or a "
-        "direct URL (PubMed, ClinVar, dbSNP, OMIM, GeneCards, ACMG "
+        "drug-response, risk-factor). Never colloquial.\n\n"
+        "STRAND / GENOTYPE RULE — read carefully, this is the most common "
+        "failure mode: The user's diploid alleles are given to you in the "
+        "user message (\"User diploid alleles (plus strand, authoritative)\"). "
+        "These are already on the plus strand and they are the ground truth "
+        "for the ## Your data section. DO NOT re-derive the genotype by "
+        "counting positions in the SNPedia geno1/geno2/geno3 listing — that "
+        "ordering is alphabetical, not VCF-indexed, and the correspondence "
+        "to the VCF 0/0, 0/1, 1/1 calls is not positional. DO NOT apply any "
+        "strand-flip, complement, or 'plus-orientation conversion' on top of "
+        "the alleles given — they are already the user's plus-strand call. "
+        "Quote the diploid alleles verbatim in ## Your data (e.g. "
+        "\"Your genotype at this position is C/C\"). Then identify which "
+        "SNPedia genotype subpage matches by matching the unordered allele "
+        "set (C/C matches geno (C;C) regardless of listing position). The "
+        "SNPedia magnitude annotation tells you which genotype is the high-"
+        "magnitude / clinically-flagged one — cross-check that the magnitude "
+        "you cite is attached to the SNPedia genotype that matches the user's "
+        "diploid alleles, not a different genotype.\n\n"
+        "CITATION RULE: every prose paragraph that mentions an ACMG "
+        "classification (risk-factor, drug-response, pathogenic, "
+        "likely-pathogenic, likely-benign, VUS) or a clinical effect "
+        "(associated with, increases risk, reduces activity, "
+        "gain-of-function, loss-of-function, protective, deleterious) MUST "
+        f"end with a citation — either [[sources/snpedia/{rs}]] (preferred) "
+        "or a direct URL (PubMed, ClinVar, dbSNP, OMIM, GeneCards, ACMG "
         "guidelines, peer-reviewed papers). Inline URLs like "
         "https://pubmed.ncbi.nlm.nih.gov/12345/ are valid citations. "
         "Use `### Subheading` for section headers — do NOT write "
@@ -9073,9 +9146,11 @@ async def _compile_variant_page(
         f"[[sources/snpedia/{rs}]]. Do NOT self-reference (no "
         f"[[variants/{rs}_*]]); do NOT invent wikilinks to genes, "
         "systems, traits, or compounds — write those as plain text or as "
-        "external URL citations. Summary or fact tables are welcome; "
-        "ensure each table is followed by a prose sentence that ends "
-        "with a citation."
+        "external URL citations. Do NOT echo or include any raw SNPedia "
+        "wikitext templates such as {{Rsnum ...}} or {{PMID ...}} in the "
+        "body — convert their content to prose. Summary or fact tables are "
+        "welcome; ensure each table is followed by a prose sentence that "
+        "ends with a citation."
     )
     payload = await _call_ai_text_tool(
         system=system, user_text=user_text, tool=_VARIANT_PAGE_TOOL,
