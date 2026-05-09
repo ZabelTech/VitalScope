@@ -1364,7 +1364,12 @@ async def _ingest_batch(
             rs = r["rsid"]
             try:
                 app._write_source_page(rs, raw_pages[rs])
-                v = {"rs_id": rs, "gene": r["gene"], "genotype": r["vcf_gt"]}
+                v = {
+                    "rs_id": rs,
+                    "gene": r["gene"],
+                    "genotype": r["vcf_gt"],
+                    "user_genotype_snpedia": r["user_genotype"],
+                }
                 scan = app._scan_snpedia_page(raw_pages[rs])
                 if scan["magnitude"] == 0 and r["magnitude"] is not None:
                     scan["magnitude"] = r["magnitude"]
