@@ -3,12 +3,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   apiFetch,
   deleteGenomeUpload,
+  fetchActiveGenomeIngestJob,
   fetchGenomeVariants,
   ingestSnpediaBundle,
   listGenomeUploads,
+  startGenomeIngestJob,
 } from "../api";
-import type { GenomeUpload, GenomeVariant, GenomeWikiIngestResult } from "../types";
+import type {
+  GenomeIngestJob,
+  GenomeUpload,
+  GenomeVariant,
+  GenomeWikiIngestResult,
+} from "../types";
 import { Card, CardHeader } from "./Card";
+import { GenomeIngestModal } from "./GenomeIngestModal";
 import { ImageUpload } from "./ImageUpload";
 
 const today = format(new Date(), "yyyy-MM-dd");
@@ -25,6 +33,9 @@ const DOMAIN_LABELS: Record<string, string> = {
 export function GenomeSection() {
   const [uploads, setUploads] = useState<GenomeUpload[]>([]);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [activeJob, setActiveJob] = useState<GenomeIngestJob | null>(null);
+  const [activeJobLoaded, setActiveJobLoaded] = useState(false);
+  const [modalJobId, setModalJobId] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -34,9 +45,24 @@ export function GenomeSection() {
     }
   }, []);
 
+  const reloadActiveJob = useCallback(async () => {
+    try {
+      const j = await fetchActiveGenomeIngestJob();
+      setActiveJob(j);
+    } catch {
+      setActiveJob(null);
+    } finally {
+      setActiveJobLoaded(true);
+    }
+  }, []);
+
   useEffect(() => {
     reload();
   }, [reload]);
+
+  useEffect(() => {
+    reloadActiveJob();
+  }, [reloadActiveJob]);
 
   async function onDelete(id: number) {
     await deleteGenomeUpload(id);
@@ -44,16 +70,60 @@ export function GenomeSection() {
     await reload();
   }
 
+  async function onUploadSaved() {
+    await reload();
+    try {
+      const { job_id } = await startGenomeIngestJob();
+      setModalJobId(job_id);
+      await reloadActiveJob();
+    } catch (err) {
+      console.warn("failed to start genome ingest job", err);
+    }
+  }
+
+  function onModalClose() {
+    setModalJobId(null);
+    reloadActiveJob();
+  }
+
+  const isJobRunning =
+    activeJob && (activeJob.status === "running" || activeJob.status === "queued");
+
   return (
     <Card id="decide.genome-upload">
       <CardHeader id="decide.genome-upload" />
-      <ImageUpload
-        kind="genome"
-        date={today}
-        label="Upload a genome file (annotated VCF with RS IDs)"
-        hint="Accepts .vcf or .vcf.gz — up to 50 MB."
-        onSaved={reload}
-      />
+      {activeJobLoaded && isJobRunning ? (
+        <div>
+          <p className="journal-hint">
+            A genome wiki ingest is running in the background.
+          </p>
+          <button
+            type="button"
+            className="genome-ingest-resume"
+            onClick={() => setModalJobId(activeJob!.id)}
+            data-testid="genome-ingest-resume"
+          >
+            <span className="genome-ingest-resume-spinner" aria-hidden="true" />
+            View genome wiki ingest progress
+          </button>
+        </div>
+      ) : (
+        <ImageUpload
+          kind="genome"
+          date={today}
+          label="Upload a genome file (annotated VCF with RS IDs)"
+          hint="Accepts .vcf or .vcf.gz — up to 50 MB."
+          onSaved={onUploadSaved}
+        />
+      )}
+
+      {modalJobId !== null ? (
+        <GenomeIngestModal
+          jobId={modalJobId}
+          initial={activeJob && activeJob.id === modalJobId ? activeJob : null}
+          onClose={onModalClose}
+        />
+      ) : null}
 
       <SnpediaWikiPanel />
 

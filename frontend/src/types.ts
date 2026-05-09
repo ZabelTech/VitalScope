@@ -1034,6 +1034,56 @@ export interface GenomeWikiAnswer {
   body: string;
 }
 
+export interface GenomeIngestEvent {
+  ts: string;
+  kind: "stage" | "page_ok" | "page_fail" | "counter" | "done" | "raw";
+  stage?: string;
+  message?: string;
+  label?: string;
+  reason?: string;
+  duration_s?: number;
+  key?: string;
+  value?: number;
+}
+
+export interface GenomeIngestCounters {
+  variants_total?: number;
+  variants_done?: number;
+  genes_total?: number;
+  genes_done?: number;
+  systems_total?: number;
+  systems_done?: number;
+  errors?: number;
+}
+
+export interface GenomeIngestSummary {
+  considered?: number;
+  written?: number;
+  skipped_for_cap?: number;
+  skipped_rs_ids?: string[];
+  errors?: { rs_id?: string; gene?: string; system?: string; error: unknown }[];
+  written_paths?: string[];
+  raw_system_counts?: Record<string, number>;
+  variants_total?: number;
+  variants_done?: number;
+  genes_total?: number;
+  genes_done?: number;
+}
+
+export interface GenomeIngestJob {
+  id: number;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  current_stage: string | null;
+  events: GenomeIngestEvent[];
+  events_total: number;
+  counters: GenomeIngestCounters;
+  summary: GenomeIngestSummary | null;
+  error_text: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  genome_upload_id: number | null;
+}
+
 export interface GenomeWikiLintResult {
   orphans: string[];
   missing: { page: string; target: string }[];
