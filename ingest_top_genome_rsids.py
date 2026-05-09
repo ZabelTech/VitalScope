@@ -61,6 +61,8 @@ import re
 import sqlite3
 import sys
 import time
+import urllib.error
+import urllib.request
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -72,6 +74,8 @@ DEFAULT_RANK_CACHE = app.GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
 DEFAULT_HG38_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg38.tsv"
 DEFAULT_HG19_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg19.tsv"
 DEFAULT_GENE_INTERVALS_CACHE = app.GENOME_WIKI_ROOT / "snpedia_gene_intervals_hg38.tsv"
+DEFAULT_DBSNP_GENE_LOOKUP   = app.GENOME_WIKI_ROOT / "dbsnp_gene_lookup.tsv"
+DEFAULT_ENSEMBL_GENE_CACHE  = app.GENOME_WIKI_ROOT / "ensembl_gene_at_position_hg38.tsv"
 
 # Gene-interval resolver knobs. Padding accounts for regulatory regions just
 # outside the curated CDS extents; nearest-gene radius is the max distance
@@ -79,6 +83,12 @@ DEFAULT_GENE_INTERVALS_CACHE = app.GENOME_WIKI_ROOT / "snpedia_gene_intervals_hg
 _GENE_INTERVAL_PAD_BP = 5_000
 _GENE_INTERVAL_PAD_BP_SINGLETON = 10_000  # genes with only one SNPedia variant
 _GENE_NEAREST_RADIUS_BP = 50_000
+
+# Ensembl REST is rate-limited to 15 req/s; we throttle to 10 req/s with a
+# small safety margin and 30s timeout per request.
+_ENSEMBL_MIN_INTERVAL_S = 0.10
+_ENSEMBL_TIMEOUT_S = 30
+_ENSEMBL_BASE = "https://rest.ensembl.org"
 
 _GENE_FIELD_RE = re.compile(r"\|\s*Gene\s*=\s*([A-Za-z0-9._-]+)", re.IGNORECASE)
 _GENO_TITLE_RE = re.compile(r"^Rs(\d+)\(([ACGT]);([ACGT])\)$", re.IGNORECASE)
@@ -685,7 +695,150 @@ def _resolve_gene_at_position(
     return None
 
 
-def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
+def _load_dbsnp_gene_lookup(
+    path: Path, relevant_rsids: Optional[set[str]] = None,
+) -> dict[str, str]:
+    """Stream-load rsid → gene-symbol from build_dbsnp_gene_lookup.py output.
+
+    The full TSV is ~13 GB / 493 M rows; loading all into memory takes 30+ GB.
+    Pass `relevant_rsids` (typically the SNPedia variant set, ~115 K rsids) to
+    keep memory bounded — only matching rows enter the dict. Returns the
+    *first* gene symbol when a variant overlaps multiple genes (the primary
+    feature; downstream wiki organisation needs a single gene anchor).
+
+    If `path` is missing returns an empty dict and prints guidance, so the
+    resolver silently falls back to the position-interval and Ensembl tiers.
+    """
+    if not path.is_file():
+        print(f"[dbsnp-lookup] {path} not found — run "
+              f"build_dbsnp_gene_lookup.py to enable this resolver tier",
+              flush=True)
+        return {}
+    print(f"[dbsnp-lookup] streaming {path} "
+          f"(filter set: {len(relevant_rsids) if relevant_rsids else 'none'})",
+          flush=True)
+    t0 = time.time()
+    out: dict[str, str] = {}
+    n_rows = 0
+    with path.open() as fh:
+        next(fh)
+        for line in fh:
+            n_rows += 1
+            parts = line.rstrip("\n").split("\t", 2)
+            if len(parts) < 2 or not parts[1]:
+                continue
+            rsid = parts[0]
+            if relevant_rsids is not None and rsid not in relevant_rsids:
+                continue
+            # Symbol pipe-separation comes from multi-gene GENEINFO; first wins.
+            symbols = parts[1].split("|", 1)
+            out[rsid] = symbols[0]
+    elapsed = time.time() - t0
+    print(f"[dbsnp-lookup] {n_rows:,} rows scanned in {elapsed:.1f}s; "
+          f"{len(out):,} kept after filter",
+          flush=True)
+    return out
+
+
+class _EnsemblGeneResolver:
+    """Position-based gene lookup against Ensembl REST `/overlap/region`.
+
+    Used as the LAST fallback in the resolver chain — only called when (a)
+    SNPedia has no |Gene= field, (b) the dbSNP lookup misses, and (c) the
+    SNPedia-derived position intervals find nothing within 50kb. Caches
+    every (chrom, pos) → gene answer to disk so re-runs are free; negative
+    answers (no gene at this coordinate) are cached as empty string to
+    avoid re-asking.
+
+    Rate-limited to ~10 req/sec (Ensembl's published cap is 15). Disabled
+    by passing `enabled=False` (CLI: --no-ensembl-fallback).
+    """
+
+    def __init__(self, cache_path: Path, enabled: bool = True) -> None:
+        self.cache_path = cache_path
+        self.enabled = enabled
+        self.cache: dict[tuple[str, int], str] = {}
+        self.last_call_t = 0.0
+        self.hits = 0
+        self.misses = 0
+        self.errors = 0
+        if cache_path.is_file():
+            with cache_path.open() as fh:
+                next(fh)
+                for line in fh:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) < 3:
+                        continue
+                    try:
+                        self.cache[(parts[0], int(parts[1]))] = parts[2]
+                    except ValueError:
+                        continue
+            print(f"[ensembl] loaded {len(self.cache):,} cached "
+                  f"(chrom, pos) → gene answers from {cache_path}",
+                  flush=True)
+        elif enabled:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            with cache_path.open("w") as fh:
+                fh.write("chrom\tpos\tgene\n")
+        if not enabled:
+            print("[ensembl] disabled (--no-ensembl-fallback)", flush=True)
+
+    def resolve(self, chrom: Optional[str], pos: Optional[int]) -> Optional[str]:
+        if not chrom or pos is None or not self.enabled:
+            return None
+        key = (chrom, pos)
+        if key in self.cache:
+            self.hits += 1
+            return self.cache[key] or None
+        # Throttle
+        delta = time.time() - self.last_call_t
+        if delta < _ENSEMBL_MIN_INTERVAL_S:
+            time.sleep(_ENSEMBL_MIN_INTERVAL_S - delta)
+        self.last_call_t = time.time()
+        url = (f"{_ENSEMBL_BASE}/overlap/region/human/"
+               f"{chrom}:{pos}-{pos}?feature=gene")
+        try:
+            req = urllib.request.Request(
+                url, headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=_ENSEMBL_TIMEOUT_S) as r:
+                data = json.loads(r.read().decode("utf-8"))
+        except (urllib.error.URLError, urllib.error.HTTPError,
+                json.JSONDecodeError, TimeoutError) as e:
+            self.errors += 1
+            return None
+        # Prefer protein_coding over lncRNA / pseudogene; smallest-extent
+        # gene wins on tie (most specific feature).
+        candidates = []
+        for g in data:
+            name = g.get("external_name") or g.get("gene_id")
+            if not name:
+                continue
+            biotype = g.get("biotype") or ""
+            extent = (g.get("end") or 0) - (g.get("start") or 0)
+            biotype_rank = 0 if biotype == "protein_coding" else 1
+            candidates.append((biotype_rank, extent, name))
+        gene = candidates[0][2] if (candidates := sorted(candidates)) else ""
+        self.cache[key] = gene
+        self.misses += 1
+        # Append-only persistence — cheap, survives interruption
+        with self.cache_path.open("a") as fh:
+            fh.write(f"{chrom}\t{pos}\t{gene}\n")
+        return gene or None
+
+    def report(self) -> None:
+        if not self.enabled:
+            return
+        total = self.hits + self.misses
+        if not total:
+            return
+        print(f"[ensembl] {self.hits:,} cache hits, {self.misses:,} new lookups, "
+              f"{self.errors:,} errors", flush=True)
+
+
+def _rank(
+    vcf_path: Path, conn: sqlite3.Connection,
+    use_ensembl: bool = True,
+) -> list[dict]:
     """Build the ranked candidate list for ingestion.
 
     Each entry carries a `tier` (1/2/3) so downstream filtering with `--tier`
@@ -695,18 +848,28 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
               has magnitude. AI compile produces a high-confidence variant
               page. Equivalent to the old "with magnitude" block.
       tier=2  Fallback hit (PMID/ClinVar/prose signal) AND a gene name was
-              resolved (either from the SNPedia |Gene= field or by
-              position-based lookup against the SNPedia-derived gene
-              intervals). AI compile produces a gene-anchored page.
-      tier=3  Fallback hit but no gene name could be resolved (no |Gene= and
-              no nearby SNPedia-annotated gene within 50kb). The page
+              resolved via one of the four-tier gene resolver chain (see
+              below). AI compile produces a gene-anchored page.
+      tier=3  Fallback hit, gene unresolvable across all tiers. The page
               writes as a stub via the T3 path — no AI tokens spent —
-              and gets `gene=UNK` until the user upgrades it.
+              and gets `gene=UNK` until upgraded.
+
+    Gene resolution chain (first hit wins):
+      1. SNPedia `|Gene=` field on the parent page (curated, fastest)
+      2. dbSNP GENEINFO via build_dbsnp_gene_lookup.py output (broadest;
+         covers ~95% of dbSNP-known variants)
+      3. SNPedia-derived gene intervals at hg38 position (covers gaps in
+         dbSNP for SNPedia-curated genes)
+      4. Ensembl REST `/overlap/region` at hg38 position (final fallback;
+         covers anything Ensembl knows). Cached on disk.
     """
     geno_lookup = _build_genotype_lookup(conn)
     variant_page_summaries = _build_variant_page_summary_lookup(conn)
     gene_intervals = _build_gene_intervals_hg38(conn, DEFAULT_GENE_INTERVALS_CACHE)
     known_rsids = {r["rsid"].lower() for r in conn.execute("SELECT rsid FROM snpedia_variants")}
+    dbsnp_gene = _load_dbsnp_gene_lookup(DEFAULT_DBSNP_GENE_LOOKUP,
+                                         relevant_rsids=known_rsids)
+    ensembl = _EnsemblGeneResolver(DEFAULT_ENSEMBL_GENE_CACHE, enabled=use_ensembl)
     print(
         f"[rank] {len(geno_lookup):,} genotype-magnitude pairs; "
         f"{len(variant_page_summaries):,} variant-page summaries; "
@@ -718,6 +881,7 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
     print(f"[rank] {len(user_rows):,} VCF rows match SNPedia", flush=True)
     ranked: list[dict] = []
     tier_counts: Counter[int] = Counter()
+    gene_source_counts: Counter[str] = Counter()
     for rsid, a1, a2, gt_raw in user_rows:
         rec = geno_lookup.get((rsid, a1, a2)) or geno_lookup.get((rsid, a2, a1))
         if rec is not None:
@@ -736,8 +900,22 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
         meta = variant_page_summaries.get(rsid)
         if meta is None:
             continue
-        gene = meta["gene"] or _resolve_gene_at_position(
-            meta["chrom"], meta["pos"], gene_intervals)
+        gene = meta["gene"]
+        gene_source = "snpedia_field" if gene else None
+        if not gene:
+            gene = dbsnp_gene.get(rsid)
+            if gene:
+                gene_source = "dbsnp"
+        if not gene:
+            gene = _resolve_gene_at_position(meta["chrom"], meta["pos"], gene_intervals)
+            if gene:
+                gene_source = "snpedia_position"
+        if not gene:
+            gene = ensembl.resolve(meta["chrom"], meta["pos"])
+            if gene:
+                gene_source = "ensembl"
+        if gene_source:
+            gene_source_counts[gene_source] += 1
         tier = 2 if gene else 3
         ranked.append({
             "rsid": rsid,
@@ -750,6 +928,11 @@ def _rank(vcf_path: Path, conn: sqlite3.Connection) -> list[dict]:
             "gene": gene,
         })
         tier_counts[tier] += 1
+    ensembl.report()
+    if gene_source_counts:
+        print(f"[rank] gene resolution sources: "
+              f"{dict(gene_source_counts.most_common())}",
+              flush=True)
     print(
         f"[rank] {len(ranked):,} ranked entries "
         f"(T1={tier_counts[1]:,} from genotype subpages, "
@@ -1343,6 +1526,10 @@ def main(argv=None) -> int:
                         help=f"path to cached rank TSV (default {DEFAULT_RANK_CACHE})")
     parser.add_argument("--rebuild-rank", action="store_true",
                         help="recompute the rank TSV even if the cache exists")
+    parser.add_argument("--no-ensembl-fallback", action="store_true",
+                        help="disable the final Ensembl REST gene-resolver tier "
+                             "(useful for offline runs; cached answers in "
+                             f"{DEFAULT_ENSEMBL_GENE_CACHE.name} are still used)")
     parser.add_argument("--force", action="store_true",
                         help="ignore the on-disk skip set and recompile selected rsids")
     parser.add_argument("--concurrency-variants", type=int, default=3,
@@ -1501,7 +1688,8 @@ def main(argv=None) -> int:
     print(f"[setup] VCF: {vcf_path}", flush=True)
 
     if args.rebuild_rank or not args.rank_cache.is_file():
-        ranked = _rank(vcf_path, conn)
+        ranked = _rank(vcf_path, conn,
+                       use_ensembl=not args.no_ensembl_fallback)
         _write_rank_cache(ranked, args.rank_cache)
         print(f"[rank] wrote {args.rank_cache} ({len(ranked):,} rows)")
     else:
