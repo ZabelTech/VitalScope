@@ -592,6 +592,47 @@ export async function uploadImage(kind: UploadKind, date: string, file: File): P
   return res.json();
 }
 
+export function uploadFileWithProgress(
+  kind: UploadKind,
+  date: string,
+  file: File,
+  onProgress: (loaded: number, total: number) => void,
+): Promise<Upload> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/uploads");
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress(e.loaded, e.total);
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (err) {
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      } else {
+        let detail: string = xhr.responseText;
+        try {
+          const parsed = JSON.parse(xhr.responseText);
+          detail = parsed?.detail ?? detail;
+        } catch {
+          /* keep raw */
+        }
+        reject(new Error(`HTTP ${xhr.status}: ${detail}`));
+      }
+    };
+    xhr.onerror = () => reject(new Error("network error during upload"));
+    xhr.onabort = () => reject(new Error("upload aborted"));
+    const fd = new FormData();
+    fd.append("kind", kind);
+    fd.append("date", date);
+    fd.append("file", file);
+    xhr.send(fd);
+  });
+}
+
 export async function deleteUpload(id: number): Promise<void> {
   const res = await apiFetch(`/api/uploads/${id}`, { method: "DELETE" });
   if (!res.ok) throw new Error(`API error: ${res.status}`);
@@ -1275,7 +1316,9 @@ export async function fetchGlucosePostprandial(
 // --- Genome Wiki ---
 
 import type {
+  GenomeIngestHighlight,
   GenomeIngestJob,
+  GenomeIngestRanking,
   GenomeWikiAnswer,
   GenomeWikiIndexEntry,
   GenomeWikiIngestResult,
@@ -1366,6 +1409,28 @@ export async function fetchGenomeIngestJob(
 ): Promise<GenomeIngestJob> {
   const qs = sinceEventIndex > 0 ? `?since=${sinceEventIndex}` : "";
   const res = await apiFetch(`/api/genome-wiki/ingest-jobs/${jobId}${qs}`);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchGenomeIngestRanking(
+  jobId: number,
+  limit = 10,
+): Promise<GenomeIngestRanking> {
+  const res = await apiFetch(
+    `/api/genome-wiki/ingest-jobs/${jobId}/ranking?limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+  return res.json();
+}
+
+export async function fetchGenomeIngestHighlight(
+  jobId: number,
+  seed: number,
+): Promise<GenomeIngestHighlight> {
+  const res = await apiFetch(
+    `/api/genome-wiki/ingest-jobs/${jobId}/highlight?seed=${seed}`,
+  );
   if (!res.ok) throw new Error(`API error: ${res.status}`);
   return res.json();
 }

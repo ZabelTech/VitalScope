@@ -1495,7 +1495,12 @@ def _mark_stale_ingest_jobs_failed() -> None:
     conn.close()
 
 
-_mark_stale_ingest_jobs_failed()
+# NOTE: orphan cleanup is intentionally NOT called at module import time.
+# `ingest_top_genome_rsids.py` does `import backend.app as app`, so any
+# subprocess we spawn would otherwise immediately kill the very job that
+# launched it. The cleanup is registered as a FastAPI startup event below
+# (search for `_orphan_cleanup_on_startup`) so it only fires on real
+# uvicorn boot.
 
 
 def _load_ai_config_from_db() -> None:
@@ -4206,8 +4211,6 @@ def delete_planned_session(session_id: int):
 
 MAX_UPLOAD_BYTES_IMAGE = 5 * 1024 * 1024
 MAX_UPLOAD_BYTES_BLOODWORK = 10 * 1024 * 1024
-MAX_UPLOAD_BYTES_GENOME = 50 * 1024 * 1024
-MAX_UPLOAD_BYTES_SNPEDIA = 50 * 1024 * 1024
 
 
 @app.post("/api/uploads")
@@ -4217,6 +4220,7 @@ async def upload_file(
     file: UploadFile = File(...),
 ):
     ct = file.content_type or ""
+    size_limit: Optional[int]
     if kind == "bloodwork":
         if not (ct.startswith("image/") or ct == "application/pdf"):
             raise HTTPException(status_code=400, detail="image/* or application/pdf required")
@@ -4226,19 +4230,19 @@ async def upload_file(
             "application/octet-stream", "application/gzip", "application/x-gzip",
         )):
             raise HTTPException(status_code=400, detail="VCF or VCF.gz file required")
-        size_limit = MAX_UPLOAD_BYTES_GENOME
+        size_limit = None
     elif kind == "snpedia":
         if ct not in (
             "application/zip", "application/x-zip-compressed", "application/octet-stream",
         ):
             raise HTTPException(status_code=400, detail="ZIP archive of SNPedia .md pages required")
-        size_limit = MAX_UPLOAD_BYTES_SNPEDIA
+        size_limit = None
     else:
         if not ct.startswith("image/"):
             raise HTTPException(status_code=400, detail="image/* required")
         size_limit = MAX_UPLOAD_BYTES_IMAGE
     data = await file.read()
-    if len(data) > size_limit:
+    if size_limit is not None and len(data) > size_limit:
         raise HTTPException(status_code=413, detail=f"file too large (max {size_limit // (1024*1024)} MB)")
     ext = mimetypes.guess_extension(ct) or ".bin"
     year, month = date[:4], date[5:7]
@@ -8910,8 +8914,16 @@ _PAGE_OK_RE = _re.compile(r"^\s*✓\s+(?P<label>\S+)")
 _PAGE_FAIL_RE = _re.compile(r"^\s*✗\s+(?P<label>\S+)\s+(?P<reason>.+)$")
 _VARIANTS_TOTAL_RE = _re.compile(r"^\[variants\]\s+(?P<n>\d+)\s+pages")
 _GENES_TOTAL_RE = _re.compile(r"^\[genes\]\s+(?P<n>\d+)\s+new genes")
-_SYSTEMS_TOTAL_RE = _re.compile(r"systems-only.*?(?P<n>\d+)\s+gene")
+_SYSTEMS_TOTAL_RE = _re.compile(
+    r"^\[systems\]\s+\d+\s+mined\s+/\s+\d+\s+≥2-genes\s+/\s+\d+\s+on disk\s+/\s+(?P<n>\d+)\s+to compile"
+)
 _DONE_RE = _re.compile(r"^===\s*(?:wrote.*in|done in)\s+(?P<s>[\d.]+)s")
+_SNPEDIA_MATCH_RE = _re.compile(r"^\[rank\]\s+(?P<n>[\d,]+)\s+VCF rows match SNPedia")
+_GENE_SOURCES_RE = _re.compile(r"^\[rank\]\s+gene resolution sources:\s+(?P<dict>\{.*\})")
+_TIER_COUNTS_RE = _re.compile(
+    r"^\[rank\]\s+(?P<total>[\d,]+)\s+ranked entries\s+"
+    r"\(T1=(?P<t1>[\d,]+)[^)]*?T2=(?P<t2>[\d,]+)[^)]*?T3=(?P<t3>[\d,]+)"
+)
 
 _PAGE_STAGE_KEY = {
     "variants": "variants",
@@ -8920,52 +8932,99 @@ _PAGE_STAGE_KEY = {
 }
 
 
-def _parse_ingest_line(line: str, current_stage: Optional[str]) -> dict:
-    """Map a stdout line from ingest_top_genome_rsids.py to a structured event.
+def _parse_ingest_line(line: str, current_stage: Optional[str]) -> list[dict]:
+    """Map a stdout line from ingest_top_genome_rsids.py to one or more
+    structured events.
 
-    Returns one of:
+    Each event is one of:
       {kind:"stage", stage, message}
       {kind:"page_ok", label, stage}
       {kind:"page_fail", label, reason, stage}
-      {kind:"counter", key, value}    -- e.g. variants_total=N
+      {kind:"counter", key, value}
       {kind:"done", duration_s}
-      {kind:"raw", message}           -- fallback
+      {kind:"raw", message}
     """
     text = line.rstrip("\r\n")
     if not text.strip():
-        return {"kind": "raw", "message": ""}
+        return [{"kind": "raw", "message": ""}]
     m_done = _DONE_RE.match(text)
     if m_done:
-        return {"kind": "done", "duration_s": float(m_done.group("s"))}
+        return [{"kind": "done", "duration_s": float(m_done.group("s"))}]
     m_vt = _VARIANTS_TOTAL_RE.match(text)
     if m_vt:
-        return {"kind": "counter", "key": "variants_total", "value": int(m_vt.group("n"))}
+        return [
+            {"kind": "stage", "stage": "variants", "message": text.strip().lstrip("[variants] ").strip()},
+            {"kind": "counter", "key": "variants_total", "value": int(m_vt.group("n"))},
+        ]
     m_gt = _GENES_TOTAL_RE.match(text)
     if m_gt:
-        return {"kind": "counter", "key": "genes_total", "value": int(m_gt.group("n"))}
+        return [
+            {"kind": "stage", "stage": "genes", "message": text.strip().lstrip("[genes] ").strip()},
+            {"kind": "counter", "key": "genes_total", "value": int(m_gt.group("n"))},
+        ]
+    m_st = _SYSTEMS_TOTAL_RE.match(text)
+    if m_st:
+        return [
+            {"kind": "stage", "stage": "systems", "message": text.strip().lstrip("[systems] ").strip()},
+            {"kind": "counter", "key": "systems_total", "value": int(m_st.group("n"))},
+        ]
+    m_match = _SNPEDIA_MATCH_RE.match(text)
+    if m_match:
+        return [{
+            "kind": "counter",
+            "key": "snpedia_matches",
+            "value": int(m_match.group("n").replace(",", "")),
+        }]
+    m_tier = _TIER_COUNTS_RE.match(text)
+    if m_tier:
+        events: list[dict] = [
+            {"kind": "counter", "key": "ranked_total",
+             "value": int(m_tier.group("total").replace(",", ""))},
+            {"kind": "counter", "key": "tier1_count",
+             "value": int(m_tier.group("t1").replace(",", ""))},
+            {"kind": "counter", "key": "tier2_count",
+             "value": int(m_tier.group("t2").replace(",", ""))},
+            {"kind": "counter", "key": "tier3_count",
+             "value": int(m_tier.group("t3").replace(",", ""))},
+        ]
+        return events
+    m_gs = _GENE_SOURCES_RE.match(text)
+    if m_gs:
+        out: list[dict] = []
+        try:
+            import ast as _ast
+            d = _ast.literal_eval(m_gs.group("dict"))
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    key = f"gene_source_{str(k).lower()}"
+                    out.append({"kind": "counter", "key": key, "value": int(v)})
+        except Exception:
+            pass
+        if out:
+            return out
     m_stage = _STAGE_RE.match(text)
     if m_stage:
-        return {
+        return [{
             "kind": "stage",
             "stage": m_stage.group("tag"),
             "message": m_stage.group("msg").strip(),
-        }
+        }]
     m_ok = _PAGE_OK_RE.match(text)
     if m_ok and current_stage in _PAGE_STAGE_KEY:
-        return {
+        return [{
             "kind": "page_ok",
             "label": m_ok.group("label"),
             "stage": current_stage,
-        }
+        }]
     m_fail = _PAGE_FAIL_RE.match(text)
     if m_fail and current_stage in _PAGE_STAGE_KEY:
-        return {
+        return [{
             "kind": "page_fail",
             "label": m_fail.group("label"),
             "reason": m_fail.group("reason").strip(),
             "stage": current_stage,
-        }
-    return {"kind": "raw", "message": text}
+        }]
+    return [{"kind": "raw", "message": text}]
 
 
 def _ingest_job_row(conn: sqlite3.Connection, job_id: int) -> Optional[sqlite3.Row]:
@@ -9050,37 +9109,73 @@ def _ingest_summary_from_counters(counters: dict) -> dict:
     }
 
 
-_DEMO_INGEST_SCRIPT: list[tuple[float, str]] = [
-    (0.2, "[setup] AI provider=demo model=demo"),
-    (0.3, "[positions] loaded 12,418 hg38 positions from cache"),
-    (0.3, "[positions] loaded 12,302 hg19 positions from cache"),
-    (0.4, "[gene-resolver] loaded 1,840 gene intervals from cache"),
-    (0.6, "[dbsnp-lookup] streaming dbsnp_gene_lookup.tsv"),
-    (0.5, "[dbsnp-lookup] 1,200,000 rows scanned in 0.6s"),
-    (0.4, "[ensembl] loaded 4,920 cached entries"),
-    (0.5, "[rank] indexing SNPedia genotype pages…"),
-    (0.4, "[rank] streaming demo VCF…"),
-    (0.4, "[rank] 248 VCF rows match SNPedia"),
-    (0.3, "[rank] gene resolution sources: snpedia=180 dbsnp=58 ensembl=10"),
-    (0.5, "[variants] 6 pages, concurrency=3…"),
-    (0.6, "  ✓ rs1801133 ok on attempt 1/3"),
-    (0.6, "  ✓ rs429358 ok on attempt 1/3"),
-    (0.6, "  ✓ rs7412 ok on attempt 1/3"),
-    (0.6, "  ✓ rs4680 ok on attempt 1/3"),
-    (0.6, "  ✓ rs53576 ok on attempt 1/3"),
-    (0.6, "  ✓ rs9939609 ok on attempt 1/3"),
-    (0.4, "  variants: 3.2s — 6/6 ok, 0 errors"),
-    (0.5, "[genes] 4 new genes, concurrency=2…"),
-    (0.6, "  ✓ MTHFR ok on attempt 1/3"),
-    (0.6, "  ✓ APOE ok on attempt 1/3"),
-    (0.6, "  ✓ COMT ok on attempt 1/3"),
-    (0.6, "  ✓ FTO ok on attempt 1/3"),
-    (0.4, "  genes: 2.1s — 4/4 ok, 0 errors"),
-    (0.5, "[systems] compiling derived body-system pages…"),
-    (0.5, "  ✓ neurotransmitter → wiki/systems/neurotransmitter.md"),
-    (0.5, "  ✓ cardiovascular → wiki/systems/cardiovascular.md"),
-    (0.4, "=== done in 8.6s ==="),
+# Per-stage runtime in demo mode. Default ~3s/stage gives a ~30s total run
+# across all stages — enough that the user sees each panel tick into view
+# without waiting half a minute between events. Override via
+# VITALSCOPE_DEMO_STAGE_SECONDS; e2e tests use 0.4 to stay fast.
+_DEMO_STAGE_SECONDS = float(os.environ.get("VITALSCOPE_DEMO_STAGE_SECONDS", "3"))
+
+_DEMO_INGEST_STAGES: list[tuple[str, list[str]]] = [
+    ("setup", [
+        "[setup] AI provider=demo model=demo",
+    ]),
+    ("positions", [
+        "[positions] loaded 12,418 hg38 positions from cache",
+        "[positions] loaded 12,302 hg19 positions from cache",
+    ]),
+    ("gene-resolver", [
+        "[gene-resolver] loaded 1,840 gene intervals from cache",
+    ]),
+    ("dbsnp-lookup", [
+        "[dbsnp-lookup] streaming dbsnp_gene_lookup.tsv",
+        "[dbsnp-lookup] 1,200,000 rows scanned in 0.6s",
+    ]),
+    ("ensembl", [
+        "[ensembl] loaded 4,920 cached entries",
+    ]),
+    ("rank", [
+        "[rank] indexing SNPedia genotype pages…",
+        "[rank] streaming demo VCF…",
+        "[rank] 248 VCF rows match SNPedia",
+        "[rank] gene resolution sources: {'snpedia': 180, 'dbsnp': 58, 'ensembl': 10}",
+        "[rank] 248 ranked entries (T1=92 from genotype subpages, T2=124 from fallback with resolvable gene, T3=32 from fallback with no gene)",
+    ]),
+    ("variants", [
+        "[variants] 6 pages, concurrency=3…",
+        "  ✓ rs1801133 ok on attempt 1/3",
+        "  ✓ rs429358 ok on attempt 1/3",
+        "  ✓ rs7412 ok on attempt 1/3",
+        "  ✓ rs4680 ok on attempt 1/3",
+        "  ✓ rs53576 ok on attempt 1/3",
+        "  ✓ rs9939609 ok on attempt 1/3",
+        "  variants: 3.2s — 6/6 ok, 0 errors",
+    ]),
+    ("genes", [
+        "[genes] 4 new genes, concurrency=2…",
+        "  ✓ MTHFR ok on attempt 1/3",
+        "  ✓ APOE ok on attempt 1/3",
+        "  ✓ COMT ok on attempt 1/3",
+        "  ✓ FTO ok on attempt 1/3",
+        "  genes: 2.1s — 4/4 ok, 0 errors",
+    ]),
+    ("systems", [
+        "[systems] compiling derived body-system pages…",
+        "  ✓ neurotransmitter → wiki/systems/neurotransmitter.md",
+        "  ✓ cardiovascular → wiki/systems/cardiovascular.md",
+    ]),
+    ("done", [
+        "=== done in 8.6s ===",
+    ]),
 ]
+
+
+def _demo_ingest_script() -> list[tuple[float, str]]:
+    out: list[tuple[float, str]] = []
+    for _stage, lines in _DEMO_INGEST_STAGES:
+        per_line = _DEMO_STAGE_SECONDS / max(1, len(lines))
+        for line in lines:
+            out.append((per_line, line))
+    return out
 
 
 async def _run_demo_ingest_job(job_id: int) -> None:
@@ -9092,16 +9187,16 @@ async def _run_demo_ingest_job(job_id: int) -> None:
         )
         conn.commit()
         conn.close()
-        for delay, line in _DEMO_INGEST_SCRIPT:
-            await asyncio.sleep(delay)
+        for delay, line in _demo_ingest_script():
             conn = get_db()
             row = _ingest_job_row(conn, job_id)
             if row is None or row["status"] not in ("running", "queued"):
                 conn.close()
                 return
-            ev = _parse_ingest_line(line, row["current_stage"])
-            _append_ingest_events(conn, job_id, [ev])
+            evs = _parse_ingest_line(line, row["current_stage"])
+            _append_ingest_events(conn, job_id, evs)
             conn.close()
+            await asyncio.sleep(delay)
         conn = get_db()
         row = _ingest_job_row(conn, job_id)
         counters = json.loads(row["counters_json"] or "{}") if row else {}
@@ -9126,32 +9221,25 @@ async def _run_demo_ingest_job(job_id: int) -> None:
         _finalize_ingest_job(job_id, "failed", None, str(exc))
 
 
-async def _run_genome_ingest_job(job_id: int) -> None:
-    if DEMO_MODE:
-        await _run_demo_ingest_job(job_id)
-        return
-    if not INGEST_SCRIPT_PATH.is_file():
-        _finalize_ingest_job(
-            job_id, "failed", None, f"ingest script not found at {INGEST_SCRIPT_PATH}"
-        )
-        return
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            _sys.executable,
-            "-u",
-            str(INGEST_SCRIPT_PATH),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(REPO_ROOT),
-            env={**os.environ},
-        )
-    except Exception as exc:
-        _finalize_ingest_job(job_id, "failed", None, f"failed to start subprocess: {exc}")
-        return
+async def _run_ingest_subprocess(job_id: int, cli_args: list[str]) -> int:
+    """Run ingest_top_genome_rsids.py with cli_args and tail stdout into the
+    job's events buffer. Returns the subprocess exit code (or -1 if launch
+    failed — the failure is also written into the job row).
+    """
+    proc = await asyncio.create_subprocess_exec(
+        _sys.executable,
+        "-u",
+        str(INGEST_SCRIPT_PATH),
+        *cli_args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(REPO_ROOT),
+        env={**os.environ},
+    )
     conn = get_db()
     conn.execute(
-        "UPDATE genome_wiki_ingest_jobs SET status = 'running', started_at = ?, pid = ? WHERE id = ?",
-        (datetime.now(timezone.utc).isoformat(), proc.pid, job_id),
+        "UPDATE genome_wiki_ingest_jobs SET pid = ? WHERE id = ?",
+        (proc.pid, job_id),
     )
     conn.commit()
     conn.close()
@@ -9170,55 +9258,144 @@ async def _run_genome_ingest_job(job_id: int) -> None:
         buffer = []
         last_flush = asyncio.get_event_loop().time()
 
-    try:
-        assert proc.stdout is not None
-        while True:
-            try:
-                raw = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
-            except asyncio.TimeoutError:
-                await _flush()
-                continue
-            if not raw:
-                break
-            line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-            stage = None
-            c = get_db()
-            try:
-                row = _ingest_job_row(c, job_id)
-                if row is not None:
-                    stage = row["current_stage"]
-            finally:
-                c.close()
-            ev = _parse_ingest_line(line, stage)
-            buffer.append(ev)
-            now = asyncio.get_event_loop().time()
-            if len(buffer) >= 25 or (now - last_flush) > 0.75:
-                await _flush()
-        await _flush()
-        exit_code = await proc.wait()
+    assert proc.stdout is not None
+    while True:
+        try:
+            raw = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
+        except asyncio.TimeoutError:
+            await _flush()
+            continue
+        if not raw:
+            break
+        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        stage = None
         c = get_db()
         try:
             row = _ingest_job_row(c, job_id)
-            counters = json.loads(row["counters_json"] or "{}") if row else {}
+            if row is not None:
+                stage = row["current_stage"]
         finally:
             c.close()
-        if exit_code == 0:
-            _finalize_ingest_job(
-                job_id, "succeeded", _ingest_summary_from_counters(counters), None
-            )
+        evs = _parse_ingest_line(line, stage)
+        buffer.extend(evs)
+        now = asyncio.get_event_loop().time()
+        if len(buffer) >= 25 or (now - last_flush) > 0.75:
+            await _flush()
+    await _flush()
+    return await proc.wait()
+
+
+def _latest_source_vcf_path(genome_upload_id: Optional[int]) -> Optional[Path]:
+    """Resolve the on-disk path of the source VCF for the given genome
+    upload (or the latest one if id is None). Returns None if no upload
+    chain is found or the file is missing.
+    """
+    conn = get_db()
+    try:
+        if genome_upload_id is not None:
+            row = conn.execute(
+                "SELECT u.filename FROM genome_uploads gu "
+                "JOIN uploads u ON u.id = gu.source_upload_id "
+                "WHERE gu.id = ?",
+                (genome_upload_id,),
+            ).fetchone()
         else:
-            _finalize_ingest_job(
-                job_id,
-                "failed",
-                _ingest_summary_from_counters(counters),
-                f"ingest script exited with code {exit_code}",
-            )
-    except Exception as exc:
+            row = conn.execute(
+                "SELECT u.filename FROM genome_uploads gu "
+                "JOIN uploads u ON u.id = gu.source_upload_id "
+                "ORDER BY gu.date DESC, gu.id DESC LIMIT 1"
+            ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    p = (UPLOADS_DIR / row[0]).resolve()
+    if not str(p).startswith(str(UPLOADS_DIR.resolve())) or not p.is_file():
+        return None
+    return p
+
+
+async def _run_genome_ingest_job(job_id: int) -> None:
+    if DEMO_MODE:
+        await _run_demo_ingest_job(job_id)
+        return
+    if not INGEST_SCRIPT_PATH.is_file():
+        _finalize_ingest_job(
+            job_id, "failed", None, f"ingest script not found at {INGEST_SCRIPT_PATH}"
+        )
+        return
+    conn = get_db()
+    row = _ingest_job_row(conn, job_id)
+    genome_upload_id = row["genome_upload_id"] if row else None
+    conn.execute(
+        "UPDATE genome_wiki_ingest_jobs SET status = 'running', started_at = ? WHERE id = ?",
+        (datetime.now(timezone.utc).isoformat(), job_id),
+    )
+    conn.commit()
+    conn.close()
+
+    # Phase 1: pre-annotate the VCF in place so DeepVariant-style files
+    # whose ID column is `.` still get rsid coverage from SNPedia positions.
+    # `--annotate-vcf` writes a new file alongside the source.
+    src_vcf = _latest_source_vcf_path(genome_upload_id)
+    annotated_vcf: Optional[Path] = None
+    if src_vcf is not None:
+        annotated_vcf = src_vcf.with_name(src_vcf.stem + ".annotated.vcf")
+        c = get_db()
         try:
-            proc.kill()
-        except Exception:
-            pass
+            _append_ingest_events(c, job_id, [{
+                "kind": "stage",
+                "stage": "annotate",
+                "message": f"annotating {src_vcf.name} → {annotated_vcf.name}",
+            }])
+        finally:
+            c.close()
+        try:
+            annot_rc = await _run_ingest_subprocess(
+                job_id,
+                ["--annotate-vcf", str(annotated_vcf), "--vcf", str(src_vcf)],
+            )
+        except Exception as exc:
+            _finalize_ingest_job(job_id, "failed", None, f"annotate phase failed: {exc}")
+            return
+        if annot_rc != 0 or not annotated_vcf.is_file():
+            # Annotation failed (e.g. unknown build) — fall back to the
+            # untouched source VCF and let the rank pass try its luck.
+            annotated_vcf = None
+
+    # Match the user's stated "always ingest everything" intent — the
+    # script's default --top-n is 30, which means a fresh ingest after a
+    # partial run silently skips the entire selection because every page
+    # is already on disk. 100000 is an upper bound; the rank+filter step
+    # caps to whatever T1+T2 actually has.
+    cli_args = ["--rebuild-rank", "--top-n", "100000"]
+    if annotated_vcf is not None and annotated_vcf.is_file():
+        cli_args += ["--vcf", str(annotated_vcf)]
+    elif src_vcf is not None:
+        cli_args += ["--vcf", str(src_vcf)]
+
+    try:
+        exit_code = await _run_ingest_subprocess(job_id, cli_args)
+    except Exception as exc:
         _finalize_ingest_job(job_id, "failed", None, str(exc))
+        return
+    c = get_db()
+    try:
+        row = _ingest_job_row(c, job_id)
+        counters = json.loads(row["counters_json"] or "{}") if row else {}
+    finally:
+        c.close()
+    if exit_code == 0:
+        _finalize_ingest_job(
+            job_id, "succeeded", _ingest_summary_from_counters(counters), None
+        )
+    else:
+        _finalize_ingest_job(
+            job_id,
+            "failed",
+            _ingest_summary_from_counters(counters),
+            f"ingest script exited with code {exit_code}",
+        )
 
 
 class GenomeIngestStartIn(BaseModel):
@@ -9293,6 +9470,106 @@ def get_genome_ingest_job(job_id: int, since: int = 0):
     out = _serialize_ingest_job(row, since=since)
     conn.close()
     return out
+
+
+@app.get("/api/genome-wiki/ingest-jobs/{job_id}/ranking")
+def get_genome_ingest_ranking(job_id: int, limit: int = 10):
+    conn = get_db()
+    row = _ingest_job_row(conn, job_id)
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="ingest job not found")
+    rank_path = GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
+    if not rank_path.is_file():
+        return {"available": False, "rows": [], "tier_counts": {}, "total": 0}
+    rows: list[dict] = []
+    tier_counts: dict[str, int] = {"1": 0, "2": 0, "3": 0}
+    total = 0
+    try:
+        with rank_path.open("r", encoding="utf-8", errors="replace") as fh:
+            header = fh.readline().rstrip("\n").split("\t")
+            for line in fh:
+                cols = line.rstrip("\n").split("\t")
+                if len(cols) < len(header):
+                    cols = cols + [""] * (len(header) - len(cols))
+                d = dict(zip(header, cols))
+                tier = (d.get("tier") or "").strip()
+                if tier in tier_counts:
+                    tier_counts[tier] += 1
+                total += 1
+                if len(rows) < max(0, limit):
+                    rows.append({
+                        "rsid": d.get("rsid") or "",
+                        "user_genotype": d.get("user_genotype") or "",
+                        "vcf_gt": d.get("vcf_gt") or "",
+                        "magnitude": (
+                            float(d["magnitude"]) if d.get("magnitude") else None
+                        ),
+                        "repute": d.get("repute") or "",
+                        "summary": d.get("summary") or "",
+                        "tier": int(tier) if tier.isdigit() else None,
+                        "gene": d.get("gene") or "",
+                    })
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"rank file read failed: {exc}")
+    return {
+        "available": True,
+        "rows": rows,
+        "tier_counts": tier_counts,
+        "total": total,
+    }
+
+
+_HIGHLIGHT_FRONTMATTER_RE = _re.compile(
+    r"^---\s*\n(?P<fm>.*?)\n---\s*\n", _re.DOTALL
+)
+
+
+def _scan_frontmatter(path: Path) -> dict:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {}
+    m = _HIGHLIGHT_FRONTMATTER_RE.match(text)
+    if not m:
+        return {}
+    out: dict = {}
+    for raw in m.group("fm").splitlines():
+        if ":" not in raw:
+            continue
+        key, _, val = raw.partition(":")
+        out[key.strip()] = val.strip().strip("\"'")
+    return out
+
+
+@app.get("/api/genome-wiki/ingest-jobs/{job_id}/highlight")
+def get_genome_ingest_highlight(job_id: int, seed: int = 0):
+    conn = get_db()
+    row = _ingest_job_row(conn, job_id)
+    conn.close()
+    if row is None:
+        raise HTTPException(status_code=404, detail="ingest job not found")
+    candidates: list[Path] = []
+    for sub in ("wiki/variants", "wiki/genes"):
+        d = GENOME_WIKI_ROOT / sub
+        if d.is_dir():
+            candidates.extend(p for p in d.glob("*.md") if p.is_file())
+    if not candidates:
+        return {"available": False}
+    idx = (seed if seed >= 0 else 0) % len(candidates)
+    pick = candidates[idx]
+    fm = _scan_frontmatter(pick)
+    rel = pick.relative_to(GENOME_WIKI_ROOT).as_posix()
+    return {
+        "available": True,
+        "path": rel,
+        "title": fm.get("title") or pick.stem,
+        "summary": fm.get("summary") or "",
+        "type": fm.get("type") or ("variant" if "variants" in rel else "gene"),
+        "rs_id": fm.get("rs_id") or "",
+        "gene": fm.get("gene") or "",
+        "total_pages": len(candidates),
+    }
 
 
 # ---- /api/genome-wiki/pages ----
@@ -10544,6 +10821,14 @@ def _reload_job(name: str) -> None:
         coalesce=True,
         max_instances=1,
     )
+
+
+@app.on_event("startup")
+async def _orphan_cleanup_on_startup() -> None:
+    # Only flip stale running/queued ingest jobs to failed when uvicorn
+    # actually boots — never on plain module import (the ingest script
+    # imports backend.app and would otherwise self-kill).
+    _mark_stale_ingest_jobs_failed()
 
 
 @app.on_event("startup")

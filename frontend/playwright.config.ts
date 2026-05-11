@@ -18,7 +18,7 @@ export default defineConfig({
       reuseExistingServer: true,
       cwd: "..",
       timeout: 30_000,
-      env: { VITALSCOPE_DEMO: "1" },
+      env: { VITALSCOPE_DEMO: "1", VITALSCOPE_DEMO_STAGE_SECONDS: "0.4" },
     },
     {
       command: "npm run dev -- --host 127.0.0.1 --port 5173",
