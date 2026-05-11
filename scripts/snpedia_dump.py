@@ -14,7 +14,17 @@ import requests
 
 DB_PATH = Path(os.environ.get("VITALSCOPE_DB") or Path(__file__).resolve().parents[1] / "vitalscope.db")
 API_BASE = os.environ.get("SNPEDIA_API_BASE", "https://bots.snpedia.com/api.php")
-USER_AGENT = os.environ.get("SNPEDIA_USER_AGENT", "VitalScope-SNPediaSync/1.0 (personal health dashboard)")
+# SNPedia's bot policy ( https://bots.snpedia.com/index.php/Bulk ) asks bots
+# to identify themselves with name + contact info, so they can reach out
+# rather than IP-ban on suspicion. Override via SNPEDIA_USER_AGENT.
+USER_AGENT = os.environ.get(
+  "SNPEDIA_USER_AGENT",
+  "VitalScope-SNPediaSync/1.0 (rbrtzbl@googlemail.com; "
+  "https://github.com/Rbrtzbl/vitalscope) requests/python",
+)
+# MediaWiki maxlag parameter — server returns 503 with retry-after when
+# replication lag exceeds this. Lets the API gracefully throttle us.
+SNPEDIA_MAXLAG = int(os.environ.get("SNPEDIA_MAXLAG", "5"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS snpedia_pages (
@@ -111,7 +121,58 @@ def save_state(conn: sqlite3.Connection, apcontinue: str | None, completed: bool
   )
 
 
-def fetch_all_pages(session: requests.Session, start_from: str | None, limit: int | None):
+def _get_with_retry(
+  session: requests.Session, url: str, params: dict, max_attempts: int = 8,
+) -> requests.Response:
+  """GET with exponential backoff on 5xx / network errors, plus MediaWiki
+  maxlag-aware retry. The server returns 503 + Retry-After when replication
+  lag exceeds `maxlag`; honour that header. SNPedia also 502s frequently
+  under sustained load; without retries a single 502 kills the subprocess.
+  """
+  attempt = 0
+  while True:
+    attempt += 1
+    try:
+      response = session.get(url, params=params, timeout=60)
+      # 503 + Retry-After (or X-Database-Lag) is the maxlag signal.
+      if response.status_code == 503:
+        retry_after = response.headers.get("Retry-After")
+        try:
+          wait_s = float(retry_after) if retry_after else 5
+        except ValueError:
+          wait_s = 5
+        wait_s = min(wait_s, 30)
+        print(
+          f"  [maxlag] 503 (lag>{params.get('maxlag','?')}s); "
+          f"sleeping {wait_s}s",
+          flush=True,
+        )
+        time.sleep(wait_s)
+        continue
+      if response.status_code < 500:
+        response.raise_for_status()
+        return response
+      err_status = response.status_code
+    except (requests.ConnectionError, requests.Timeout) as exc:
+      err_status = f"{type(exc).__name__}"
+    if attempt >= max_attempts:
+      response.raise_for_status() if 'response' in locals() and response is not None else None
+      raise requests.HTTPError(f"giving up after {attempt} attempts (last={err_status})")
+    sleep_s = min(60, 2 ** min(attempt, 6))
+    print(
+      f"  [retry] {err_status} on attempt {attempt}/{max_attempts}; "
+      f"sleeping {sleep_s}s",
+      flush=True,
+    )
+    time.sleep(sleep_s)
+
+
+def fetch_all_pages(
+  session: requests.Session,
+  start_from: str | None,
+  limit: int | None,
+  end_at: str | None = None,
+):
   base_params = {
     "action": "query",
     "format": "json",
@@ -121,6 +182,7 @@ def fetch_all_pages(session: requests.Session, start_from: str | None, limit: in
     "rvprop": "ids|timestamp|content",
     "ellimit": "max",
     "gapnamespace": 0,
+    "maxlag": str(SNPEDIA_MAXLAG),
   }
   cont_params: dict[str, str] = {}
   if start_from:
@@ -130,8 +192,7 @@ def fetch_all_pages(session: requests.Session, start_from: str | None, limit: in
   seen = 0
   while True:
     params = {**base_params, **cont_params}
-    response = session.get(API_BASE, params=params, timeout=60)
-    response.raise_for_status()
+    response = _get_with_retry(session, API_BASE, params)
     payload = response.json()
     pages = (payload.get("query") or {}).get("pages") or {}
     for pid_str, page in pages.items():
@@ -156,6 +217,8 @@ def fetch_all_pages(session: requests.Session, start_from: str | None, limit: in
       if not cont:
         return
       if limit and seen >= limit:
+        return
+      if end_at is not None and current_gap is not None and current_gap >= end_at:
         return
     cont_params = {k: str(v) for k, v in cont.items()}
 
@@ -259,12 +322,94 @@ def reparse_local(conn: sqlite3.Connection, progress_every: int) -> None:
   progress.emit()
 
 
+def fetch_pages_for_rsid(
+  session: requests.Session, conn: sqlite3.Connection, rsid: str,
+) -> int:
+  """Fetch one rsid's main page + all genotype subpages (e.g. Rs1234,
+  Rs1234(C;T), Rs1234(C;G), …) via a single allpages-prefix call.
+  Returns the number of pages saved.
+
+  Polite: respects the same SNPEDIA_REQUEST_DELAY_S / maxlag / retry
+  policy as the bulk walker.
+  """
+  rsid_clean = rsid.strip()
+  if not rsid_clean.lower().startswith("rs"):
+    return 0
+  # SNPedia normalises rsid titles as "Rs<digits>" (capital R).
+  prefix = "Rs" + rsid_clean[2:]
+  base = {
+    "action": "query",
+    "format": "json",
+    "generator": "allpages",
+    "gapprefix": prefix,
+    "gaplimit": "max",
+    "gapnamespace": 0,
+    "prop": "revisions|extlinks",
+    "rvprop": "ids|timestamp|content",
+    "ellimit": "max",
+    "maxlag": str(SNPEDIA_MAXLAG),
+  }
+  cont: dict[str, str] = {}
+  saved = 0
+  while True:
+    params = {**base, **cont}
+    response = _get_with_retry(session, API_BASE, params)
+    payload = response.json()
+    pages = (payload.get("query") or {}).get("pages") or {}
+    for page in pages.values():
+      save_page(conn, page)
+      saved += 1
+    conn.commit()
+    cont_block = payload.get("continue") or {}
+    if not cont_block:
+      break
+    cont = {k: str(v) for k, v in cont_block.items()}
+  return saved
+
+
+def fetch_rsids_on_demand(
+  conn: sqlite3.Connection, rsids: list[str], progress_every: int = 50,
+) -> tuple[int, int]:
+  """Fetch a list of rsids' SNPedia pages on demand. Returns
+  (rsids_processed, pages_saved). UPSERTs into snpedia_pages.
+  """
+  session = requests.Session()
+  session.headers["User-Agent"] = USER_AGENT
+  total_pages = 0
+  t0 = time.time()
+  for i, rsid in enumerate(rsids, 1):
+    try:
+      total_pages += fetch_pages_for_rsid(session, conn, rsid)
+    except requests.HTTPError as exc:
+      print(f"  ✗ {rsid} {exc}", flush=True)
+      continue
+    if i % progress_every == 0:
+      elapsed = time.time() - t0
+      rate = i / elapsed if elapsed > 0 else 0.0
+      print(
+        f"[fetch-rsids] {i}/{len(rsids)} rsids → {total_pages:,} pages "
+        f"({rate:.2f} rsids/s)",
+        flush=True,
+      )
+  return len(rsids), total_pages
+
+
 def main() -> None:
   parser = argparse.ArgumentParser()
   parser.add_argument("--full", action="store_true")
   parser.add_argument("--limit", type=int)
   parser.add_argument("--progress-every", type=int, default=250)
   parser.add_argument("--reparse", action="store_true", help="re-derive variants/genotypes/extlinks/references from stored raw_json without hitting the API")
+  parser.add_argument("--start-at", type=str, default=None,
+                      help="override saved cursor; start the allpages walk at this title prefix")
+  parser.add_argument("--end-at", type=str, default=None,
+                      help="stop when the cursor advances past this title prefix (exclusive). "
+                           "Used with --start-at to slice the alphabet across parallel workers.")
+  parser.add_argument("--fetch-rsids", type=str, default=None,
+                      help="path to a newline-separated rsid list (or '-' for stdin); "
+                           "fetch ONLY those rsids' pages + genotype subpages")
+  parser.add_argument("--fetch-rsids-from-vcf", type=str, default=None,
+                      help="path to a VCF; extract rsids in the ID column and fetch them")
   args = parser.parse_args()
 
   conn = open_db()
@@ -276,16 +421,101 @@ def main() -> None:
       conn.close()
     return
 
+  if args.fetch_rsids or args.fetch_rsids_from_vcf:
+    rsids: list[str] = []
+    if args.fetch_rsids:
+      src = sys.stdin if args.fetch_rsids == "-" else open(args.fetch_rsids, "r")
+      try:
+        rsids = [line.strip() for line in src if line.strip().lower().startswith("rs")]
+      finally:
+        if src is not sys.stdin:
+          src.close()
+    if args.fetch_rsids_from_vcf:
+      import gzip as _gz
+      path = Path(args.fetch_rsids_from_vcf)
+      opener = _gz.open if path.suffix == ".gz" else open
+      seen: set[str] = set()
+      with opener(path, "rt", errors="replace") as fh:
+        for line in fh:
+          if line.startswith("#"):
+            continue
+          parts = line.rstrip("\n").split("\t")
+          if len(parts) < 3:
+            continue
+          rsid = parts[2]
+          if rsid.lower().startswith("rs"):
+            seen.add(rsid.lower())
+      rsids.extend(sorted(seen))
+    # Intersect with the catalog so we don't waste calls on rsids
+    # SNPedia doesn't carry. The catalog has lowercase rsids.
+    cat_known: set[str] = {
+      row[0] for row in conn.execute("SELECT rsid FROM snpedia_rsid_catalog")
+    }
+    if cat_known:
+      filtered = [r for r in rsids if r.lower() in cat_known]
+      print(
+        f"[fetch-rsids] {len(rsids):,} requested, "
+        f"{len(filtered):,} in SNPedia catalog",
+        flush=True,
+      )
+      rsids = filtered
+    else:
+      print(
+        f"[fetch-rsids] catalog empty (run snpedia_catalog.py first); "
+        f"trying all {len(rsids)} requested rsids",
+        flush=True,
+      )
+    # Skip rsids whose main page is already mirrored — makes repeat
+    # ingests near-instant once the cache is warm.
+    already_have: set[str] = {
+      row[0].lower() for row in conn.execute(
+        "SELECT title FROM snpedia_pages "
+        "WHERE title GLOB 'Rs[0-9]*' AND title NOT GLOB '*(*'"
+      )
+    }
+    if already_have:
+      before = len(rsids)
+      rsids = [r for r in rsids if r.lower() not in already_have]
+      skipped = before - len(rsids)
+      print(
+        f"[fetch-rsids] {skipped:,} already in snpedia_pages → skipping; "
+        f"{len(rsids):,} new to fetch",
+        flush=True,
+      )
+    n_rsids, n_pages = fetch_rsids_on_demand(conn, rsids)
+    print(f"\n=== done: {n_rsids} rsids, {n_pages:,} pages saved ===")
+    conn.close()
+    return
+
   session = requests.Session()
   session.headers["User-Agent"] = USER_AGENT
 
-  start_from = None if args.full else get_state(conn)
+  # Normalise empty-string to None so the shell-friendly form
+  # `--end-at ""` reads as "no upper bound" instead of "<= empty",
+  # which `current_gap >= end_at` would otherwise satisfy immediately.
+  start_at = args.start_at if args.start_at else None
+  end_at = args.end_at if args.end_at else None
+  use_shared_state = start_at is None and end_at is None
+  if start_at is not None:
+    start_from = start_at
+  else:
+    start_from = None if args.full else get_state(conn)
+  args_end_at = end_at
   total_guess = args.limit or 1
   progress = Progress(started_at=time.time(), total=total_guess)
+  prefix = ""
+  if args.start_at or args.end_at:
+    prefix = f"[slice {args.start_at or ''}..{args.end_at or ''}] "
+  print(f"{prefix}starting at apcontinue={start_from!r}", flush=True)
 
   try:
-    for pages, payload in fetch_all_pages(session, start_from=start_from, limit=args.limit):
-      if payload.get("continue") and payload["continue"].get("gapcontinue"):
+    for pages, payload in fetch_all_pages(
+      session,
+      start_from=start_from,
+      limit=args.limit,
+      end_at=args_end_at,
+    ):
+      if use_shared_state and payload.get("continue") and payload["continue"].get("gapcontinue"):
         save_state(conn, payload["continue"]["gapcontinue"], completed=False)
       if pages:
         progress.total = max(progress.total, progress.processed + len(pages))
@@ -295,8 +525,9 @@ def main() -> None:
         if progress.processed % args.progress_every == 0:
           progress.emit()
       conn.commit()
-    save_state(conn, None, completed=True)
-    conn.commit()
+    if use_shared_state:
+      save_state(conn, None, completed=True)
+      conn.commit()
     progress.emit()
   finally:
     conn.close()
