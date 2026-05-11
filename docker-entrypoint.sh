@@ -12,6 +12,18 @@ if [ "${VITALSCOPE_DEMO:-0}" = "1" ] && [ ! -f "${VITALSCOPE_DB}" ]; then
   python3 /app/seed_demo.py
 fi
 
+# DB hygiene: when a previous boot was killed mid-write (Fly cycle, OOM,
+# disk-full, …) it can leave a stale -wal / -shm pair that triggers
+# "sqlite3.OperationalError: database is locked" on the next boot. Force
+# WAL mode (idempotent) + a full checkpoint to merge any orphan WAL back
+# into the main DB and clear the lock files.
+if [ -f "${VITALSCOPE_DB}" ]; then
+  sqlite3 "${VITALSCOPE_DB}" <<'EOF' >/dev/null 2>&1 || true
+PRAGMA journal_mode=WAL;
+PRAGMA wal_checkpoint(TRUNCATE);
+EOF
+fi
+
 # Conditionally copy the bundled SNPedia mirror seed into the live DB.
 # /app/data/snpedia_seed.db is baked into the image at build time. The
 # import is heavy (~800 MB of raw_json across snpedia_pages + ~3 M rows
