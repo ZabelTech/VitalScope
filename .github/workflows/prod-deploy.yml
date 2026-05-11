@@ -18,6 +18,11 @@ jobs:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pull the SNPedia seed (data/seed/*.sql.gz) via LFS so the
+          # Dockerfile's COPY + restore step sees real content, not the
+          # LFS pointer placeholder.
+          lfs: true
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 

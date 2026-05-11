@@ -73,6 +73,11 @@ jobs:
       APP_NAME: vitalscope-pr-${{ github.event.number }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Pull the SNPedia seed (data/seed/*.sql.gz) via LFS so the
+          # Dockerfile's COPY + restore step sees real content, not the
+          # LFS pointer placeholder.
+          lfs: true
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 

@@ -16,8 +16,27 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
+# sqlite3 CLI is needed to restore the SNPedia mirror dump and (later)
+# attach it into the runtime DB on first boot.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends sqlite3 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Restore the SNPedia mirror at build time into a standalone seed DB.
+# This is intentionally placed BEFORE the code COPYs so any source change
+# does not invalidate this heavy ~78 MB layer — Docker will reuse the
+# cached layer whenever the seed file hasn't changed. The runtime
+# entrypoint will copy these tables into the live /data/vitalscope.db
+# only when snpedia_pages is absent (idempotent, fast).
+COPY data/seed/snpedia_mirror.sql.gz /app/data/seed/snpedia_mirror.sql.gz
+RUN mkdir -p /app/data \
+    && zcat /app/data/seed/snpedia_mirror.sql.gz | sqlite3 /app/data/snpedia_seed.db \
+    && sqlite3 /app/data/snpedia_seed.db "PRAGMA integrity_check;" \
+    && sqlite3 /app/data/snpedia_seed.db "SELECT 'snpedia_pages=' || COUNT(*) FROM snpedia_pages;" \
+    && rm /app/data/seed/snpedia_mirror.sql.gz
 
 COPY backend ./backend
 COPY sync_garmin.py sync_garmin_activities.py sync_strong.py sync_eufy.py seed_demo.py ./
