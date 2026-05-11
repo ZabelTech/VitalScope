@@ -40,6 +40,15 @@ RUN mkdir -p /app/data \
 
 COPY backend ./backend
 COPY sync_garmin.py sync_garmin_activities.py sync_strong.py sync_eufy.py seed_demo.py ./
+# The genome wiki ingest job runner spawns this script as a subprocess
+# (see INGEST_SCRIPT_PATH in backend/app.py). Without it in the image,
+# the runner fails with "ingest script not found at
+# /app/ingest_top_genome_rsids.py" the moment a job is started.
+COPY ingest_top_genome_rsids.py ./
+# scripts/snpedia_dump.py (on-demand fetcher) and scripts/snpedia_catalog.py
+# (catalog walker) are admin tools — useful to keep in the image so they
+# can be invoked via `flyctl ssh console`.
+COPY scripts ./scripts
 COPY --from=frontend-build /build/dist ./frontend/dist
 
 RUN mkdir -p /data
