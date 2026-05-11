@@ -1054,6 +1054,43 @@ export interface GenomeIngestCounters {
   systems_total?: number;
   systems_done?: number;
   errors?: number;
+  snpedia_matches?: number;
+  ranked_total?: number;
+  tier1_count?: number;
+  tier2_count?: number;
+  tier3_count?: number;
+  gene_source_snpedia?: number;
+  gene_source_dbsnp?: number;
+  gene_source_ensembl?: number;
+}
+
+export interface GenomeIngestRankRow {
+  rsid: string;
+  user_genotype: string;
+  vcf_gt: string;
+  magnitude: number | null;
+  repute: string;
+  summary: string;
+  tier: number | null;
+  gene: string;
+}
+
+export interface GenomeIngestRanking {
+  available: boolean;
+  rows: GenomeIngestRankRow[];
+  tier_counts: { "1"?: number; "2"?: number; "3"?: number };
+  total: number;
+}
+
+export interface GenomeIngestHighlight {
+  available: boolean;
+  path?: string;
+  title?: string;
+  summary?: string;
+  type?: string;
+  rs_id?: string;
+  gene?: string;
+  total_pages?: number;
 }
 
 export interface GenomeIngestSummary {

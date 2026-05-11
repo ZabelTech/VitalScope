@@ -2,22 +2,25 @@ import { format, subYears } from "date-fns";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   apiFetch,
+  createGenomeUpload,
   deleteGenomeUpload,
   fetchActiveGenomeIngestJob,
   fetchGenomeVariants,
   ingestSnpediaBundle,
   listGenomeUploads,
+  parseGenomeUpload,
   startGenomeIngestJob,
+  uploadFileWithProgress,
 } from "../api";
 import type {
   GenomeIngestJob,
+  GenomeParseResult,
   GenomeUpload,
   GenomeVariant,
   GenomeWikiIngestResult,
 } from "../types";
 import { Card, CardHeader } from "./Card";
-import { GenomeIngestModal } from "./GenomeIngestModal";
-import { ImageUpload } from "./ImageUpload";
+import { GenomeIngestModal, type LocalIngestStage } from "./GenomeIngestModal";
 
 const today = format(new Date(), "yyyy-MM-dd");
 const fiveYearsAgo = format(subYears(new Date(), 5), "yyyy-MM-dd");
@@ -35,7 +38,13 @@ export function GenomeSection() {
   const [openId, setOpenId] = useState<number | null>(null);
   const [activeJob, setActiveJob] = useState<GenomeIngestJob | null>(null);
   const [activeJobLoaded, setActiveJobLoaded] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
   const [modalJobId, setModalJobId] = useState<number | null>(null);
+  const [localStage, setLocalStage] = useState<LocalIngestStage | undefined>(undefined);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [parsedDetail, setParsedDetail] = useState<GenomeParseResult | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -70,24 +79,89 @@ export function GenomeSection() {
     await reload();
   }
 
-  async function onUploadSaved() {
-    await reload();
+  async function handleVcfPicked(file: File) {
+    setLocalError(null);
+    setParsedDetail(null);
+    setModalJobId(null);
+    setUploadProgress({ loaded: 0, total: file.size });
+    setModalOpen(true);
     try {
+      setLocalStage("uploading");
+      const upload = await uploadFileWithProgress(
+        "genome",
+        today,
+        file,
+        (loaded, total) => setUploadProgress({ loaded, total }),
+      );
+      setUploadProgress({ loaded: file.size, total: file.size });
+      setLocalStage("parsing");
+      const parsed = await parseGenomeUpload(upload.id);
+      setParsedDetail(parsed);
+      setLocalStage("saving");
+      await createGenomeUpload({
+        date: today,
+        source_upload_id: upload.id,
+        variant_count: parsed.variant_count,
+        rs_count: parsed.rs_count,
+        chromosomes: parsed.chromosomes,
+        notes: null,
+        variants: parsed.variants ?? [],
+      });
+      await reload();
       const { job_id } = await startGenomeIngestJob();
       setModalJobId(job_id);
+      setLocalStage("done");
       await reloadActiveJob();
     } catch (err) {
-      console.warn("failed to start genome ingest job", err);
+      setLocalError(String(err instanceof Error ? err.message : err));
+      setLocalStage("error");
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
   function onModalClose() {
+    setModalOpen(false);
     setModalJobId(null);
+    setLocalStage(undefined);
+    setLocalError(null);
+    setUploadProgress(null);
     reloadActiveJob();
   }
 
   const isJobRunning =
     activeJob && (activeJob.status === "running" || activeJob.status === "queued");
+  const startBusy = localStage !== undefined && localStage !== "done" && localStage !== "error";
+
+  function openExistingJobModal() {
+    if (!activeJob) return;
+    setModalJobId(activeJob.id);
+    setLocalStage(undefined);
+    setLocalError(null);
+    setParsedDetail(null);
+    setModalOpen(true);
+  }
+
+  const fallbackUpload =
+    (modalJobId !== null
+      ? activeJob && activeJob.id === modalJobId && activeJob.genome_upload_id
+        ? uploads.find((u) => u.id === activeJob.genome_upload_id)
+        : null
+      : null) ?? (modalJobId !== null ? uploads[0] : null);
+
+  const modalVcfDetail = parsedDetail
+    ? {
+        variant_count: parsedDetail.variant_count,
+        rs_count: parsedDetail.rs_count,
+        chromosomes: parsedDetail.chromosomes,
+      }
+    : fallbackUpload
+    ? {
+        variant_count: fallbackUpload.variant_count,
+        rs_count: fallbackUpload.rs_count,
+        chromosomes: fallbackUpload.chromosomes,
+      }
+    : null;
 
   return (
     <Card id="decide.genome-upload">
@@ -100,7 +174,7 @@ export function GenomeSection() {
           <button
             type="button"
             className="genome-ingest-resume"
-            onClick={() => setModalJobId(activeJob!.id)}
+            onClick={openExistingJobModal}
             data-testid="genome-ingest-resume"
           >
             <span className="genome-ingest-resume-spinner" aria-hidden="true" />
@@ -108,19 +182,34 @@ export function GenomeSection() {
           </button>
         </div>
       ) : (
-        <ImageUpload
-          kind="genome"
-          date={today}
-          label="Upload a genome file (annotated VCF with RS IDs)"
-          hint="Accepts .vcf or .vcf.gz — up to 50 MB."
-          onSaved={onUploadSaved}
-        />
+        <div className="genome-vcf-picker">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".vcf,.vcf.gz,text/plain,application/gzip,application/x-gzip,application/octet-stream"
+            disabled={startBusy}
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) void handleVcfPicked(f);
+            }}
+            data-testid="genome-vcf-input"
+          />
+          <p className="journal-hint">
+            Pick a VCF (.vcf or .vcf.gz) — ingest starts automatically.
+          </p>
+        </div>
       )}
 
-      {modalJobId !== null ? (
+      {modalOpen ? (
         <GenomeIngestModal
           jobId={modalJobId}
-          initial={activeJob && activeJob.id === modalJobId ? activeJob : null}
+          initial={
+            modalJobId !== null && activeJob && activeJob.id === modalJobId ? activeJob : null
+          }
+          vcfDetail={modalVcfDetail}
+          localStage={localStage}
+          localError={localError}
+          uploadProgress={uploadProgress}
           onClose={onModalClose}
         />
       ) : null}
