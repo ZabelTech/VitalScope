@@ -1008,6 +1008,88 @@ def _seed_variant_registry(conn: sqlite3.Connection) -> None:
     )
 
 
+def _backfill_rank_cache_tsv(conn: sqlite3.Connection) -> None:
+    rank_tsv = GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
+    if not rank_tsv.is_file():
+        return
+    existing = conn.execute(
+        "SELECT 1 FROM genome_upload_ranked_variants LIMIT 1"
+    ).fetchone()
+    if existing:
+        return
+    upload_row = conn.execute(
+        "SELECT id FROM genome_uploads ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if not upload_row:
+        return
+    genome_upload_id = upload_row["id"] if isinstance(upload_row, sqlite3.Row) else upload_row[0]
+    now = datetime.now(timezone.utc).isoformat()
+    rows: list[tuple] = []
+    with rank_tsv.open() as fh:
+        header = fh.readline()
+        if not header:
+            return
+        for idx, line in enumerate(fh, 1):
+            parts = line.rstrip("\n").split("\t")
+            if len(parts) < 7:
+                continue
+            rsid = parts[0].strip().lower()
+            user_genotype = parts[1].strip()
+            vcf_gt = parts[2].strip()
+            mag_raw = parts[3].strip()
+            try:
+                magnitude = float(mag_raw) if mag_raw else None
+            except ValueError:
+                magnitude = None
+            repute = parts[4].strip()
+            summary = parts[5]
+            try:
+                tier = int(parts[6].strip())
+            except ValueError:
+                tier = 1 if magnitude is not None else 2
+            gene = parts[7].strip() if len(parts) > 7 and parts[7].strip() else None
+            if tier not in (1, 2, 3):
+                continue
+            rows.append((
+                genome_upload_id, rsid, user_genotype, vcf_gt,
+                magnitude, repute, summary, tier, gene, idx, now,
+            ))
+    if not rows:
+        return
+    rsid_rows = [
+        (
+            genome_upload_id,
+            r[1],
+            0,
+            (r[2][0] if r[2] else ""),
+            (r[2][1] if len(r[2]) > 1 else ""),
+            r[3],
+            r[8],
+            "id_column",
+        )
+        for r in rows
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO genome_upload_rsids "
+        "(genome_upload_id, rs_id, vcf_row_line_no, allele1, allele2, vcf_gt, gene, resolution_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        rsid_rows,
+    )
+    conn.executemany(
+        "INSERT OR REPLACE INTO genome_upload_ranked_variants "
+        "(genome_upload_id, rs_id, user_genotype, vcf_gt, magnitude, repute, summary, "
+        " tier, gene, rank_order, computed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
+    )
+    conn.commit()
+    print(
+        f"[migration] backfilled {len(rows)} rank-cache rows from {rank_tsv} "
+        f"into genome_upload_ranked_variants (upload_id={genome_upload_id})",
+        flush=True,
+    )
+
+
 def ensure_daily_landing_tables() -> None:
     conn = get_db()
     conn.execute(
@@ -1291,6 +1373,82 @@ def ensure_daily_landing_tables() -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_genome_variants_rs ON genome_variants(rs_id)"
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_upload_vcf_rows (
+            genome_upload_id INTEGER NOT NULL,
+            line_no          INTEGER NOT NULL,
+            chrom            TEXT    NOT NULL,
+            pos              INTEGER NOT NULL,
+            raw_id           TEXT    NOT NULL,
+            ref              TEXT    NOT NULL,
+            alt              TEXT    NOT NULL,
+            qual             TEXT,
+            filter           TEXT,
+            info             TEXT,
+            format           TEXT,
+            sample           TEXT,
+            PRIMARY KEY (genome_upload_id, line_no),
+            FOREIGN KEY (genome_upload_id) REFERENCES genome_uploads(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_upload_vcf_rows_pos "
+        "ON genome_upload_vcf_rows(genome_upload_id, chrom, pos)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_upload_rsids (
+            genome_upload_id    INTEGER NOT NULL,
+            rs_id               TEXT    NOT NULL,
+            vcf_row_line_no     INTEGER NOT NULL,
+            allele1             TEXT    NOT NULL,
+            allele2             TEXT    NOT NULL,
+            vcf_gt              TEXT    NOT NULL,
+            gene                TEXT,
+            resolution_source   TEXT    NOT NULL CHECK (
+                resolution_source IN ('id_column', 'position_lookup', 'multi_allele_split')
+            ),
+            PRIMARY KEY (genome_upload_id, rs_id),
+            FOREIGN KEY (genome_upload_id, vcf_row_line_no)
+                REFERENCES genome_upload_vcf_rows(genome_upload_id, line_no) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_upload_rsids_row "
+        "ON genome_upload_rsids(genome_upload_id, vcf_row_line_no)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_upload_rsids_gene "
+        "ON genome_upload_rsids(genome_upload_id, gene)"
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS genome_upload_ranked_variants (
+            genome_upload_id INTEGER NOT NULL,
+            rs_id            TEXT    NOT NULL,
+            user_genotype    TEXT    NOT NULL,
+            vcf_gt           TEXT    NOT NULL,
+            magnitude        REAL,
+            repute           TEXT    NOT NULL DEFAULT '',
+            summary          TEXT    NOT NULL DEFAULT '',
+            tier             INTEGER NOT NULL CHECK (tier IN (1, 2, 3)),
+            gene             TEXT,
+            rank_order       INTEGER NOT NULL,
+            computed_at      TEXT    NOT NULL,
+            PRIMARY KEY (genome_upload_id, rs_id),
+            FOREIGN KEY (genome_upload_id, rs_id)
+                REFERENCES genome_upload_rsids(genome_upload_id, rs_id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_genome_upload_ranked_tier_order "
+        "ON genome_upload_ranked_variants(genome_upload_id, tier, rank_order)"
+    )
+    _backfill_rank_cache_tsv(conn)
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS variant_registry (
@@ -9187,6 +9345,36 @@ def _demo_ingest_script() -> list[tuple[float, str]]:
 async def _run_demo_ingest_job(job_id: int) -> None:
     try:
         conn = get_db()
+        # Link the job to the demo's seeded genome upload so the ranking
+        # endpoint can return non-empty rows from genome_upload_ranked_variants.
+        # Lazily seed just the genome tables if no upload exists yet — keeps
+        # the demo flow self-contained without populating unrelated rows
+        # (meals, bloodwork, etc.) that other tests assume are empty.
+        latest = conn.execute(
+            "SELECT id FROM genome_uploads ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if latest is None:
+            conn.close()
+            try:
+                import seed_demo as _seed_demo
+                seed_conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
+                seed_conn.row_factory = sqlite3.Row
+                _seed_demo.seed_genome(seed_conn)
+                _seed_demo.seed_genome_wiki(seed_conn)
+                seed_conn.commit()
+                seed_conn.close()
+            except Exception as exc:
+                print(f"[demo] genome seed for ingest job failed: {exc}", flush=True)
+            conn = get_db()
+            latest = conn.execute(
+                "SELECT id FROM genome_uploads ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if latest is not None:
+            conn.execute(
+                "UPDATE genome_wiki_ingest_jobs SET genome_upload_id = ? "
+                "WHERE id = ? AND genome_upload_id IS NULL",
+                (latest[0], job_id),
+            )
         conn.execute(
             "UPDATE genome_wiki_ingest_jobs SET status = 'running', started_at = ? WHERE id = ?",
             (datetime.now(timezone.utc).isoformat(), job_id),
@@ -9340,34 +9528,12 @@ async def _run_genome_ingest_job(job_id: int) -> None:
     conn.commit()
     conn.close()
 
-    # Phase 1: pre-annotate the VCF in place so DeepVariant-style files
-    # whose ID column is `.` still get rsid coverage from SNPedia positions.
-    # `--annotate-vcf` writes a new file alongside the source.
+    # Annotation now happens implicitly in the script's setup stage: VCF
+    # data lines are bulk-loaded into `genome_upload_vcf_rows`, then rsids
+    # are derived into `genome_upload_rsids` (id_column / multi_allele_split)
+    # and position-filled for "." IDs (position_lookup). No on-disk
+    # annotated VCF artifact anymore.
     src_vcf = _latest_source_vcf_path(genome_upload_id)
-    annotated_vcf: Optional[Path] = None
-    if src_vcf is not None:
-        annotated_vcf = src_vcf.with_name(src_vcf.stem + ".annotated.vcf")
-        c = get_db()
-        try:
-            _append_ingest_events(c, job_id, [{
-                "kind": "stage",
-                "stage": "annotate",
-                "message": f"annotating {src_vcf.name} → {annotated_vcf.name}",
-            }])
-        finally:
-            c.close()
-        try:
-            annot_rc = await _run_ingest_subprocess(
-                job_id,
-                ["--annotate-vcf", str(annotated_vcf), "--vcf", str(src_vcf)],
-            )
-        except Exception as exc:
-            _finalize_ingest_job(job_id, "failed", None, f"annotate phase failed: {exc}")
-            return
-        if annot_rc != 0 or not annotated_vcf.is_file():
-            # Annotation failed (e.g. unknown build) — fall back to the
-            # untouched source VCF and let the rank pass try its luck.
-            annotated_vcf = None
 
     # Match the user's stated "always ingest everything" intent — the
     # script's default --top-n is 30, which means a fresh ingest after a
@@ -9375,9 +9541,7 @@ async def _run_genome_ingest_job(job_id: int) -> None:
     # is already on disk. 100000 is an upper bound; the rank+filter step
     # caps to whatever T1+T2 actually has.
     cli_args = ["--rebuild-rank", "--top-n", "100000"]
-    if annotated_vcf is not None and annotated_vcf.is_file():
-        cli_args += ["--vcf", str(annotated_vcf)]
-    elif src_vcf is not None:
+    if src_vcf is not None:
         cli_args += ["--vcf", str(src_vcf)]
 
     try:
@@ -9481,49 +9645,48 @@ def get_genome_ingest_job(job_id: int, since: int = 0):
 @app.get("/api/genome-wiki/ingest-jobs/{job_id}/ranking")
 def get_genome_ingest_ranking(job_id: int, limit: int = 10):
     conn = get_db()
-    row = _ingest_job_row(conn, job_id)
-    conn.close()
-    if row is None:
-        raise HTTPException(status_code=404, detail="ingest job not found")
-    rank_path = GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
-    if not rank_path.is_file():
-        return {"available": False, "rows": [], "tier_counts": {}, "total": 0}
-    rows: list[dict] = []
-    tier_counts: dict[str, int] = {"1": 0, "2": 0, "3": 0}
-    total = 0
     try:
-        with rank_path.open("r", encoding="utf-8", errors="replace") as fh:
-            header = fh.readline().rstrip("\n").split("\t")
-            for line in fh:
-                cols = line.rstrip("\n").split("\t")
-                if len(cols) < len(header):
-                    cols = cols + [""] * (len(header) - len(cols))
-                d = dict(zip(header, cols))
-                tier = (d.get("tier") or "").strip()
-                if tier in tier_counts:
-                    tier_counts[tier] += 1
-                total += 1
-                if len(rows) < max(0, limit):
-                    rows.append({
-                        "rsid": d.get("rsid") or "",
-                        "user_genotype": d.get("user_genotype") or "",
-                        "vcf_gt": d.get("vcf_gt") or "",
-                        "magnitude": (
-                            float(d["magnitude"]) if d.get("magnitude") else None
-                        ),
-                        "repute": d.get("repute") or "",
-                        "summary": d.get("summary") or "",
-                        "tier": int(tier) if tier.isdigit() else None,
-                        "gene": d.get("gene") or "",
-                    })
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"rank file read failed: {exc}")
-    return {
-        "available": True,
-        "rows": rows,
-        "tier_counts": tier_counts,
-        "total": total,
-    }
+        row = _ingest_job_row(conn, job_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="ingest job not found")
+        genome_upload_id = row["genome_upload_id"]
+        if genome_upload_id is None:
+            return {"available": False, "rows": [], "tier_counts": {}, "total": 0}
+        tier_counts = {"1": 0, "2": 0, "3": 0}
+        for tier_row in conn.execute(
+            "SELECT tier, COUNT(*) AS n FROM genome_upload_ranked_variants "
+            "WHERE genome_upload_id = ? GROUP BY tier",
+            (genome_upload_id,),
+        ):
+            tier_counts[str(int(tier_row["tier"]))] = int(tier_row["n"])
+        total = sum(tier_counts.values())
+        if total == 0:
+            return {"available": False, "rows": [], "tier_counts": tier_counts, "total": 0}
+        rows: list[dict] = []
+        for r in conn.execute(
+            "SELECT rs_id, user_genotype, vcf_gt, magnitude, repute, summary, tier, gene "
+            "FROM genome_upload_ranked_variants WHERE genome_upload_id = ? "
+            "ORDER BY rank_order ASC LIMIT ?",
+            (genome_upload_id, max(0, limit)),
+        ):
+            rows.append({
+                "rsid": r["rs_id"],
+                "user_genotype": r["user_genotype"] or "",
+                "vcf_gt": r["vcf_gt"] or "",
+                "magnitude": r["magnitude"],
+                "repute": r["repute"] or "",
+                "summary": r["summary"] or "",
+                "tier": int(r["tier"]),
+                "gene": r["gene"] or "",
+            })
+        return {
+            "available": True,
+            "rows": rows,
+            "tier_counts": tier_counts,
+            "total": total,
+        }
+    finally:
+        conn.close()
 
 
 _HIGHLIGHT_FRONTMATTER_RE = _re.compile(

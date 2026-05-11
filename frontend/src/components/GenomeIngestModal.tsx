@@ -47,7 +47,7 @@ const PRE_STAGE_LABELS: Record<PreStageKey, string> = {
 };
 
 const STAGE_ORDER = [
-  "annotate",
+  "setup",
   "positions",
   "gene-resolver",
   "dbsnp-lookup",
@@ -61,7 +61,7 @@ const STAGE_ORDER = [
 type StageKey = (typeof STAGE_ORDER)[number];
 
 const STAGE_LABELS: Record<StageKey, string> = {
-  annotate: "Annotating VCF with SNPedia rsids",
+  setup: "Loading VCF into the database",
   positions: "Mapping rsids to genome positions",
   "gene-resolver": "Building gene-interval index",
   "dbsnp-lookup": "Cross-referencing dbSNP gene assignments",

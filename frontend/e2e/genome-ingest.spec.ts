@@ -51,4 +51,20 @@ test("Genome wiki ingest job: progress modal cycles through stages and lands a s
   await expect(page.getByTestId("ingest-summary")).toBeVisible({
     timeout: 60_000,
   });
+
+  // The ranking endpoint reads from genome_upload_ranked_variants (not
+  // the old rank_by_magnitude.tsv). The demo seed pre-loaded 5 ranked
+  // rows for the demo upload, so the job's /ranking response must
+  // surface them via the DB-backed query.
+  const jobId = startBody.job_id;
+  const rankRes = await page.request.get(
+    `/api/genome-wiki/ingest-jobs/${jobId}/ranking`,
+  );
+  expect(rankRes.ok()).toBeTruthy();
+  const rankBody = await rankRes.json();
+  expect(rankBody.available).toBe(true);
+  expect(rankBody.total).toBeGreaterThan(0);
+  expect(Array.isArray(rankBody.rows)).toBe(true);
+  expect(rankBody.rows.length).toBeGreaterThan(0);
+  expect(rankBody.rows[0]).toHaveProperty("rsid");
 });

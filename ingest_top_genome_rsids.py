@@ -25,14 +25,15 @@ Usage:
   python3 ingest_top_genome_rsids.py --systems-only --rebuild-systems  # ditto, overwriting existing
   python3 ingest_top_genome_rsids.py --ask "What does my MTHFR C677T mean for folate?"
   python3 ingest_top_genome_rsids.py --report longevity      # one of: pharmacogenomics longevity performance nutrition methylation
-  python3 ingest_top_genome_rsids.py --annotate-vcf out.vcf  # fill in missing rsids in the latest genome upload by SNPedia position lookup
 
-VCF source: by default the latest entry in `genome_uploads` (its symlinked
-file under VITALSCOPE_UPLOADS). Override with --vcf.
+VCF source: by default the latest entry in `genome_uploads` (its file
+under VITALSCOPE_UPLOADS). Override with --vcf. On first run the VCF is
+streamed into `genome_upload_vcf_rows` and rsids are derived into
+`genome_upload_rsids`; subsequent runs reuse those rows directly.
 
-Rank cache: the (slow) VCF-vs-SNPedia magnitude join is cached as a TSV at
-$VITALSCOPE_GENOME_WIKI/rank_by_magnitude.tsv. Pass --rebuild-rank after
-adding new SNPedia data or a new genome upload to refresh it.
+Rank cache: lives in `genome_upload_ranked_variants` keyed by
+genome_upload_id. Pass --rebuild-rank after adding new SNPedia data or
+re-running against a refreshed VCF.
 
 Environment:
   ANTHROPIC_API_KEY        required (the AI compile passes need it)
@@ -72,7 +73,6 @@ from typing import Awaitable, Callable, Optional
 
 import backend.app as app
 
-DEFAULT_RANK_CACHE = app.GENOME_WIKI_ROOT / "rank_by_magnitude.tsv"
 DEFAULT_HG38_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg38.tsv"
 DEFAULT_HG19_POSITIONS_CACHE = app.GENOME_WIKI_ROOT / "rsid_positions_hg19.tsv"
 DEFAULT_GENE_INTERVALS_CACHE = app.GENOME_WIKI_ROOT / "snpedia_gene_intervals_hg38.tsv"
@@ -388,6 +388,272 @@ def _detect_vcf_build(
     return "hg38" if hg38_hits >= hg19_hits else "hg19"
 
 
+_VCF_BULK_CHUNK = 5000
+_VCF_PROGRESS_EVERY = 100_000
+
+
+def _vcf_row_count(conn: sqlite3.Connection, genome_upload_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM genome_upload_vcf_rows WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _rsid_row_count(conn: sqlite3.Connection, genome_upload_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM genome_upload_rsids WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _bulk_load_vcf_rows(
+    conn: sqlite3.Connection,
+    genome_upload_id: int,
+    vcf_path: Path,
+) -> int:
+    """Stream the VCF and load every data line into genome_upload_vcf_rows.
+
+    Idempotent: drops prior rows (and cascades into genome_upload_rsids) before
+    inserting. Emits a progress line every _VCF_PROGRESS_EVERY rows so the
+    `[setup]` stage in the ingest-jobs modal doesn't look stalled.
+    """
+    conn.execute(
+        "DELETE FROM genome_upload_rsids WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    )
+    conn.execute(
+        "DELETE FROM genome_upload_vcf_rows WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    )
+    conn.commit()
+
+    sql = (
+        "INSERT INTO genome_upload_vcf_rows "
+        "(genome_upload_id, line_no, chrom, pos, raw_id, ref, alt, "
+        " qual, filter, info, format, sample) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+
+    chunk: list[tuple] = []
+    line_no = 0
+    with _open_vcf_read(vcf_path) as fh:
+        for raw in fh:
+            if raw.startswith("#"):
+                continue
+            parts = raw.rstrip("\n").split("\t")
+            if len(parts) < 5:
+                continue
+            line_no += 1
+            try:
+                pos = int(parts[1])
+            except ValueError:
+                continue
+            chrom = parts[0]
+            raw_id = parts[2] if len(parts) > 2 else "."
+            ref = parts[3] if len(parts) > 3 else ""
+            alt = parts[4] if len(parts) > 4 else ""
+            qual = parts[5] if len(parts) > 5 else None
+            filt = parts[6] if len(parts) > 6 else None
+            info = parts[7] if len(parts) > 7 else None
+            fmt = parts[8] if len(parts) > 8 else None
+            sample = parts[9] if len(parts) > 9 else None
+            chunk.append((
+                genome_upload_id, line_no, chrom, pos, raw_id, ref, alt,
+                qual, filt, info, fmt, sample,
+            ))
+            if len(chunk) >= _VCF_BULK_CHUNK:
+                conn.executemany(sql, chunk)
+                chunk.clear()
+            if line_no % _VCF_PROGRESS_EVERY == 0:
+                print(f"[setup] loaded {line_no:,} VCF rows…", flush=True)
+    if chunk:
+        conn.executemany(sql, chunk)
+    conn.commit()
+    return line_no
+
+
+def _extract_rsids_from_vcf_rows(
+    conn: sqlite3.Connection,
+    genome_upload_id: int,
+    known_rsids: set[str],
+) -> int:
+    """Derive `genome_upload_rsids` rows from `genome_upload_vcf_rows`.
+
+    Applies the existing filter rules from the old in-memory VCF stream:
+      - FILTER must be PASS or "."
+      - FORMAT must contain a GT field
+      - the resolved allele pair must be single-base A/C/G/T
+      - the resolved rsid must be in `known_rsids` (SNPedia-known)
+
+    Compound IDs (`rs1;rs2`) are split — each rsid becomes its own row pointing
+    back at the same VCF line_no, with resolution_source='multi_allele_split'.
+    Single rsid IDs use resolution_source='id_column'.
+    Position-based fill-in for "." IDs happens later via
+    `_annotate_rsids_by_position`.
+    """
+    cur = conn.execute(
+        "SELECT line_no, raw_id, ref, alt, filter, format, sample "
+        "FROM genome_upload_vcf_rows WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    )
+    rows_to_insert: list[tuple] = []
+    for row in cur:
+        line_no = row["line_no"] if isinstance(row, sqlite3.Row) else row[0]
+        raw_id = row["raw_id"] if isinstance(row, sqlite3.Row) else row[1]
+        ref = (row["ref"] if isinstance(row, sqlite3.Row) else row[2]) or ""
+        alt = (row["alt"] if isinstance(row, sqlite3.Row) else row[3]) or ""
+        filt = row["filter"] if isinstance(row, sqlite3.Row) else row[4]
+        fmt = row["format"] if isinstance(row, sqlite3.Row) else row[5]
+        sample = row["sample"] if isinstance(row, sqlite3.Row) else row[6]
+        if filt not in (None, "", "PASS", "."):
+            continue
+        if not fmt or not sample:
+            continue
+        fmt_fields = fmt.split(":")
+        sample_fields = sample.split(":")
+        try:
+            gt_idx = fmt_fields.index("GT")
+        except ValueError:
+            continue
+        if gt_idx >= len(sample_fields):
+            continue
+        gt_raw = sample_fields[gt_idx].replace("|", "/")
+        if "." in gt_raw:
+            continue
+        try:
+            a_idx, b_idx = (int(x) for x in gt_raw.split("/"))
+        except ValueError:
+            continue
+        ref_u = ref.upper()
+        alts = [a.upper() for a in alt.split(",")]
+
+        def _resolve(i: int) -> Optional[str]:
+            if i == 0:
+                return ref_u
+            if 1 <= i <= len(alts):
+                return alts[i - 1]
+            return None
+
+        a1, a2 = _resolve(a_idx), _resolve(b_idx)
+        if not a1 or not a2 or len(a1) != 1 or len(a2) != 1 or a1 not in "ACGT" or a2 not in "ACGT":
+            continue
+        candidates = [c.strip() for c in (raw_id or "").split(";") if c.strip()]
+        rs_candidates = [c.lower() for c in candidates if c.lower().startswith("rs")]
+        if not rs_candidates:
+            continue
+        source = "id_column" if len(rs_candidates) == 1 else "multi_allele_split"
+        for rsid_lc in rs_candidates:
+            if rsid_lc not in known_rsids:
+                continue
+            rows_to_insert.append((
+                genome_upload_id, rsid_lc, line_no, a1, a2, gt_raw, source,
+            ))
+    if rows_to_insert:
+        conn.executemany(
+            "INSERT OR REPLACE INTO genome_upload_rsids "
+            "(genome_upload_id, rs_id, vcf_row_line_no, allele1, allele2, vcf_gt, resolution_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows_to_insert,
+        )
+        conn.commit()
+    return len(rows_to_insert)
+
+
+def _annotate_rsids_by_position(
+    conn: sqlite3.Connection,
+    genome_upload_id: int,
+    position_to_rsid: dict[tuple[str, int], str],
+    known_rsids: set[str],
+) -> int:
+    """Fill in `genome_upload_rsids` rows for VCF lines whose ID column was '.'.
+
+    Only walks VCF rows that yielded zero rsid rows during
+    `_extract_rsids_from_vcf_rows` (i.e. raw_id was empty / '.' / non-rs).
+    For each (chrom, pos) that SNPedia knows, inserts one row with
+    resolution_source='position_lookup'. One VCF line can produce multiple
+    rsid rows here when the position lookup is ambiguous — the back-pointer
+    via vcf_row_line_no keeps the relationship explicit.
+    """
+    if not position_to_rsid:
+        return 0
+    rows_to_insert: list[tuple] = []
+    cur = conn.execute(
+        "SELECT v.line_no, v.chrom, v.pos, v.ref, v.alt, v.format, v.sample "
+        "FROM genome_upload_vcf_rows v "
+        "WHERE v.genome_upload_id = ? AND NOT EXISTS ("
+        "    SELECT 1 FROM genome_upload_rsids r "
+        "    WHERE r.genome_upload_id = v.genome_upload_id "
+        "      AND r.vcf_row_line_no = v.line_no"
+        ")",
+        (genome_upload_id,),
+    )
+    for row in cur:
+        line_no = row["line_no"]
+        chrom = (row["chrom"] or "").removeprefix("chr").upper()
+        pos = row["pos"]
+        rsid = position_to_rsid.get((chrom, pos))
+        if not rsid:
+            continue
+        rsid_lc = rsid.lower()
+        if rsid_lc not in known_rsids:
+            continue
+        ref = (row["ref"] or "").upper()
+        alts = [a.upper() for a in (row["alt"] or "").split(",")]
+        fmt = row["format"] or ""
+        sample = row["sample"] or ""
+        fmt_fields = fmt.split(":")
+        sample_fields = sample.split(":")
+        try:
+            gt_idx = fmt_fields.index("GT")
+        except ValueError:
+            continue
+        if gt_idx >= len(sample_fields):
+            continue
+        gt_raw = sample_fields[gt_idx].replace("|", "/")
+        if "." in gt_raw:
+            continue
+        try:
+            a_idx, b_idx = (int(x) for x in gt_raw.split("/"))
+        except ValueError:
+            continue
+
+        def _resolve(i: int) -> Optional[str]:
+            if i == 0:
+                return ref
+            if 1 <= i <= len(alts):
+                return alts[i - 1]
+            return None
+
+        a1, a2 = _resolve(a_idx), _resolve(b_idx)
+        if not a1 or not a2 or len(a1) != 1 or len(a2) != 1 or a1 not in "ACGT" or a2 not in "ACGT":
+            continue
+        rows_to_insert.append((
+            genome_upload_id, rsid_lc, line_no, a1, a2, gt_raw, "position_lookup",
+        ))
+    if rows_to_insert:
+        conn.executemany(
+            "INSERT OR REPLACE INTO genome_upload_rsids "
+            "(genome_upload_id, rs_id, vcf_row_line_no, allele1, allele2, vcf_gt, resolution_source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows_to_insert,
+        )
+        conn.commit()
+    return len(rows_to_insert)
+
+
+def _iter_db_rsids(
+    conn: sqlite3.Connection, genome_upload_id: int,
+) -> list[tuple[str, str, str, str]]:
+    rows = conn.execute(
+        "SELECT rs_id, allele1, allele2, vcf_gt FROM genome_upload_rsids "
+        "WHERE genome_upload_id = ? ORDER BY rs_id",
+        (genome_upload_id,),
+    ).fetchall()
+    return [(r["rs_id"], r["allele1"], r["allele2"], r["vcf_gt"]) for r in rows]
+
+
 def _annotate_vcf_in_place(
     in_path: Path,
     out_path: Path,
@@ -452,53 +718,6 @@ def _annotate_vcf_in_place(
             else:
                 fout.write(line)
     return total, had_id, annotated, canonicalised
-
-
-def _stream_user_vcf(vcf_path: Path, known_rsids: set[str]) -> list[tuple[str, str, str, str]]:
-    user_rows: list[tuple[str, str, str, str]] = []
-    with _open_vcf_read(vcf_path) as fh:
-        for line in fh:
-            if line.startswith("#"):
-                continue
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 10:
-                continue
-            rsid = parts[2]
-            if not rsid.startswith("rs"):
-                continue
-            rsid_lc = rsid.lower()
-            if rsid_lc not in known_rsids:
-                continue
-            if parts[6] not in ("PASS", "."):
-                continue
-            ref = parts[3].upper()
-            alts = parts[4].upper().split(",")
-            fmt_fields = parts[8].split(":")
-            sample_fields = parts[9].split(":")
-            try:
-                gt_idx = fmt_fields.index("GT")
-            except ValueError:
-                continue
-            gt_raw = sample_fields[gt_idx].replace("|", "/")
-            if "." in gt_raw:
-                continue
-            try:
-                a_idx, b_idx = (int(x) for x in gt_raw.split("/"))
-            except ValueError:
-                continue
-
-            def _resolve(i: int) -> Optional[str]:
-                if i == 0:
-                    return ref
-                if 1 <= i <= len(alts):
-                    return alts[i - 1]
-                return None
-
-            a1, a2 = _resolve(a_idx), _resolve(b_idx)
-            if not a1 or not a2 or len(a1) != 1 or len(a2) != 1 or a1 not in "ACGT" or a2 not in "ACGT":
-                continue
-            user_rows.append((rsid_lc, a1, a2, gt_raw))
-    return user_rows
 
 
 _RSNUM_SUMMARY_RE = re.compile(r"\|\s*Summary\s*=\s*([^\n|}]+)", re.IGNORECASE)
@@ -885,7 +1104,7 @@ class _EnsemblGeneResolver:
 
 
 def _rank(
-    vcf_path: Path, conn: sqlite3.Connection,
+    genome_upload_id: int, conn: sqlite3.Connection,
     use_ensembl: bool = True,
 ) -> list[dict]:
     """Build the ranked candidate list for ingestion.
@@ -925,9 +1144,8 @@ def _rank(
         f"{len(known_rsids):,} rsids in snpedia_variants",
         flush=True,
     )
-    print(f"[rank] streaming {vcf_path}…", flush=True)
-    user_rows = _stream_user_vcf(vcf_path, known_rsids)
-    print(f"[rank] {len(user_rows):,} VCF rows match SNPedia", flush=True)
+    user_rows = _iter_db_rsids(conn, genome_upload_id)
+    print(f"[rank] {len(user_rows):,} rsids from genome_upload_rsids", flush=True)
     ranked: list[dict] = []
     tier_counts: Counter[int] = Counter()
     gene_source_counts: Counter[str] = Counter()
@@ -989,6 +1207,14 @@ def _rank(
         f"T3={tier_counts[3]:,} from fallback with no gene)",
         flush=True,
     )
+    gene_updates = [(r["gene"], genome_upload_id, r["rsid"]) for r in ranked if r["gene"]]
+    if gene_updates:
+        conn.executemany(
+            "UPDATE genome_upload_rsids SET gene = ? "
+            "WHERE genome_upload_id = ? AND rs_id = ?",
+            gene_updates,
+        )
+        conn.commit()
     # Three-phase ordering: T1 first (descending magnitude), then T2/T3 by
     # rsid. `tier` is the primary key so a `--tier 1,2` filter slice always
     # consumes T1+T2 together before any T3 enters the candidate set.
@@ -1001,60 +1227,75 @@ def _rank(
     return ranked
 
 
-_RANK_CACHE_HEADER = "rsid\tuser_genotype\tvcf_gt\tmagnitude\trepute\tsummary\ttier\tgene\n"
+def _write_rank_cache(
+    conn: sqlite3.Connection, genome_upload_id: int, ranked: list[dict],
+) -> None:
+    """Persist `ranked` into `genome_upload_ranked_variants`, preserving
+    sort order via `rank_order`. Idempotent — deletes prior rows for this
+    upload first.
+    """
+    now = datetime.utcnow().isoformat(timespec="seconds")
+    conn.execute(
+        "DELETE FROM genome_upload_ranked_variants WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    )
+    rows = []
+    for idx, r in enumerate(ranked, 1):
+        summary = (r.get("summary") or "").replace("\t", " ").replace("\n", " ")[:200]
+        rows.append((
+            genome_upload_id,
+            r["rsid"],
+            r["user_genotype"],
+            r["vcf_gt"],
+            r["magnitude"],
+            r.get("repute") or "",
+            summary,
+            int(r.get("tier", 1)),
+            r.get("gene"),
+            idx,
+            now,
+        ))
+    if rows:
+        conn.executemany(
+            "INSERT OR REPLACE INTO genome_upload_ranked_variants "
+            "(genome_upload_id, rs_id, user_genotype, vcf_gt, magnitude, repute, summary, "
+            " tier, gene, rank_order, computed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    conn.commit()
 
 
-def _write_rank_cache(ranked: list[dict], path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as fh:
-        fh.write(_RANK_CACHE_HEADER)
-        for r in ranked:
-            s = r["summary"].replace("\t", " ").replace("\n", " ")[:200]
-            mag = "" if r["magnitude"] is None else r["magnitude"]
-            tier = r.get("tier", 1)
-            gene = r.get("gene") or ""
-            fh.write(
-                f"{r['rsid']}\t{r['user_genotype']}\t{r['vcf_gt']}\t"
-                f"{mag}\t{r['repute']}\t{s}\t{tier}\t{gene}\n"
-            )
+def _read_rank_cache(
+    conn: sqlite3.Connection, genome_upload_id: int,
+) -> list[dict]:
+    cur = conn.execute(
+        "SELECT rs_id, user_genotype, vcf_gt, magnitude, repute, summary, tier, gene "
+        "FROM genome_upload_ranked_variants WHERE genome_upload_id = ? "
+        "ORDER BY rank_order ASC",
+        (genome_upload_id,),
+    )
+    return [
+        {
+            "rsid": row["rs_id"],
+            "user_genotype": row["user_genotype"],
+            "vcf_gt": row["vcf_gt"],
+            "magnitude": row["magnitude"],
+            "repute": row["repute"] or "",
+            "summary": row["summary"] or "",
+            "tier": int(row["tier"]),
+            "gene": row["gene"],
+        }
+        for row in cur
+    ]
 
 
-def _read_rank_cache(path: Path) -> list[dict]:
-    """Load the rank cache. Backwards-compatible with pre-tier 6-column files
-    (auto-assigns tier based on magnitude presence: with-mag=>1, no-mag=>2)."""
-    rows: list[dict] = []
-    with path.open() as fh:
-        next(fh)
-        for line in fh:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 5:
-                continue
-            mag_raw = parts[3].strip()
-            try:
-                magnitude: Optional[float] = float(mag_raw) if mag_raw else None
-            except ValueError:
-                magnitude = None
-            if len(parts) >= 8:
-                try:
-                    tier = int(parts[6])
-                except ValueError:
-                    tier = 1 if magnitude is not None else 2
-                gene = parts[7] or None
-            else:
-                # Legacy 6-column cache: derive tier from magnitude.
-                tier = 1 if magnitude is not None else 2
-                gene = None
-            rows.append({
-                "rsid": parts[0],
-                "user_genotype": parts[1],
-                "vcf_gt": parts[2],
-                "magnitude": magnitude,
-                "repute": parts[4],
-                "summary": parts[5] if len(parts) > 5 else "",
-                "tier": tier,
-                "gene": gene,
-            })
-    return rows
+def _ranked_count(conn: sqlite3.Connection, genome_upload_id: int) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) FROM genome_upload_ranked_variants WHERE genome_upload_id = ?",
+        (genome_upload_id,),
+    ).fetchone()
+    return int(row[0]) if row else 0
 
 
 def _write_t3_stub(r: dict) -> Path:
@@ -1575,11 +1816,11 @@ def main(argv=None) -> int:
                              "Default '1,2' — pass '1,2,3' to also stub-write the "
                              "no-gene long tail.")
     parser.add_argument("--vcf", type=Path, default=None,
-                        help="VCF path; defaults to the latest genome_upload")
-    parser.add_argument("--rank-cache", type=Path, default=DEFAULT_RANK_CACHE,
-                        help=f"path to cached rank TSV (default {DEFAULT_RANK_CACHE})")
+                        help="VCF path; defaults to the latest genome_upload. "
+                             "Only used on first run to bulk-load rows into "
+                             "genome_upload_vcf_rows; subsequent runs reuse the db.")
     parser.add_argument("--rebuild-rank", action="store_true",
-                        help="recompute the rank TSV even if the cache exists")
+                        help="recompute the rank cache in the DB even if rows exist")
     parser.add_argument("--no-ensembl-fallback", action="store_true",
                         help="disable the final Ensembl REST gene-resolver tier "
                              "(useful for offline runs; cached answers in "
@@ -1619,19 +1860,11 @@ def main(argv=None) -> int:
                              "(equivalent to POST /api/genome-wiki/report). "
                              "Writes to wiki/synthesis/reports/<topic>_<date>.md. "
                              "Mutually exclusive with --ask and --systems-only.")
-    parser.add_argument("--annotate-vcf", metavar="OUT_VCF", type=Path, default=None,
-                        help="read the input VCF (--vcf or the latest genome_upload), "
-                             "fill in missing rsids by matching variant positions "
-                             "against SNPedia's hg38/hg19 catalog, and write the "
-                             "annotated VCF to OUT_VCF. Build is auto-detected. "
-                             "Skips the rank/variant/gene/system passes — run the "
-                             "ingest separately afterwards with --vcf OUT_VCF. "
-                             "Mutually exclusive with --ask / --report / --systems-only.")
     args = parser.parse_args(argv)
 
-    selected_modes = sum(1 for x in (args.ask, args.report, args.systems_only, args.annotate_vcf) if x)
+    selected_modes = sum(1 for x in (args.ask, args.report, args.systems_only) if x)
     if selected_modes > 1:
-        parser.error("--ask / --report / --systems-only / --annotate-vcf are mutually exclusive")
+        parser.error("--ask / --report / --systems-only are mutually exclusive")
 
     if args.model:
         app.AI_MODEL = args.model
@@ -1686,40 +1919,6 @@ def main(argv=None) -> int:
         print(res["body"] or "")
         return 0
 
-    if args.annotate_vcf:
-        in_vcf = _resolve_vcf(conn, args.vcf)
-        out_vcf = args.annotate_vcf
-        print(f"[mode] annotate-vcf — input={in_vcf} output={out_vcf}", flush=True)
-        t0 = time.time()
-        hg38 = _build_hg38_position_lookup(conn, DEFAULT_HG38_POSITIONS_CACHE)
-        hg19 = _build_hg19_position_lookup(hg38, DEFAULT_HG19_POSITIONS_CACHE)
-        build = _detect_vcf_build(in_vcf, hg38, hg19)
-        print(f"[positions] detected VCF build: {build}", flush=True)
-        if build == "hg38":
-            lookup = hg38
-        elif build == "hg19":
-            lookup = hg19
-        else:
-            print("[positions] could not detect build (no SNPedia matches in first 500 lines); aborting", flush=True)
-            conn.close()
-            return 1
-        if not lookup:
-            print("[positions] empty position lookup; aborting", flush=True)
-            conn.close()
-            return 1
-        total, had, annotated, canonicalised = _annotate_vcf_in_place(in_vcf, out_vcf, lookup)
-        conn.close()
-        print(
-            f"\n=== done in {time.time() - t0:.1f}s ===\n"
-            f"  variants:        {total:,}\n"
-            f"  already canonical: {had:,}\n"
-            f"  newly annotated:   {annotated:,} (was '.' / non-rs ID, now rsid)\n"
-            f"  canonicalised:     {canonicalised:,} (existing rsid replaced with SNPedia's older / merged-into one)\n"
-            f"  output:          {out_vcf}",
-            flush=True,
-        )
-        return 0
-
     if args.systems_only:
         print("[mode] systems-only — skipping VCF, rank, variant, and gene passes", flush=True)
         t0 = time.time()
@@ -1743,16 +1942,48 @@ def main(argv=None) -> int:
         return 0 if not summary["errors"] else 1
 
     vcf_path = _resolve_vcf(conn, args.vcf)
-    print(f"[setup] VCF: {vcf_path}", flush=True)
+    genome_upload_id = _ensure_genome_upload_id(conn)
+    print(f"[setup] VCF: {vcf_path} (genome_upload_id={genome_upload_id})", flush=True)
 
-    if args.rebuild_rank or not args.rank_cache.is_file():
-        ranked = _rank(vcf_path, conn,
-                       use_ensembl=not args.no_ensembl_fallback)
-        _write_rank_cache(ranked, args.rank_cache)
-        print(f"[rank] wrote {args.rank_cache} ({len(ranked):,} rows)")
+    known_rsids = {r["rsid"].lower() for r in conn.execute("SELECT rsid FROM snpedia_variants")}
+
+    existing_vcf_rows = _vcf_row_count(conn, genome_upload_id)
+    rebuild_setup = args.rebuild_rank or existing_vcf_rows == 0
+    if rebuild_setup:
+        n_loaded = _bulk_load_vcf_rows(conn, genome_upload_id, vcf_path)
+        print(f"[setup] loaded {n_loaded:,} VCF rows into db", flush=True)
+        n_rsids = _extract_rsids_from_vcf_rows(conn, genome_upload_id, known_rsids)
+        print(f"[setup] derived {n_rsids:,} rsids from VCF rows (id_column / multi_allele_split)", flush=True)
+        hg38 = _build_hg38_position_lookup(conn, DEFAULT_HG38_POSITIONS_CACHE)
+        hg19 = _build_hg19_position_lookup(hg38, DEFAULT_HG19_POSITIONS_CACHE)
+        build = _detect_vcf_build(vcf_path, hg38, hg19)
+        print(f"[positions] detected VCF build: {build}", flush=True)
+        if build == "hg38":
+            position_lookup = hg38
+        elif build == "hg19":
+            position_lookup = hg19
+        else:
+            print("[positions] build undetected — skipping position-fill annotation", flush=True)
+            position_lookup = {}
+        if position_lookup:
+            n_pos = _annotate_rsids_by_position(conn, genome_upload_id, position_lookup, known_rsids)
+            print(f"[setup] added {n_pos:,} rsids via position_lookup", flush=True)
     else:
-        ranked = _read_rank_cache(args.rank_cache)
-        print(f"[rank] loaded {args.rank_cache} ({len(ranked):,} rows)")
+        existing_rsids = _rsid_row_count(conn, genome_upload_id)
+        print(
+            f"[setup] reusing {existing_vcf_rows:,} VCF rows / "
+            f"{existing_rsids:,} rsids from db",
+            flush=True,
+        )
+
+    if args.rebuild_rank or _ranked_count(conn, genome_upload_id) == 0:
+        ranked = _rank(genome_upload_id, conn,
+                       use_ensembl=not args.no_ensembl_fallback)
+        _write_rank_cache(conn, genome_upload_id, ranked)
+        print(f"[rank] wrote {len(ranked):,} ranked rows to db")
+    else:
+        ranked = _read_rank_cache(conn, genome_upload_id)
+        print(f"[rank] loaded from db ({len(ranked):,} rows)")
 
     try:
         allowed_tiers = {int(t.strip()) for t in args.tier.split(",") if t.strip()}

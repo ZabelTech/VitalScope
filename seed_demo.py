@@ -544,11 +544,83 @@ def seed_genome(conn: sqlite3.Connection) -> int:
     return 1
 
 
+def seed_genome_upload_tables(conn: sqlite3.Connection) -> int:
+    """Seed genome_upload_vcf_rows / genome_upload_rsids /
+    genome_upload_ranked_variants for the latest demo upload. Idempotent —
+    skips if rows already exist. Lives separately from `seed_genome_wiki`
+    so it runs even when the wiki filesystem is already populated.
+    """
+    upload_row = conn.execute(
+        "SELECT id FROM genome_uploads ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if upload_row is None:
+        return 0
+    gu_id = upload_row[0]
+    existing_vcf = conn.execute(
+        "SELECT COUNT(*) FROM genome_upload_vcf_rows WHERE genome_upload_id = ?",
+        (gu_id,),
+    ).fetchone()[0]
+    if existing_vcf > 0:
+        return 0
+    now_ts = datetime.utcnow().isoformat(timespec="seconds")
+    vcf_seed = [
+        # (rs, gene, gt, chrom, pos, ref, alt, allele1, allele2)
+        ("rs1801133", "MTHFR", "0/1", "1",  11856378, "G", "A", "G", "A"),
+        ("rs429358",  "APOE",  "0/0", "19", 45411941, "T", "C", "T", "T"),
+        ("rs7412",    "APOE",  "0/1", "19", 45412079, "C", "T", "C", "T"),
+        ("rs762551",  "CYP1A2","1/1", "15", 75041917, "C", "A", "A", "A"),
+        ("rs2228570", "VDR",   "1/1", "12", 48272895, "G", "A", "A", "A"),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO genome_upload_vcf_rows "
+        "(genome_upload_id, line_no, chrom, pos, raw_id, ref, alt, "
+        " qual, filter, info, format, sample) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (gu_id, idx + 1, chrom, pos, rs, ref, alt,
+             ".", "PASS", ".", "GT", gt)
+            for idx, (rs, _g, gt, chrom, pos, ref, alt, _a1, _a2) in enumerate(vcf_seed)
+        ],
+    )
+    conn.executemany(
+        "INSERT OR IGNORE INTO genome_upload_rsids "
+        "(genome_upload_id, rs_id, vcf_row_line_no, allele1, allele2, vcf_gt, "
+        " gene, resolution_source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 'id_column')",
+        [
+            (gu_id, rs, idx + 1, a1, a2, gt, gene)
+            for idx, (rs, gene, gt, _c, _p, _r, _alt, a1, a2) in enumerate(vcf_seed)
+        ],
+    )
+    ranked_seed = [
+        ("rs1801133", "(G;A)", "0/1", 2.5, "Bad",  "Reduced MTHFR activity",     1, "MTHFR"),
+        ("rs7412",    "(C;T)", "0/1", 1.4, "Good", "APOE ε2 marker",             1, "APOE"),
+        ("rs2228570", "(A;A)", "1/1", 1.0, "Bad",  "FokI ff — reduced VDR",      1, "VDR"),
+        ("rs762551",  "(A;A)", "1/1", 0.5, "Good", "CYP1A2 fast metaboliser",    1, "CYP1A2"),
+        ("rs429358",  "(T;T)", "0/0", None, "",    "No APOE ε4 at this locus",   2, "APOE"),
+    ]
+    conn.executemany(
+        "INSERT OR IGNORE INTO genome_upload_ranked_variants "
+        "(genome_upload_id, rs_id, user_genotype, vcf_gt, magnitude, repute, "
+        " summary, tier, gene, rank_order, computed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            (gu_id, rs, ugt, gt, mag, rep, summary, tier, gene, idx + 1, now_ts)
+            for idx, (rs, ugt, gt, mag, rep, summary, tier, gene) in enumerate(ranked_seed)
+        ],
+    )
+    conn.commit()
+    return len(vcf_seed)
+
+
 def seed_genome_wiki(conn: sqlite3.Connection) -> int:
     """Write a small wiki tree to GENOME_WIKI_ROOT so the Orient browser
-    renders something in demo / preview deploys. Idempotent — skips if any
-    variant pages already exist on disk.
+    renders something in demo / preview deploys. Idempotent — skips the
+    filesystem half if any variant pages already exist on disk, but still
+    seeds the per-upload working tables (`seed_genome_upload_tables`)
+    every call.
     """
+    seed_genome_upload_tables(conn)
     root = backend.app.GENOME_WIKI_ROOT
     variants_dir = root / "wiki" / "variants"
     if variants_dir.exists() and any(variants_dir.glob("*.md")):
