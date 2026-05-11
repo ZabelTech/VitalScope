@@ -41,6 +41,12 @@ primary_region = "fra"
   VITALSCOPE_DEMO = "0"
   VITALSCOPE_DB = "/data/vitalscope.db"
   VITALSCOPE_UPLOADS = "/data/uploads"
+  # AI for the wiki ingest pipeline. claude-sonnet-4-6 was disqualified
+  # in MODEL_EVALUATION.md (timed out at 600s on the system pass);
+  # openai/gpt-oss-20b is the cheapest+richest pick that completes
+  # cleanly. Requires OPENROUTER_API_KEY to be set as a Fly secret.
+  VITALSCOPE_AI_PROVIDER = "openrouter"
+  VITALSCOPE_AI_MODEL = "openai/gpt-oss-20b"
 
 [http_service]
   internal_port = 8080
