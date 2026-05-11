@@ -160,7 +160,10 @@ def _build_genotype_lookup(conn: sqlite3.Connection) -> dict:
             continue
         rs = "rs" + m.group(1)
         a, b = m.group(2).upper(), m.group(3).upper()
-        text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        try:
+            text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        except Exception:
+            continue
         mm = _GENO_MAG_RE.search(text)
         mag: Optional[float] = None
         if mm:
@@ -1816,7 +1819,11 @@ def main(argv=None) -> int:
         if not row:
             print(f"  WARN: {rs} not in snpedia_pages; skipping")
             continue
-        text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        try:
+            text = json.loads(row["raw_json"])["revisions"][0]["*"]
+        except Exception:
+            print(f"  WARN: {rs} raw_json missing revisions; skipping")
+            continue
         raw_pages[rs] = text
         m = _GENE_FIELD_RE.search(text)
         r["gene"] = _normalise_gene(m.group(1) if m else None)
