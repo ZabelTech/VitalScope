@@ -3,7 +3,9 @@ vitalscope.db
 vitalscope.db-journal
 vitalscope.db-wal
 vitalscope.db-shm
-data/
+data/*
+!data/seed/
+!data/seed/*.sql.gz
 uploads/
 genome_wiki/
 
