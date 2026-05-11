@@ -1638,8 +1638,12 @@ def main(argv=None) -> int:
         app._ai_provider = None
     print(f"[setup] AI provider={app.AI_PROVIDER} model={app.AI_MODEL}", flush=True)
 
-    conn = sqlite3.connect(str(app.DB_PATH))
+    conn = sqlite3.connect(str(app.DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    # busy_timeout: wait up to 30s for a writer lock instead of raising
+    # "database is locked" instantly when uvicorn is concurrently
+    # writing (e.g. the genome wiki ingest job-event flush loop).
+    conn.execute("PRAGMA busy_timeout = 30000")
 
     if args.ask:
         question = args.ask.strip()

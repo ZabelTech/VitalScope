@@ -512,8 +512,14 @@ def update_card_visibility(body: CardVisibilityUpdate, request: Request):
 
 
 def get_db() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    # busy_timeout makes this connection wait up to 30s for a writer lock
+    # instead of raising "database is locked" instantly — necessary when
+    # the genome wiki ingest subprocess and uvicorn both write to the
+    # same DB. Pair with WAL mode (set in docker-entrypoint.sh) for the
+    # right concurrent-writer semantics.
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 
